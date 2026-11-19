@@ -1,0 +1,31 @@
+'Golden (coverage)
+'Post: ShopBot OpenSBP - NativeCAM 0.1
+'Created: 2027-01-15 08:00
+'File 3 of 3: one file per tool
+'Material: MDF intestin (half sheet) X11.8110 Y7.8740 Z0.7480 in
+'Z zero: Material top  XY zero: Lower left
+'T1 1/4in Upcut End Mill
+IF %(25)=1 THEN GOTO UNIT_ERROR
+SA
+JS,13.333,6.667
+'Load T1 1/4in Upcut End Mill and zero Z before starting
+TR,18000
+C6
+'Clean-up T1
+JZ,0.5000
+J2,9.8425,5.9055
+JZ,0.0787
+MS,0.492,0.492
+MZ,-0.7677
+MS,1.640,0.492
+M2,11.0236,5.9055
+JZ,0.1969
+JZ,1.0000
+J2,0.0000,0.0000
+C7
+END
+
+UNIT_ERROR:
+'This file is in inches; set ShopBot to inches and run it again.
+PAUSE
+END

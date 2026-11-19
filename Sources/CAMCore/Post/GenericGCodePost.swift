@@ -33,7 +33,8 @@ public struct GenericGCodePost: PostProcessor {
 
     private var machine: MachineProfile { project.machine }
     private var stock: Stock { project.stock }
-    private var units: LengthUnit { machine.outputUnits }
+    /// The machine's units, unless the controller only runs in one (RichAuto: millimetres).
+    private var units: LengthUnit { dialect.acceptedUnits.count == 1 ? dialect.acceptedUnits.first! : machine.outputUnits }
 
     /// True when tool changes are written as `T# M6`.
     public var usesM6: Bool {
@@ -43,13 +44,27 @@ public struct GenericGCodePost: PostProcessor {
     /// True when a job with several tools is saved as one file per tool.
     public var splitsByTool: Bool { !usesM6 && machine.toolChange != .manualPause }
 
+    /// Arcs become short lines for controllers whose arc handling isn't documented.
+    func prepared(_ toolpaths: [Toolpath]) -> [Toolpath] {
+        guard !dialect.writesArcs else { return toolpaths }
+        return toolpaths.map { tp in
+            var t = tp
+            var p = tp.start
+            t.motions = tp.motions.flatMap { m -> [Motion] in
+                defer { p = m.end }
+                return m.kind.isArc ? VectricTemplatePost.lines(for: m, from: p, tolerance: 0.01) : [m]
+            }
+            return t
+        }
+    }
+
     public func files(_ toolpaths: [Toolpath]) -> [PostedFile] {
-        let paths = toolpaths.filter { !$0.isEmpty }
+        let paths = prepared(toolpaths.filter { !$0.isEmpty })
         var groups: [[Toolpath]] = []
         for tp in paths {
             if let last = groups.last?.last, last.tool.number == tp.tool.number { groups[groups.count - 1].append(tp) } else { groups.append([tp]) }
         }
-        guard splitsByTool, groups.count > 1 else { return [PostedFile(suffix: nil, toolpaths: toolpaths, gcode: post(toolpaths))] }
+        guard splitsByTool, groups.count > 1 else { return [PostedFile(suffix: nil, toolpaths: paths, gcode: post(paths))] }
         return groups.enumerated().map { i, group in
             var one = self
             one.part = (i + 1, groups.count)
@@ -58,8 +73,9 @@ public struct GenericGCodePost: PostProcessor {
     }
 
     public func post(_ toolpaths: [Toolpath]) -> String {
-        var w = Writer(lineNumbers: machine.lineNumbers, ending: dialect.lineEnding, limit: dialect.maxLineLength)
-        let paths = toolpaths.filter { !$0.isEmpty }
+        var w = Writer(lineNumbers: machine.lineNumbers, ending: dialect.lineEnding, limit: dialect.maxLineLength,
+                       comments: dialect.writesComments)
+        let paths = prepared(toolpaths.filter { !$0.isEmpty })
 
         w.comment(project.name)
         w.comment("Post: \(dialect.name) - NativeCAM \(version)")
@@ -82,7 +98,7 @@ public struct GenericGCodePost: PostProcessor {
             w.comment("T\(tp.tool.number) \(tp.tool.name) D\(num(tp.tool.diameter))")
         }
 
-        w.line("G90 G94 G17")
+        w.line(dialect.safetyLine)
         w.line(units == .inch ? "G20" : "G21")
         if dialect.statesIncrementalArcs { w.line("G91.1") }
         if let blend = blendingLine { w.line(blend) }
@@ -264,6 +280,7 @@ public struct GenericGCodePost: PostProcessor {
         var lineNumbers: Bool
         var ending: String
         var limit: Int?
+        var comments = true
         var n = 10
         var text = ""
 
@@ -278,6 +295,7 @@ public struct GenericGCodePost: PostProcessor {
         /// A comment, cleaned for strict parsers (no nested parentheses, ASCII only) and shortened to fit the
         /// controller's line limit.
         mutating func comment(_ s: String) {
+            guard comments else { return }
             var cleaned = s.replacingOccurrences(of: "(", with: "{")
                 .replacingOccurrences(of: ")", with: "}")
                 .replacingOccurrences(of: "\"", with: "in")

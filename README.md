@@ -195,7 +195,7 @@ G01 Z-0.0117 F30.0
 
 ## Other controllers (experimental)
 
-Besides Avid's Mach4 profile, NativeCAM writes G-code for **Grbl 1.1, grblHAL, FluidNC and Carbide Motion** (Shapeoko, X-Carve, LongMill, many DIY machines) and for **LinuxCNC, Masso, Centroid CNC12** (including Avid's EX controller) **and Buildbotics** (Onefinity's original controller). None of these has been run on real hardware yet: they follow each controller's documentation, so treat the output as unverified, run the acceptance test below, then air-cut.
+Besides Avid's Mach4 profile, NativeCAM writes G-code for **Grbl 1.1, grblHAL, FluidNC and Carbide Motion** (Shapeoko, X-Carve, LongMill, many DIY machines), for **LinuxCNC, Masso, Centroid CNC12** (including Avid's EX controller) **and Buildbotics** (Onefinity's original controller), **RichAuto DSP** controllers (Axiom and many full-sheet routers), and **ShopBot** part files in OpenSBP. None of these has been run on real hardware yet: they follow each controller's documentation, so treat the output as unverified, run the acceptance test below, then air-cut.
 
 | Controller | What NativeCAM writes |
 |---|---|
@@ -203,6 +203,8 @@ Besides Avid's Mach4 profile, NativeCAM writes G-code for **Grbl 1.1, grblHAL, F
 | Masso | `.nc`; `T# M06` (Masso applies the length itself); `G4 P` in whole **milliseconds**; no `G43`, `G64` or `G91.1`, which Masso's documentation doesn't list |
 | Centroid CNC12 | `.cnc` with CRLF, as Avid's EX posts write; `T# M6` then `G43 H#` from CNC12's tool library (a tool with no length gets 0, so re-zeroing Z still works); `M7` |
 | Buildbotics | `.nc`; `G91.1`; `T# M6`, which pauses for the change by default |
+| ShopBot (OpenSBP) | `.sbp` part files, not G-code: a check of ShopBot's unit setting before any move, `SA`, `MS`/`JS` speeds in units per second, `M2`/`M3`/`MZ` and `J2`/`J3`/`JZ` moves, `CG` arcs (depth-changing arcs as short moves), `PAUSE n` dwells and `END`. Spindle `TR`/`C6`/`C7` and tool change `&Tool`/`C9` follow ShopBot's own posts. Without a tool changer each tool gets its own file. NativeCAM reads `.sbp` files back to check them, and **Simulate G-code File…** opens them too |
+| RichAuto DSP | `.nc` in millimetres only, with no comments and arcs as short lines (their handling isn't documented), one file per tool |
 
 ### Grbl family
 
@@ -274,7 +276,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (280 tests in 34 suites, using Swift Testing):
+Run the test suite (286 tests in 35 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

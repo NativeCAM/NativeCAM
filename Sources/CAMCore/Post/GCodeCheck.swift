@@ -32,6 +32,12 @@ public enum GCodeCheck {
         }
         var project = project
         project.machine.outputUnits = dialect.acceptedUnits.count == 1 ? dialect.acceptedUnits.first! : project.machine.outputUnits
+        if dialect.language == .openSBP {
+            let program = OpenSBPParser.parse(gcode, units: project.machine.outputUnits)
+            return lintOpenSBP(gcode, project: project, dialect: dialect)
+                + roundTrip(program, toolpaths: toolpaths, project: project, dialect: dialect)
+                + envelope(program, toolpaths: toolpaths, project: project)
+        }
         var issues = lint(gcode, project: project, dialect: dialect)
         do {
             let program = try GCodeParser.parse(gcode, dwellUnit: dialect.dwell.parserUnit)
@@ -181,6 +187,9 @@ public enum GCodeCheck {
                     case .senderDependent:
                         add(.warning, n, "M6", "Whether M6 stops for the tool change depends on the program sending the file. "
                             + "Make sure yours pauses on M6.")
+                    case .none:
+                        add(.error, n, "M6", "\(name) can't change tools within a file, so the next tool's cuts would run with the "
+                            + "old bit. Save one file per tool.")
                     }
                 case 0, 1:
                     awaitingLift = true; lifted = false; afterChange = true
@@ -268,6 +277,62 @@ public enum GCodeCheck {
         return issues
     }
 
+    /// OpenSBP part files: a units check, a speed before the first cut, the spindle on before cutting, a lift to
+    /// safe Z before moving across at the start and after each tool change, and an END.
+    public static func lintOpenSBP(_ text: String, project: Project, dialect: Dialect) -> [Issue] {
+        var issues: [Issue] = []
+        var reported = Set<String>()
+        func add(_ severity: Severity, _ line: Int?, _ key: String, _ message: String) {
+            if reported.insert(key).inserted { issues.append(Issue(severity, line: line, message)) }
+        }
+        let units = project.machine.outputUnits
+        let safe = project.stock.toWork(Vec3(0, 0, project.stock.clearanceHeight)).z
+        let known: Set<String> = ["SA", "SR", "MS", "JS", "J2", "J3", "JZ", "JX", "JY", "M2", "M3", "MZ", "MX", "MY", "CG", "TR",
+                                  "C6", "C7", "C9", "PAUSE", "END", "IF", "GOTO", "SO"]
+        var unitCheck = false, speedSet = false, spindle = false, ended = false, moved = false
+        var awaitingLift = true, lifted = false
+        var z: Double?
+        for (index, raw) in text.components(separatedBy: .newlines).enumerated() {
+            let n = index + 1
+            var line = raw
+            if let q = line.firstIndex(of: "'") { line = String(line[..<q]) }
+            line = line.trimmingCharacters(in: .whitespaces).uppercased()
+            if line.isEmpty || line.hasSuffix(":") || line.hasPrefix("&") { continue }
+            if line == "END" { ended = true; break }
+            let (cmd, values) = OpenSBPParser.split(line)
+            guard !cmd.isEmpty else { continue }
+            if !known.contains(cmd) { add(.warning, n, "cmd \(cmd)", "\(dialect.name) command \(cmd) isn't one NativeCAM checks.") }
+            if cmd == "IF", line.contains("%(25)") { unitCheck = true }
+            if cmd == "MS" { speedSet = true }
+            if cmd == "C6" || (cmd == "SO" && line.hasSuffix(",1")) { spindle = true }
+            if cmd == "C7" || cmd == "C9" { spindle = false }
+            if cmd == "C9" || (cmd == "PAUSE" && values.isEmpty) { awaitingLift = true; lifted = false }
+            let moves: Set<String> = ["J2", "J3", "JZ", "JX", "JY", "M2", "M3", "MZ", "MX", "MY", "CG"]
+            guard moves.contains(cmd) else { continue }
+            if !moved && !unitCheck {
+                add(.warning, n, "units", "The file doesn't check ShopBot's unit setting before moving.")
+            }
+            moved = true
+            let axisZ: Double? = cmd.hasSuffix("Z") ? values.first ?? nil : (cmd.hasSuffix("3") && values.count > 2 ? values[2] : nil)
+            if let v = axisZ { z = units.toMM(v) }
+            let movesXY = cmd.hasSuffix("2") || cmd.hasSuffix("3") || cmd.hasSuffix("X") || cmd.hasSuffix("Y") || cmd == "CG"
+            if cmd.first == "M" || cmd == "CG" {
+                if !speedSet { add(.error, n, "speed", "A cut before MS sets the speed.") }
+                if !spindle { add(.error, n, "spindle", "Cuts with the spindle stopped.") }
+            }
+            if awaitingLift {
+                if movesXY {
+                    if !lifted { add(.error, n, "lift", "Moves across before lifting to safe Z.") }
+                    awaitingLift = false
+                } else if let z, z >= safe - 1e-3 {
+                    lifted = true
+                }
+            }
+        }
+        if !ended { add(.error, nil, "end", "The file doesn't finish with END.") }
+        return issues
+    }
+
     static func gNumber(_ g: Double) -> String {
         g == g.rounded() ? String(Int(g)) : String(format: "%g", g)
     }
@@ -333,7 +398,7 @@ public enum GCodeCheck {
         let units = project.machine.outputUnits
         let step = units.toMM(pow(10, -Double(dialect.coordinateDecimals(units))))
         let tol = step / 2 + 1e-6
-        let feedTol = units.toMM(pow(10, -Double(dialect.feedDecimals(units)))) / 2 + 1e-6
+        let feedTol = (dialect.feedPerSecond ? 60 : 1) * units.toMM(pow(10, -Double(dialect.feedDecimals(units)))) / 2 + 1e-6
         let expected = expectedMoves(toolpaths, project: project, dialect: dialect).filter { dialect.comparesDwells || $0.kind != .dwell }
         var written: [(motion: Motion, start: Vec3, tool: Int, rpm: Double, line: Int)] = []
         for seg in program.segments {

@@ -214,7 +214,7 @@ struct ContentView: View {
             return
         }
         switch ext {
-        case "tap", "nc", "gcode", "ngc", "cnc", "txt":
+        case "tap", "nc", "gcode", "ngc", "cnc", "txt", "sbp":
             simulateFile(url)
         case "nativecam":
             NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, _ in }
@@ -286,7 +286,7 @@ struct ContentView: View {
 
     private func simulateGCodeFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.gcodeTap, .plainText] + ["nc", "gcode", "ngc", "cnc"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = [.gcodeTap, .plainText] + ["nc", "gcode", "ngc", "cnc", "sbp"].compactMap { UTType(filenameExtension: $0) }
         panel.message = "Choose a G-code file to simulate with this project's material and tool library"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         simulateFile(url)
@@ -296,7 +296,7 @@ struct ContentView: View {
         do {
             let data = try Data(contentsOf: url)
             let text = String(decoding: data, as: UTF8.self)
-            let program = try GCodeParser.parse(text)
+            let program = url.pathExtension.lowercased() == "sbp" ? OpenSBPParser.parse(text) : try GCodeParser.parse(text)
             let fallback = library.tools.first ?? ToolLibrary.starter.tools[0]
             let tps = program.toolpaths(tools: library.tools, stock: project.stock, fallback: fallback)
             workspace.simulateProgram(tps, name: url.lastPathComponent, project: project)

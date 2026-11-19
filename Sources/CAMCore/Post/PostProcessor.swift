@@ -50,6 +50,7 @@ public enum PostProcessors {
         if let pp = project.machine.customPost { return VectricTemplatePost(project: project, pp: pp, date: date) }
         if project.machine.isLegacyAvidMach4 { return AvidMach4Post(project: project, date: date) }
         guard let dialect = Dialect.for(project.machine) else { return nil }
+        if dialect.language == .openSBP { return OpenSBPPost(project: project, date: date) }
         return GenericGCodePost(project: project, dialect: dialect, date: date)
     }
 
@@ -57,7 +58,7 @@ public enum PostProcessors {
     public static func unavailableReason(for machine: MachineProfile) -> String? {
         guard Dialect.for(machine) == nil else { return nil }
         return "NativeCAM can't write G-code for \(machine.controllerLabel) yet, so this job can't be exported. "
-            + "Supported so far: Avid's Mach4 profile, Grbl, grblHAL, FluidNC, Carbide Motion, LinuxCNC, Masso, Centroid CNC12 "
-            + "and Buildbotics, or your own Vectric post."
+            + "Supported so far: Avid's Mach4 profile, Grbl, grblHAL, FluidNC, Carbide Motion, LinuxCNC, Masso, Centroid CNC12, "
+            + "Buildbotics, ShopBot (OpenSBP) and RichAuto, or your own Vectric post."
     }
 }

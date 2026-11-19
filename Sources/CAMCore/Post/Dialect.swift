@@ -47,6 +47,15 @@ public struct Dialect: Hashable, Sendable {
         case recordsOnly
         /// Depends on the program that streams the file (gSender, CNCjs and Carbide Motion pause on M6; UGS does not).
         case senderDependent
+        /// Can't change tools within a file at all (most DSP routers, ShopBot without a tool changer).
+        case none
+    }
+
+    /// The language the controller reads.
+    public enum Language: Hashable, Sendable {
+        case gcode
+        /// ShopBot's OpenSBP (`M3,x,y,z`, `CG`, `MS` speeds in units per second).
+        case openSBP
     }
 
     /// How the controller plans motion, for run-time estimates.
@@ -113,6 +122,15 @@ public struct Dialect: Hashable, Sendable {
         case always
     }
     public var lengthOffset: LengthOffset = .never
+    public var language: Language = .gcode
+    /// Feeds are written per second (OpenSBP's MS), so feedDecimals count places of units per second.
+    public var feedPerSecond: Bool = false
+    /// The controller takes comments (DSP controllers' comment handling isn't documented, so none are written).
+    public var writesComments: Bool = true
+    /// Arcs are written as arcs; otherwise as short lines (for controllers whose arc handling isn't documented).
+    public var writesArcs: Bool = true
+    /// The modal codes at the top of the file.
+    public var safetyLine: String = "G90 G94 G17"
 
     public func coordinateDecimals(_ u: LengthUnit) -> Int { coordinateDecimals[u] ?? (u == .inch ? 4 : 3) }
     public func feedDecimals(_ u: LengthUnit) -> Int { feedDecimals[u] ?? (u == .inch ? 1 : 0) }
@@ -143,10 +161,50 @@ public struct Dialect: Hashable, Sendable {
         case .masso: return .masso
         case .centroid: return .centroid
         case .buildbotics: return .buildbotics
+        case .openSBP: return .openSBP(toolChange: machine.toolChange)
+        case .richAuto: return .richAuto
         default:
             return nil
         }
     }
+
+    // MARK: Long tail (from documentation and vendor posts; none tested on hardware)
+
+    /// ShopBot's OpenSBP: `'` comments, `SA` absolute moves, `MS`/`JS` speeds in units per second, `M2`/`M3`/`MZ`
+    /// feeds and `J2`/`J3`/`JZ` jogs, `CG` arcs from the current point, `PAUSE n` in seconds, `END`, and a units
+    /// check on system variable 25 (ShopBot Command Reference V3 and Programming Handbook). Spindle `TR`/`C6`/`C7` and
+    /// tool change `&Tool`/`C9` follow vendor posts. Without a tool changer, each tool gets its own file.
+    public static func openSBP(toolChange: ToolChangeMode) -> Dialect {
+        var d = Dialect(
+            id: "opensbp", name: "ShopBot (OpenSBP)", maxLineLength: nil, lineEnding: "\r\n", allowedG: nil, allowedM: nil,
+            allowedLetters: [], strict: false, acceptedUnits: [.inch, .mm], dwell: .seconds, arcCheck: .absolute(0.0127),
+            maxToolNumber: nil, maxLineNumber: nil, m6: toolChange == .atc ? .macro : .none,
+            coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 3, .mm: 2], verified: false)
+        d.language = .openSBP
+        d.feedPerSecond = true
+        d.planner = Planner(lookahead: 10, junctionDeviation: 0.05, rapidsExactStop: true)
+        d.fileExtension = "sbp"
+        d.statesIncrementalArcs = false
+        return d
+    }
+
+    /// RichAuto DSP controllers (Axiom and many 1325-class routers): metric only, one tool per file, and arcs and
+    /// comments left out because their handling isn't documented.
+    public static let richAuto: Dialect = {
+        var d = Dialect(
+            id: "richauto", name: "RichAuto DSP", maxLineLength: nil, lineEnding: "\r\n", allowedG: nil, allowedM: nil,
+            allowedLetters: Set("FGIJMNPSTXYZ"), strict: false, acceptedUnits: [.mm], dwell: .seconds, arcCheck: .absolute(0.0127),
+            maxToolNumber: nil, maxLineNumber: nil, m6: .none,
+            coordinateDecimals: [.mm: 3], feedDecimals: [.mm: 0], verified: false)
+        d.planner = Planner(lookahead: 20, junctionDeviation: 0.05, rapidsExactStop: true)
+        d.fileExtension = "nc"
+        d.statesIncrementalArcs = false
+        d.writesComments = false
+        d.writesArcs = false
+        d.safetyLine = "G90"
+        d.dustOn = 8
+        return d
+    }()
 
     // MARK: Second-wave controllers (from documentation only; none tested on hardware)
 

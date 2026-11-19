@@ -73,7 +73,7 @@ public struct VectricTemplatePost: PostProcessor {
     }
 
     /// An arc as straight feed moves no further than `tolerance` (mm) from it.
-    static func lines(for m: Motion, from start: Vec3, tolerance: Double) -> [Motion] {
+    public static func lines(for m: Motion, from start: Vec3, tolerance: Double) -> [Motion] {
         let r = start.xy.distance(to: m.center)
         let sweep = m.arcSweep(from: start)
         let maxStep = r > tolerance ? 2 * acos(max(-1, 1 - tolerance / r)) : .pi / 2

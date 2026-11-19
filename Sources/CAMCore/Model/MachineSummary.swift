@@ -8,12 +8,25 @@ public extension MachineProfile {
             return ["NativeCAM can't write G-code for \(controllerLabel) yet. You can set the machine up now; export will "
                 + "say so until a post for it is added."]
         }
-        let u = customPost?.units ?? outputUnits
+        let u = customPost?.units ?? (d.acceptedUnits.count == 1 ? d.acceptedUnits.first! : outputUnits)
         if let pp = customPost {
             var lines = ["G-code written by your Vectric post “\(pp.name)”, in \(u == .inch ? "inches" : "millimetres"), as .\(pp.fileExtension) files."]
             lines.append(pp.changesTools ? "Tool changes use the post's own tool-change block." : "The post has no tool-change block, so a job with several tools is saved as one file per tool.")
             lines.append(pp.writesGCode ? "Every file is read back and checked against the toolpaths before it's saved."
                 : "The post doesn't write G-code NativeCAM can read back, so files aren't checked. Air-cut them first.")
+            return lines
+        }
+        if d.language == .openSBP {
+            var lines = ["ShopBot part files (.sbp) in \(u == .inch ? "inches" : "millimetres"). Each file checks ShopBot's unit setting "
+                + "before it moves and stops if it doesn't match."]
+            switch toolChange {
+            case .atc: lines.append("Tool changes set &Tool and call C9, ShopBot's tool-change routine.")
+            case .manualPause: lines.append("Tool changes stop the spindle, park and PAUSE: change the bit, re-zero Z, then click OK.")
+            case .manualM6: lines.append("A job with several tools is saved as one file per tool. Change the bit and re-zero Z before running each.")
+            }
+            lines.append(spindle == .vfdSpindle ? "TR sets the spindle speed and C6 and C7 switch it on and off."
+                : "C6 and C7 switch the router; set its speed dial by hand (the file says which speed).")
+            lines.append("Arcs are written with CG; arcs that change depth as short moves.")
             return lines
         }
         var lines = ["\(d.name) G-code in \(u == .inch ? "inches (G20)" : "millimetres (G21)"), saved as .\(d.fileExtension) files. "
@@ -48,6 +61,7 @@ public extension MachineProfile {
         lines.append(dustCollection
             ? "Dust collector on with M\(d.dustOn) at the start and after each tool change, off with M9 at the end."
             : "No dust collector output.")
+        if !d.writesArcs { lines.append("Arcs are written as short lines and comments are left out: \(d.name)'s handling of them isn't documented.") }
 
         func accel(_ mm: Double) -> String { u == .inch ? String(format: "%.0f in/s²", mm / LengthUnit.mmPerInch) : String(format: "%.0f mm/s²", mm) }
         let source = self.source(of: .accelerationXY)

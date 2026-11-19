@@ -1,0 +1,31 @@
+'NativeCAM acceptance test
+'Post: ShopBot OpenSBP - NativeCAM 0.1
+'Created: 2027-01-15 08:00
+'File 3 of 3: one file per tool
+'Material: Scrap for testing X300.000 Y200.000 Z19.000 mm
+'Z zero: Material top  XY zero: Lower left
+'T1 1/4in Upcut End Mill
+IF %(25)=0 THEN GOTO UNIT_ERROR
+SA
+JS,338.67,169.33
+'Load T1 1/4in Upcut End Mill and zero Z before starting
+TR,16000
+C6
+'Second change back to T1 with a long toolpath name to fill the comment to the line limit T1
+JZ,10.000
+J2,270.000,20.000
+JZ,2.000
+MS,5.00,5.00
+MZ,-0.500
+MS,16.67,5.00
+M2,290.000,20.000
+JZ,2.000
+JZ,25.000
+J2,0.000,0.000
+C7
+END
+
+UNIT_ERROR:
+'This file is in millimetres; set ShopBot to millimetres and run it again.
+PAUSE
+END
