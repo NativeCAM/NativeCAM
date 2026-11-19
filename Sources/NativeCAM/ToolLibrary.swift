@@ -272,13 +272,13 @@ struct ToolEditor: View {
 
 /// App-wide defaults for new documents (Settings window).
 enum AppDefaults {
-    private static let machineKey = "defaultMachine"
     private static let unitsKey = "defaultUnits"
     private static let stockKey = "defaultStock"
 
+    /// The machine library's default machine (see `MachineLibraryFile`).
     static var machine: MachineProfile {
-        get { decode(machineKey) ?? .avidPRO6060 }
-        set { encode(newValue, machineKey) }
+        get { MachineLibraryFile.defaultMachine }
+        set { MachineLibraryFile.setDefaultMachine(newValue) }
     }
 
     static var stock: Stock {

@@ -290,6 +290,11 @@ struct ContentView: View {
 
     private func exportGCode() {
         guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
+        guard let post = PostProcessors.post(for: project) else {
+            alert = AlertInfo(title: "Can't export G-code",
+                              message: PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine.")
+            return
+        }
         if job.hasErrors {
             let errors = job.issues.filter { $0.severity == .error }.map { "• \($0.operation.map { "\($0): " } ?? "")\($0.message)" }
             let confirm = NSAlert()
@@ -301,11 +306,11 @@ struct ContentView: View {
             guard confirm.runModal() == .alertSecondButtonReturn else { return }
         }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.gcodeTap]
-        panel.nameFieldStringValue = (project.name.isEmpty ? "Untitled" : project.name) + ".tap"
-        panel.message = "Save G-code for Avid Mach4"
+        panel.allowedContentTypes = [UTType(filenameExtension: post.fileExtension, conformingTo: .plainText) ?? .plainText]
+        panel.nameFieldStringValue = (project.name.isEmpty ? "Untitled" : project.name) + "." + post.fileExtension
+        panel.message = "Save G-code for \(post.name)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let gcode = AvidMach4Post(project: project).post(job.toolpaths)
+        let gcode = post.post(job.toolpaths)
         do {
             try gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
         } catch {

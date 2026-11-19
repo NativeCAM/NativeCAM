@@ -148,6 +148,16 @@ public struct MachineProfile: Hashable, Codable, Sendable {
     /// How far roughing passes may round off corners so the machine keeps moving (mm); finished walls stay exact.
     public var roughingSmoothing: Double?
 
+    // Controller and machine library (optional so older project files still load).
+    /// The controller that reads the G-code. nil is Avid's Mach4 profile, which every format 1 project assumes.
+    public var controller: ControllerProfile?
+    /// The machine library entry this profile was copied from, and that entry's revision at the time. The project
+    /// keeps its own full copy either way, so it posts the same G-code whatever happens to the library later.
+    public var libraryID: String?
+    public var libraryRevision: Int?
+    /// Where values came from, keyed by `Field` name. A value with no entry was typed in or is NativeCAM's default.
+    public var provenance: [String: ValueSource]?
+
     public var driveTier: DriveTier { drive ?? .nema34 }
     public var axisAcceleration: Vec3 {
         let xy = accelerationXY ?? 50.inch

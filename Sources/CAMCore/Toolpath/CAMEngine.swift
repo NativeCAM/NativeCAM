@@ -104,6 +104,7 @@ public enum CAMEngine {
         }
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
+        if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
         let estimate = CycleTimeEstimator.estimate(toolpaths, project: project)
         // Point out (never apply) a run order that fixes dependencies or needs fewer tool changes.
         var reorder: OperationScheduler.Result?

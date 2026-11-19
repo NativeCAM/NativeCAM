@@ -1,7 +1,7 @@
 import CAMCore
 import Foundation
 
-// nativecam-cli: generate Avid Mach4 G-code and simulate jobs without the UI.
+// nativecam-cli: generate G-code (Avid Mach4 so far) and simulate jobs without the UI.
 //
 //   nativecam-cli demo <out.nativecam>                       write the demo sign project
 //   nativecam-cli demo3d <out.nativecam>                     write the 3D relief demo project
@@ -69,8 +69,11 @@ case "post":
     for issue in job.issues {
         print("[\(issue.severity.rawValue)] \(issue.operation.map { "\($0): " } ?? "")\(issue.message)")
     }
-    let gcode = AvidMach4Post(project: project).post(job.toolpaths)
-    let out = option("-o", in: args) ?? (args[1] as NSString).deletingPathExtension + ".tap"
+    guard let post = PostProcessors.post(for: project) else {
+        fail(PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine.")
+    }
+    let gcode = post.post(job.toolpaths)
+    let out = option("-o", in: args) ?? (args[1] as NSString).deletingPathExtension + "." + post.fileExtension
     do { try gcode.write(toFile: out, atomically: true, encoding: .ascii) } catch { fail("Can't write \(out): \(error)") }
     let lines = gcode.components(separatedBy: "\r\n").count - 1
     print(String(format: "Generated %d toolpaths in %.2fs, %d lines -> %@", job.toolpaths.count, elapsed, lines, out))
