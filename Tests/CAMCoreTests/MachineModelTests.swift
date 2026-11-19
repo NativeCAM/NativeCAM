@@ -49,7 +49,8 @@ struct MachineModelTests {
 
     @Test func newerFormatsAreRefused() throws {
         let text = try #require(String(data: grblProject.encoded(), encoding: .utf8))
-        let future = Data(text.replacingOccurrences(of: "\"formatVersion\" : 2", with: "\"formatVersion\" : 3").utf8)
+        let newer = "\"formatVersion\" : \(Project.currentFormatVersion + 1)"
+        let future = Data(text.replacingOccurrences(of: "\"formatVersion\" : 2", with: newer).utf8)
         #expect { try Project.decode(future) } throws: { ($0 as NSError).localizedDescription.contains("newer version") }
     }
 
