@@ -140,23 +140,30 @@ enum Model3DGenerator {
         let n = max(1, Int((abs(deepest) / step - 1e-9).rounded(.up)))
         let levels = (1...n).map { deepest * Double($0) / Double(n) }
         let boundaryLoops = s.boundary.flatMap(\.loops)
+        // Only the model's own surface is worth interpolating; steps from boundaries and the base floor are not.
+        let field = zip(target, g.covered).map { $1 ? $0 : Float.nan }
         var previous = 0.0
         var clipped = Set<String>()
         for z in levels {
             // Cells where the target is at or below this level can be cleared to it.
             let zf = Float(z) + 1e-4
             let mask = target.map { $0 <= zf }
-            let loops = GridContours.loops(mask: mask, columns: g.columns, rows: g.rows, origin: g.origin, cellSize: g.cellSize)
+            // Sub-cell contours (smooth on slopes, no stair-steps for the controller to crawl through).
+            let loops = GridContours.loops(mask: mask, columns: g.columns, rows: g.rows, origin: g.origin, cellSize: g.cellSize,
+                                           field: field, level: zf, steepSlope: 2, interpolationLimit: 0.25)
                 .map { $0.simplified(tolerance: g.cellSize * 0.25) }
             let clearable = Clipper.intersection(loops, boundaryLoops, fill: .nonZero)
             let regions = Region.nest(clearable)
             if !regions.isEmpty {
                 // The pocket engine keeps the tool radius inside each region, plus a margin covering grid sampling
-                // (half a cell) and outline simplification (a quarter cell) so steep walls can't be nicked.
+                // (interpolated contours sit within three quarters of a cell of a steep wall, closer on slopes),
+                // outline simplification (a quarter cell) and a quarter cell spare, so walls can't be nicked.
                 let pp = PocketParams(strategy: .offset, direction: .climb,
                                       depth: DepthSettings(startDepth: -previous, cutDepth: -z, passDepth: abs(z - previous) + 1),
-                                      allowance: g.cellSize * 1.0, stepoverFraction: params.stepoverFraction)
-                let w = PocketGenerator.generate(regions: regions, tool: tool, params: pp, context: context, builder: &b)
+                                      allowance: g.cellSize * 1.25, stepoverFraction: params.stepoverFraction)
+                // Roughing leaves an allowance, so its outermost rings may be rounded too (never outward).
+                let w = PocketGenerator.generate(regions: regions, tool: tool, params: pp, context: context,
+                                                 smoothBoundary: true, builder: &b)
                 for m in w where !m.contains("too large") { clipped.insert(m) }
                 b.retract()
             }

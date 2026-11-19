@@ -135,6 +135,7 @@ struct ContentView: View {
             regenerate: { workspace.regenerate(project, debounce: false) },
             simulate: simulate,
             stopSimulation: { workspace.stopSimulation(project) },
+            optimizeOrder: optimizeOrder,
             setView: { workspace.viewPreset = $0 },
             fit: { workspace.fitRequest += 1 },
             duplicate: { canvas.viewportPerform(.duplicate) },
@@ -169,6 +170,7 @@ struct ContentView: View {
         if info["tools"] != nil { openWindow(id: "tool-library") }
         if let path = info["import"] as? String { importFiles([URL(fileURLWithPath: path)]) }
         if let i = info["inspector"] as? String { showInspector = i != "hide" }
+        if info["optimize"] != nil { optimizeOrder() }
     }
 
     // MARK: Drag and drop
@@ -203,6 +205,20 @@ struct ContentView: View {
 
     private func simulate() {
         workspace.startSimulation(project)
+    }
+
+    /// One document change, so a single ⌘Z puts the old order back.
+    private func optimizeOrder() {
+        let r = OperationScheduler.optimize(project)
+        guard r.changed else {
+            let n = r.toolChangesBefore
+            alert = AlertInfo(title: "Run order is already optimal",
+                              message: n == 0 ? "Every toolpath uses the same tool, so there are no tool changes to save."
+                                : "This job has \(n) tool change\(n == 1 ? "" : "s"). Fewer would mean cutting a part free "
+                                + "before the work inside it, or swapping the order of toolpaths that overlap.")
+            return
+        }
+        document.project.applyRunOrder(r.order)
     }
 
     private func importVectors() {

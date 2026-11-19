@@ -78,6 +78,33 @@ public enum ToolChangeMode: String, Codable, Sendable, CaseIterable, Identifiabl
     }
 }
 
+/// Avid PRO drive packages, with the cutting and rapid speeds Avid publishes for each (in/min).
+public enum DriveTier: String, Codable, Sendable, CaseIterable, Identifiable {
+    case nema23, nema34, clearPath
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .nema23: "NEMA 23 steppers"
+        case .nema34: "NEMA 34 steppers"
+        case .clearPath: "ClearPath servos"
+        }
+    }
+    public var cutSpeed: Double {
+        switch self {
+        case .nema23: 250.inch
+        case .nema34: 400.inch
+        case .clearPath: 600.inch
+        }
+    }
+    public var rapidSpeed: Double {
+        switch self {
+        case .nema23: 500.inch
+        case .nema34: 800.inch
+        case .clearPath: 1200.inch
+        }
+    }
+}
+
 /// Everything the post processor and validators need to know about the machine.
 public struct MachineProfile: Hashable, Codable, Sendable {
     public var model: AvidModel
@@ -102,10 +129,43 @@ public struct MachineProfile: Hashable, Codable, Sendable {
     public var arcFitTolerance: Double
     public var lineNumbers: Bool
 
+    // Motion model for run-time estimates (optional so older project files still load; nil = default).
+    // Avid publishes no acceleration figures; 50 in/s² is the X/Y value Avid owners report Mach4 ships with.
+    // Read the real values from Mach4's Configure > Control > Motors.
+    public var drive: DriveTier?
+    /// X/Y acceleration, mm/s².
+    public var accelerationXY: Double?
+    /// Z acceleration, mm/s².
+    public var accelerationZ: Double?
+    /// Z rapid speed, mm/min.
+    public var rapidRateZ: Double?
+    /// Corner tolerance of the motion planner (Grbl-style junction deviation), mm.
+    public var junctionDeviation: Double?
+    /// Lines of G-code the controller plans ahead (Mach4 default 20).
+    public var lookaheadLines: Int?
+    /// Seconds for one tool change including touch-off and spin-up.
+    public var toolChangeSeconds: Double?
+    /// How far roughing passes may round off corners so the machine keeps moving (mm); finished walls stay exact.
+    public var roughingSmoothing: Double?
+
+    public var driveTier: DriveTier { drive ?? .nema34 }
+    public var axisAcceleration: Vec3 {
+        let xy = accelerationXY ?? 50.inch
+        return Vec3(xy, xy, accelerationZ ?? 25.inch)
+    }
+    /// Rapid speed per axis, mm/min.
+    public var axisRapid: Vec3 { Vec3(rapidRateForEstimates, rapidRateForEstimates, rapidRateZ ?? 400.inch) }
+    public var cornerDeviation: Double { junctionDeviation ?? 0.05 }
+    public var plannerLookahead: Int { max(1, lookaheadLines ?? 20) }
+    public var cornerSmoothing: Double { max(0, roughingSmoothing ?? 0.25) }
+    public var toolChangeTime: Double {
+        toolChangeSeconds ?? (toolChange == .atc ? 15 : 60)
+    }
+
     public init(model: AvidModel = .pro6060, travel: Vec3? = nil, spindle: SpindleKind = .vfdSpindle,
                 minRPM: Double = 6000, maxRPM: Double = 24000, toolChange: ToolChangeMode = .manualM6,
                 dustCollection: Bool = true, spindleSpinUpDwell: Double = 0,
-                rapidRateForEstimates: Double = 400.inch, maxFeedRate: Double = 400.inch,
+                rapidRateForEstimates: Double = 800.inch, maxFeedRate: Double = 400.inch,
                 outputUnits: LengthUnit = .inch, outputArcs: Bool = true, arcFitTolerance: Double = 0.01,
                 lineNumbers: Bool = false) {
         self.model = model

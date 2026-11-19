@@ -1,6 +1,10 @@
 import Foundation
 
 public extension Project {
+    /// Fixed IDs for the demo projects, so regenerating them gives the same files (like the starter tool library's,
+    /// with 01 in place of 00). IDs only need to be unique within a project; paste and duplicate assign new ones.
+    private static func demoID(_ n: Int) -> UUID { UUID(uuidString: String(format: "4E415449-5645-4341-4D01-%012d", n))! }
+
     /// A small sign job that exercises every operation: V-carved text, a pocket, drilled holes and a
     /// cut-out with tabs, on 24" × 18" × 3/4" plywood.
     static func demoSign(fontName: String = "Helvetica-Bold") -> Project {
@@ -9,25 +13,25 @@ public extension Project {
         let vBit = lib.tool(number: 5)!
         let stock = Stock(width: 24.inch, height: 18.inch, thickness: 0.75.inch, materialName: "Baltic birch plywood")
 
-        let outline = DesignShape(name: "Sign outline", kind: .rectangle(width: 22.inch, height: 16.inch, cornerRadius: 1.inch),
+        let outline = DesignShape(id: demoID(1), name: "Sign outline", kind: .rectangle(width: 22.inch, height: 16.inch, cornerRadius: 1.inch),
                                   position: Vec2(12.inch, 9.inch))
-        let text = DesignShape(name: "Title", kind: .text(TextSpec(string: "AVID", fontName: fontName, capHeight: 3.5.inch)),
+        let text = DesignShape(id: demoID(2), name: "Title", kind: .text(TextSpec(string: "AVID", fontName: fontName, capHeight: 3.5.inch)),
                                position: Vec2(12.inch, 11.5.inch))
-        let pocket = DesignShape(name: "Plaque pocket", kind: .rectangle(width: 10.inch, height: 2.5.inch, cornerRadius: 0.25.inch),
+        let pocket = DesignShape(id: demoID(3), name: "Plaque pocket", kind: .rectangle(width: 10.inch, height: 2.5.inch, cornerRadius: 0.25.inch),
                                  position: Vec2(12.inch, 5.inch))
         let holes = [Vec2(2.5, 2.5), Vec2(21.5, 2.5), Vec2(2.5, 15.5), Vec2(21.5, 15.5)].enumerated().map { i, p in
-            DesignShape(name: "Mounting hole \(i + 1)", kind: .circle(radius: 0.125.inch), position: Vec2(p.x.inch, p.y.inch))
+            DesignShape(id: demoID(4 + i), name: "Mounting hole \(i + 1)", kind: .circle(radius: 0.125.inch), position: Vec2(p.x.inch, p.y.inch))
         }
 
         let ops: [CAMOperation] = [
-            CAMOperation(name: "V-Carve title", kind: .vcarve(VCarveParams()), shapeIDs: [text.id], tool: vBit),
-            CAMOperation(name: "Pocket plaque",
+            CAMOperation(id: demoID(11), name: "V-carve title", kind: .vcarve(VCarveParams()), shapeIDs: [text.id], tool: vBit),
+            CAMOperation(id: demoID(12), name: "Pocket plaque",
                       kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 0.25.inch))),
                       shapeIDs: [pocket.id], tool: endMill),
-            CAMOperation(name: "Drill mounting holes",
+            CAMOperation(id: demoID(13), name: "Drill mounting holes",
                       kind: .drill(DrillParams(depth: 0.77.inch, peckDepth: 0.25.inch)),
                       shapeIDs: holes.map(\.id), tool: endMill),
-            CAMOperation(name: "Cut out sign",
+            CAMOperation(id: demoID(14), name: "Cut out sign",
                       kind: .profile(ProfileParams(side: .outside, direction: .climb,
                                                    depth: DepthSettings(cutDepth: 0.77.inch),
                                                    tabs: TabSettings(enabled: true, count: 6),
@@ -43,21 +47,27 @@ public extension Project {
     /// ("Selected vectors" boundary) so no time is spent machining the scrap the cut-out throws away.
     static func demoRelief() -> Project {
         let lib = ToolLibrary.starter
-        let endMill = lib.tool(number: 1)!
+        let material = MaterialKind.hardwood
+        var endMill = lib.tool(number: 1)!
+        // Maple wants a thicker chip than the plywood defaults: take the chart recommendation.
+        let rec = ChipLoad.recommend(for: endMill, material: material, machine: .avidPRO6060)
+        endMill.cutting.feedRate = rec.feed
+        endMill.cutting.spindleRPM = rec.rpm
         let ball = lib.tool(number: 7)!
-        let stock = Stock(width: 7.inch, height: 5.inch, thickness: 0.75.inch, materialName: "Hard maple")
+        let stock = Stock(width: 7.inch, height: 5.inch, thickness: 0.75.inch, materialName: "Hard maple", materialKind: material)
         let center = Vec2(3.5.inch, 2.5.inch)
-        let mesh = MeshModel.reliefMedallion(width: 150, height: 100)
+        var mesh = MeshModel.reliefMedallion(width: 150, height: 100)
+        mesh.id = demoID(41)
         let spec = ModelSpec(mesh: mesh, upAxis: .z, depth: 0.4.inch)
-        let relief = DesignShape(name: "Relief", kind: .model(spec), position: center)
-        let outline = DesignShape(name: "Medallion outline", kind: .ellipse(radiusX: 76.5, radiusY: 51.5), position: center)
+        let relief = DesignShape(id: demoID(21), name: "Relief", kind: .model(spec), position: center)
+        let outline = DesignShape(id: demoID(22), name: "Medallion outline", kind: .ellipse(radiusX: 76.5, radiusY: 51.5), position: center)
         let ops: [CAMOperation] = [
-            CAMOperation(name: "Rough relief", kind: .rough3D(Rough3DParams(boundary: .vectors)),
+            CAMOperation(id: demoID(31), name: "Rough relief", kind: .rough3D(Rough3DParams(boundary: .vectors)),
                          shapeIDs: [relief.id, outline.id], tool: endMill),
-            CAMOperation(name: "Finish relief",
+            CAMOperation(id: demoID(32), name: "Finish relief",
                          kind: .finish3D(Finish3DParams(stepoverFraction: 0.1, rasterAngle: 45, boundary: .vectors)),
                          shapeIDs: [relief.id, outline.id], tool: ball),
-            CAMOperation(name: "Cut out medallion",
+            CAMOperation(id: demoID(33), name: "Cut out medallion",
                          kind: .profile(ProfileParams(side: .outside, depth: DepthSettings(cutDepth: 0.77.inch),
                                                       tabs: TabSettings(enabled: true, count: 4),
                                                       entry: EntrySettings(kind: .ramp, rampLength: 1.inch))),

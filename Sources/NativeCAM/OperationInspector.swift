@@ -19,12 +19,13 @@ struct OperationInspector: View {
                     .disabled(workspace.selectedShapeIDs.isEmpty)
                     .help("Select shapes in the Design list, then click to assign them to this toolpath")
             }
-            ToolSection(tool: $op.tool, units: units, library: library)
+            ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine)
             parameters
             if let tp = workspace.job?.toolpaths.first(where: { $0.id == op.id }) {
                 Section("Result") {
                     LabeledContent("Cutting length", value: "\(units.format(tp.cuttingLength, decimals: 1)) \(units.symbol)")
-                    LabeledContent("Estimated time", value: formatDuration(tp.estimatedSeconds(rapidRate: project.machine.rapidRateForEstimates)))
+                    LabeledContent("Estimated time", value: formatDuration(workspace.job?.estimatedSeconds(toolpath: tp.id)
+                                                                          ?? tp.estimatedSeconds(rapidRate: project.machine.rapidRateForEstimates)))
                     if let e = tp.cuttingExtents {
                         LabeledContent("Deepest cut", value: "\(units.format(-e.min.z)) \(units.symbol)")
                     }
@@ -133,7 +134,7 @@ struct OperationInspector: View {
             }
         case let .vcarve(p):
             let set: (VCarveParams) -> Void = { op.kind = .vcarve($0) }
-            Section("V-Carve") {
+            Section("V-carve") {
                 Toggle("Flat bottom", isOn: Binding(get: { p.flatDepth != nil }, set: { var q = p; q.flatDepth = $0 ? 0.125.inch : nil; set(q) }))
                 if let flat = p.flatDepth {
                     LengthField(title: "Flat depth", mm: Binding(get: { flat }, set: { var q = p; q.flatDepth = max(0.01, $0); set(q) }), units: units)
@@ -208,7 +209,7 @@ struct DepthSection: View {
             }
             LengthField(title: "Pass depth", mm: Binding(get: { depth.passDepth ?? tool.cutting.stepdown }, set: { depth.passDepth = max(0.05, $0) }),
                         units: units, help: "Defaults to the tool's stepdown")
-            let passes = depth.passLevels(toolStepdown: tool.cutting.stepdown).count
+            let passes = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum).count
             LabeledContent("Passes", value: "\(passes)")
             if depth.cutDepth > stock.thickness + 0.04.inch {
                 Label("Deeper than the material (\(units.format(stock.thickness)) \(units.symbol))", systemImage: "exclamationmark.triangle")
@@ -244,6 +245,8 @@ struct ToolSection: View {
     @Binding var tool: Tool
     let units: LengthUnit
     let library: ToolLibraryStore
+    var material: MaterialKind = .plywood
+    var machine: MachineProfile = .avidPRO6060
 
     var body: some View {
         Section("Tool") {
@@ -273,6 +276,44 @@ struct ToolSection: View {
             FeedField(title: "Plunge", mmPerMin: $tool.cutting.plungeRate, units: units)
             LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
             PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
+            if ChipLoad.applies(to: tool) {
+                ChipLoadRow(tool: $tool, material: material, machine: machine, units: units)
+            }
+        }
+    }
+}
+
+/// Chip load against the chart for the job's material, with a one-click recommendation.
+struct ChipLoadRow: View {
+    @Binding var tool: Tool
+    let material: MaterialKind
+    let machine: MachineProfile
+    let units: LengthUnit
+
+    var body: some View {
+        let r = ChipLoad.range(material, diameter: tool.diameter)
+        let chip = tool.chipLoad
+        let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
+        let status: (String, Color) = chip < floor ? ("exclamationmark.triangle.fill", .orange)
+            : chip > r.upperBound * 1.25 ? ("exclamationmark.circle", .secondary) : ("checkmark.circle.fill", .green)
+        let inch = { (mm: Double) in String(format: "%.4f", mm / LengthUnit.mmPerInch) }
+        LabeledContent {
+            Label("\(inch(chip)) in", systemImage: status.0).foregroundStyle(status.1).labelStyle(.titleAndIcon)
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Chip load")
+                Text("\(material.label): \(inch(r.lowerBound))–\(inch(r.upperBound)) in").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine)
+        HStack {
+            Spacer()
+            Button("Use Recommended: \(units.format(rec.feed, decimals: 0)) \(units == .inch ? "ipm" : "mm/min") @ \(Int(rec.rpm.rounded())) RPM") {
+                tool.cutting.feedRate = rec.feed
+                tool.cutting.spindleRPM = rec.rpm
+            }
+            .controlSize(.small)
+            .help("Chip load a quarter into the chart range, feed held within the machine's cutting cap by lowering RPM")
         }
     }
 }

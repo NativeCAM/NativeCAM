@@ -25,7 +25,9 @@ struct NativeCAMApp: App {
         Window("Tool Library", id: "tool-library") {
             ToolLibraryView()
                 .environment(toolLibrary)
-                .frame(minWidth: 820, minHeight: 520)
+                // Tool list (280) + editor (380) + preview (280): narrower and the split view pushes the list off the
+                // window's left edge instead of shrinking it.
+                .frame(minWidth: 960, minHeight: 520)
         }
         .defaultSize(width: 1120, height: 760)
         .keyboardShortcut("t", modifiers: [.command, .shift])
@@ -99,6 +101,10 @@ struct AppCommands: Commands {
             Button("Stop Simulation") { actions?.stopSimulation() }
                 .keyboardShortcut(".", modifiers: .command)
             Divider()
+            Button("Optimize Run Order") { actions?.optimizeOrder() }
+                .disabled(actions == nil)
+                .help("Reorder toolpaths for the fewest tool changes, keeping inside work before cut-outs")
+            Divider()
             Button("Tool Library") { openWindow(id: "tool-library") }
         }
         CommandGroup(after: .pasteboard) {
@@ -128,6 +134,7 @@ struct WorkspaceActions {
     var regenerate: () -> Void
     var simulate: () -> Void
     var stopSimulation: () -> Void
+    var optimizeOrder: () -> Void
     var setView: (ViewPreset) -> Void
     var fit: () -> Void
     var duplicate: () -> Void

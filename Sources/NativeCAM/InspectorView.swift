@@ -39,6 +39,10 @@ struct SetupInspector: View {
             }
             Section("Material") {
                 TextField("Material", text: $project.stock.materialName)
+                Picker("Material type", selection: Binding(get: { project.stock.material }, set: { project.stock.materialKind = $0 })) {
+                    ForEach(MaterialKind.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Used for chip-load recommendations and warnings")
                 LengthField(title: "Width (X)", mm: $project.stock.width, units: units, minimum: 1)
                 LengthField(title: "Height (Y)", mm: $project.stock.height, units: units, minimum: 1)
                 LengthField(title: "Thickness (Z)", mm: $project.stock.thickness, units: units,
@@ -64,6 +68,14 @@ struct SetupInspector: View {
                             help: "Rapids between cuts happen at this height above the material.", minimum: 0.5)
                 LengthField(title: "Plunge start", mm: $project.stock.plungeHeight, units: units,
                             help: "Rapids stop this far above the material; feeds start here.", minimum: 0.1)
+                Picker("Between cuts", selection: Binding(get: { project.stock.retract }, set: { project.stock.retractMode = $0 })) {
+                    ForEach(RetractMode.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Minimum lifts only above the material still there, stays down across cleared areas and drops quickly onto floors already cut")
+                if project.stock.retract == .minimum {
+                    LengthField(title: "Safe distance", mm: Binding(get: { project.stock.safeDistance }, set: { project.stock.linkSafeDistance = max(0.5, $0) }),
+                                units: units, help: "Links travel at least this far above remaining material (and tabs). Raise it for bowed sheets.")
+                }
                 LengthField(title: "Park X", mm: $project.stock.homePosition.x, units: units)
                 LengthField(title: "Park Y", mm: $project.stock.homePosition.y, units: units)
                 LengthField(title: "Park Z", mm: $project.stock.homePosition.z, units: units, minimum: 1)
@@ -120,10 +132,47 @@ struct MachineSection: View {
             if machine.outputArcs {
                 LengthField(title: "Arc tolerance", mm: $machine.arcFitTolerance, units: units, minimum: 0.001)
             }
+            LengthField(title: "Roughing corner rounding", mm: Binding(get: { machine.cornerSmoothing }, set: { machine.roughingSmoothing = max(0, $0) }),
+                        units: units, help: "How far clearing passes inside a pocket and 3D roughing may round off corners so the machine "
+                            + "keeps moving. Finished pocket walls stay exact; 0 turns it off.")
             Toggle("Line numbers", isOn: $machine.lineNumbers)
-            FeedField(title: "Rapid rate (estimates)", mmPerMin: $machine.rapidRateForEstimates, units: units)
-            FeedField(title: "Max feed", mmPerMin: $machine.maxFeedRate, units: units)
         }
+        Section {
+            Picker("Drives", selection: Binding(get: { machine.driveTier }, set: { tier in
+                machine.drive = tier
+                machine.maxFeedRate = tier.cutSpeed
+                machine.rapidRateForEstimates = tier.rapidSpeed
+            })) {
+                ForEach(DriveTier.allCases) { Text($0.label).tag($0) }
+            }
+            FeedField(title: "Max cutting feed", mmPerMin: $machine.maxFeedRate, units: units)
+            FeedField(title: "Rapid X/Y", mmPerMin: $machine.rapidRateForEstimates, units: units)
+            FeedField(title: "Rapid Z", mmPerMin: Binding(get: { machine.axisRapid.z }, set: { machine.rapidRateZ = $0 }), units: units)
+            AccelerationField(title: "Acceleration X/Y", mmPerS2: Binding(get: { machine.axisAcceleration.x }, set: { machine.accelerationXY = $0 }), units: units)
+            AccelerationField(title: "Acceleration Z", mmPerS2: Binding(get: { machine.axisAcceleration.z }, set: { machine.accelerationZ = $0 }), units: units)
+            LengthField(title: "Corner tolerance", mm: Binding(get: { machine.cornerDeviation }, set: { machine.junctionDeviation = max(0.001, $0) }),
+                        units: units, help: "How far the controller may round a corner to keep speed (junction deviation)")
+            IntField(title: "Look-ahead lines", value: Binding(get: { machine.plannerLookahead }, set: { machine.lookaheadLines = $0 }), range: 1...1000)
+            NumberField(title: "Tool change time", value: Binding(get: { machine.toolChangeTime }, set: { machine.toolChangeSeconds = max(0, $0) }),
+                        suffix: "s", decimals: 0, range: 0...3600)
+        } header: {
+            Text("Motion (for run-time estimates)")
+        } footer: {
+            Text("Avid doesn't publish acceleration; 50 in/s² is what Mach4 reportedly ships with. Copy your values from Mach4's Configure ▸ Control ▸ Motors for accurate estimates.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Acceleration in in/s² or mm/s² (stored as mm/s²).
+struct AccelerationField: View {
+    let title: String
+    @Binding var mmPerS2: Double
+    let units: LengthUnit
+
+    var body: some View {
+        NumberField(title: title, value: Binding(get: { units.fromMM(mmPerS2) }, set: { mmPerS2 = max(0.1, units.toMM($0)) }),
+                    suffix: units == .inch ? "in/s²" : "mm/s²", decimals: units == .inch ? 1 : 0)
     }
 }
 
@@ -178,6 +227,17 @@ struct ShapeInspector: View {
                 }
             }
             Section("Geometry") { geometry }
+            if shape.modelSpec == nil {
+                Section {
+                    Toggle("Clamp / keep-out zone", isOn: Binding(get: { shape.isKeepOut }, set: { shape.keepOutHeight = $0 ? 1.inch : nil }))
+                    if let h = shape.keepOutHeight {
+                        LengthField(title: "Height above material", mm: Binding(get: { h }, set: { shape.keepOutHeight = max(0, $0) }), units: units)
+                    }
+                } footer: {
+                    Text("Marks a clamp or fixture: toolpaths may not cut inside it, and moves that cross it go over the top.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
     }

@@ -27,12 +27,19 @@ public struct DepthSettings: Hashable, Codable, Sendable {
     }
 
     /// Z levels (negative, relative to material top) for each pass, evenly distributed, last = final depth.
-    public func passLevels(toolStepdown: Double) -> [Double] {
+    /// `firstPassMinimum` (compression bits) makes the first pass at least that deep and spreads the rest evenly.
+    public func passLevels(toolStepdown: Double, firstPassMinimum: Double? = nil) -> [Double] {
         let total = cutDepth - startDepth
         guard total > 1e-9 else { return [] }
         let step = max(0.01, passDepth ?? toolStepdown)
         let n = max(1, Int((total / step - 1e-9).rounded(.up)))
-        return (1...n).map { -(startDepth + total * Double($0) / Double(n)) }
+        let even = (1...n).map { -(startDepth + total * Double($0) / Double(n)) }
+        guard let minFirst = firstPassMinimum, startDepth < 1e-9, total / Double(n) < minFirst - 1e-9 else { return even }
+        let first = min(total, minFirst)
+        let rest = total - first
+        guard rest > 1e-6 else { return [-(startDepth + total)] }
+        let m = max(1, Int((rest / step - 1e-9).rounded(.up)))
+        return [-(startDepth + first)] + (1...m).map { -(startDepth + first + rest * Double($0) / Double(m)) }
     }
 }
 
@@ -241,7 +248,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .profile: "Profile"
         case .pocket: "Pocket"
         case .drill: "Drill"
-        case .vcarve: "V-Carve"
+        case .vcarve: "V-carve"
         case .rough3D: "3D Roughing"
         case .finish3D: "3D Finishing"
         }

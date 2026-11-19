@@ -33,6 +33,9 @@ public struct Stock: Hashable, Codable, Sendable {
     /// Material thickness (Z), mm.
     public var thickness: Double
     public var materialName: String
+    /// Material family for chip-load guidance (nil in older files means plywood).
+    public var materialKind: MaterialKind?
+    public var material: MaterialKind { materialKind ?? .plywood }
     public var xyOrigin: XYOrigin
     public var zZero: ZZero
     /// Rapid-safe height above the material top for moves between cuts (Vectric's "Clearance Z1").
@@ -41,11 +44,19 @@ public struct Stock: Hashable, Codable, Sendable {
     public var plungeHeight: Double
     /// Park position at program end, in design coordinates (XY) and height above material (Z).
     public var homePosition: Vec3
+    /// How the tool travels between cuts (nil = minimum retracts).
+    public var retractMode: RetractMode?
+    /// Minimum-retract links keep at least this much above remaining material, mm (nil = 0.2 in).
+    public var linkSafeDistance: Double?
+
+    public var retract: RetractMode { retractMode ?? .minimum }
+    public var safeDistance: Double { linkSafeDistance ?? 0.2.inch }
 
     public init(width: Double = 24.inch, height: Double = 18.inch, thickness: Double = 0.75.inch,
                 materialName: String = "Plywood", xyOrigin: XYOrigin = .lowerLeft, zZero: ZZero = .materialTop,
                 clearanceHeight: Double = 0.5.inch, plungeHeight: Double = 0.1.inch,
-                homePosition: Vec3 = Vec3(0, 0, 1.0.inch)) {
+                homePosition: Vec3 = Vec3(0, 0, 1.0.inch), materialKind: MaterialKind? = nil) {
+        self.materialKind = materialKind
         self.width = width
         self.height = height
         self.thickness = thickness

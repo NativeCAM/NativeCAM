@@ -1,6 +1,14 @@
 import CAMCore
 import SwiftUI
 
+/// Explains what the estimate includes.
+func estimateHelp(_ job: JobResult) -> String {
+    guard let e = job.estimate else { return "Estimated at programmed feeds" }
+    return "Includes acceleration, corners and tool changes: cutting \(formatDuration(e.feedSeconds)), rapids \(formatDuration(e.rapidSeconds)), "
+        + "tool changes and pauses \(formatDuration(e.overheadSeconds)). Distance ÷ feed alone would say \(formatDuration(e.constantVelocity)). "
+        + "Set acceleration and tool-change time in Machine settings to match your Mach4 configuration."
+}
+
 /// Bottom bar: job summary when idle; play / scrub / speed controls while simulating.
 struct SimulationBar: View {
     @Bindable var workspace: Workspace
@@ -45,7 +53,7 @@ struct SimulationBar: View {
                     Label("\(job.toolpaths.count) toolpath\(job.toolpaths.count == 1 ? "" : "s"), \(tools) tool\(tools == 1 ? "" : "s")",
                           systemImage: "point.topleft.down.to.point.bottomright.curvepath")
                     Label("≈ \(formatDuration(workspace.estimatedSeconds(project)))", systemImage: "clock")
-                        .help("Estimated at programmed feeds; real time is longer because of acceleration")
+                        .help(estimateHelp(job))
                     let errors = job.issues.filter { $0.severity == .error }.count
                     let warnings = job.issues.filter { $0.severity == .warning }.count
                     if errors > 0 { Label("\(errors)", systemImage: "xmark.octagon.fill").foregroundStyle(.red) }

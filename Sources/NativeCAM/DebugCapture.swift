@@ -26,7 +26,10 @@ enum DebugCapture {
             MainActor.assumeIsolated {
                 if !info.isEmpty { NotificationCenter.default.post(name: command, object: nil, userInfo: info) }
                 DispatchQueue.main.asyncAfter(deadline: .now() + (info.isEmpty ? 0.1 : 1.6)) {
-                    MainActor.assumeIsolated { captureAll(tag: info["tag"] as? String) }
+                    MainActor.assumeIsolated {
+                        captureAll(tag: info["tag"] as? String)
+                        if info["views"] != nil { dumpScrollViews() }
+                    }
                 }
             }
         }
@@ -44,6 +47,30 @@ enum DebugCapture {
                 CGImageDestinationFinalize(dest)
             }
         }
+    }
+
+    /// Writes each window's scroll views (frame, scroll offset, content size, table column widths) to views.txt in
+    /// the captures folder, for layout problems a screenshot can't explain.
+    static func dumpScrollViews() {
+        var out = ""
+        func visit(_ v: NSView, depth: Int) {
+            if let sv = v as? NSScrollView {
+                let f = sv.convert(sv.bounds, to: nil)
+                let doc = sv.documentView.map { "\($0.className) \(Int($0.frame.width))×\(Int($0.frame.height))" } ?? "none"
+                out += String(repeating: "  ", count: depth) + "NSScrollView x \(Int(f.minX))…\(Int(f.maxX)) "
+                    + "offset \(Int(sv.contentView.bounds.minX)),\(Int(sv.contentView.bounds.minY)) insets \(sv.contentInsets) doc \(doc)"
+                if let t = sv.documentView as? NSTableView {
+                    out += " columns \(t.tableColumns.map { Int($0.width) })"
+                }
+                out += "\n"
+            }
+            for sub in v.subviews { visit(sub, depth: depth + 1) }
+        }
+        for window in NSApp.windows where window.isVisible {
+            out += "== \(window.title) \(Int(window.frame.width))×\(Int(window.frame.height))\n"
+            if let root = window.contentView?.superview ?? window.contentView { visit(root, depth: 0) }
+        }
+        try? out.write(to: folder.appendingPathComponent("views.txt"), atomically: true, encoding: .utf8)
     }
 
     /// CGWindowListCreateImage is hidden from the macOS 15+ SDK but still present at runtime; look it up dynamically.

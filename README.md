@@ -51,8 +51,10 @@ Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Window
 - **Real stock setup.** Material size and thickness, XY zero at any corner or the centre, Z zero on the material top or the spoilboard, safe and plunge heights, park position. Work in inches or millimetres.
 - **2.5D toolpaths.** Profile, pocket, drill and V-carve, with tabs, ramps, islands, multi-pass and climb or conventional cutting.
 - **3D toolpaths.** Import STL, OBJ, 3MF, USDZ or PLY and carve it as a relief with layered roughing and drop-cutter finishing.
-- **Simulator.** A Metal-rendered heightmap carved by each bit's actual profile, with play, pause, scrub, speed control and a cycle-time estimate. It also simulates `.tap` files from other CAM programs.
-- **Job checks.** Before you post, NativeCAM warns about cuts into the spoilboard, depth beyond flute length, toolpaths outside the work area, rapids through material and out-of-range feeds or RPM.
+- **Simulator.** A Metal-rendered heightmap carved by each bit's actual profile, with play, pause, scrub and speed control, timed like the real job. It also simulates `.tap` files from other CAM programs.
+- **Less time in the air.** Between cuts the tool lifts only as high as the material that's left, stays down across areas it has already cleared, and goes over clamps you mark. Cuts within a toolpath are ordered for short travel, and roughing passes round off corners so the machine keeps moving. **Optimize Run Order** groups toolpaths by tool to save manual tool changes, without ever cutting a part free before the work inside it is done.
+- **Realistic run times.** Estimates account for your machine's acceleration, corner speeds, Mach4's look-ahead and tool-change time, not just distance divided by feed.
+- **Job checks.** Before you post, NativeCAM warns about cuts into the spoilboard or a clamp, depth beyond flute length, toolpaths outside the work area, rapids through material, out-of-range feeds or RPM, chip loads too thin for the material (with a one-click recommended feed), and a run order that cuts a part free too early.
 - **Feels like a Mac app.** Document windows, real menus and shortcuts, undo, drag-and-drop import, right-click menus, trackpad gestures, and Liquid Glass controls on macOS 26.
 
 ## Getting started
@@ -85,7 +87,7 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 | **1. Set up the job** | Select **Material & Machine** in the sidebar. Set the material size and thickness, XY and Z zero, heights, and your Avid model. |
 | **2. Add artwork** | Use the shape button in the toolbar for rectangles, circles, ellipses, polygons, stars and text (any installed macOS font), or import a file with **⌘I** or by dropping it on the canvas. |
 | **3. Pick bits** | Open the **Tool Library** (**⇧⌘T**) to add or edit bits: flat, ball, bull nose, V-bit, engraving, surfacing and drill, with full geometry and feeds and speeds. |
-| **4. Create toolpaths** | Select vectors, then use the toolpath button in the toolbar or right-click them. Toolpaths run in sidebar order; drag to reorder. |
+| **4. Create toolpaths** | Select vectors, then use the toolpath button in the toolbar or right-click them. Toolpaths run in sidebar order; drag to reorder, or choose **Toolpaths ▸ Optimize Run Order** for the fewest tool changes (**⌘Z** puts the old order back). |
 | **5. Review checks** | Warnings appear under **Checks** in the sidebar as you edit. |
 | **6. Simulate** | **⌘R** plays the material-removal simulation; **⌘.** stops it. |
 | **7. Export** | **⌘E** saves a `.tap` file. In Mach4, load it, zero X/Y, touch off Z with your plate, and air-cut first. |
@@ -135,8 +137,12 @@ swift run -c release nativecam-cli sim other-cam-job.tap            # simulate G
 $ nativecam-cli post demo.nativecam -o demo.tap
 [info] Drill mounting holes: Cuts through the material (0.0200 in into the spoilboard).
 [info] Cut out sign: Cuts through the material (0.0200 in into the spoilboard).
-Generated 4 toolpaths in 0.01s, 1015 lines -> demo.tap
-Estimated run time: 0:10:03
+Generated 4 toolpaths in 0.01s, 893 lines -> demo.tap
+Estimated run time: 0:06:54 (cutting 0:05:30, rapids 0:00:24, tool changes/pauses 0:01:00; distance/feed alone: 0:06:26)
+  V-carve title: 0:01:26
+  Pocket plaque: 0:02:18
+  Drill mounting holes: 0:00:19
+  Cut out sign: 0:01:48
 ```
 
 `sim` also accepts `--cell <mm>` to set the simulation grid resolution.
@@ -173,7 +179,7 @@ G91.1
 T5M6
 M07
 S18000 M03
-(Toolpath: V-Carve title  Tool: T5 60deg V-Bit 1/2in)
+(Toolpath: V-carve title  Tool: T5 60deg V-Bit 1/2in)
 G00 Z0.5000
 G00 X7.1025 Y9.7568
 G00 Z0.1000
@@ -187,13 +193,16 @@ G01 Z-0.0117 F30.0
 | Area | Details |
 |---|---|
 | Profile | Inside, outside or on the line; climb or conventional; multi-pass; ramp entry; tabs; allowance; holes cut before outside profiles |
-| Pocket | Offset or raster clearing, islands, safe feed links between regions |
+| Pocket | Offset or raster clearing, islands, safe feed links between regions. Inner clearing rings get rounded corners (within a set tolerance, 0.25 mm by default); the wall pass stays exact. |
 | Drill | Peck, chip-break and dwell. Canned cycles are expanded into plain moves. |
 | V-carve | Maximal inscribed circles, flat-depth cap, optional flat-area clearing tool, multi-pass |
-| 3D roughing | Layered clearing with an end mill, leaving an allowance for finishing. Machine inside the model outline, inside **selected vectors** such as the cut-out outline (chosen automatically when a cut-out surrounds the model, so scrap isn't machined), or across the whole material. |
+| 3D roughing | Layered clearing with an end mill, leaving an allowance for finishing. Layer outlines follow the surface between grid samples instead of stepping cell by cell, so the machine doesn't crawl through stair-step corners. Machine inside the model outline, inside **selected vectors** such as the cut-out outline (chosen automatically when a cut-out surrounds the model, so scrap isn't machined), or across the whole material. |
 | 3D finishing | Raster passes with an exact triangle drop-cutter for ball and flat bits, so steep walls aren't gouged. Shows scallop height. Same boundary choices as roughing. |
 | Arc fitting | Line segments are re-fitted to `G02`/`G03` arcs, helical ones included |
-| Tools | Flat, ball, bull nose, V-bit, engraving (tip diameter), surfacing and drill. Flute length, shank, stickout, flute count and direction, feeds and speeds, chip-load calculator, live profile drawing. Saved to `~/Library/Application Support/NativeCAM/tools.json`. |
+| Links between cuts | **Minimum** (default): rise just above the remaining material plus a safe distance, feed straight across short stretches already cleared to depth, and rapid down to just above floors this job already cut. **Full** always returns to safe Z. Shapes marked as clamps raise an error if a toolpath cuts into them, and links cross them above their height. Profiles skip depths an earlier toolpath already cleared. |
+| Cut order | Holes, profile loops and V-carve strokes are ordered by nearest neighbour and then improved by local search (2-opt, Or-opt); closed loops are entered wherever they're nearest the tool. Across toolpaths, **Optimize Run Order** finds the order with the fewest tool changes that keeps the work inside each part before its cut-out, roughing before finishing, and your order wherever toolpaths overlap. |
+| Run-time estimate | Times the posted moves with a look-ahead motion planner model: per-axis acceleration and rapid speeds, corner speeds from a junction tolerance, arc speed limits, a 20-line look-ahead, and tool-change and spindle time. Drive tier, acceleration and these settings live under **Material & Machine ▸ Motion**. |
+| Tools | Flat, ball, bull nose, V-bit, engraving (tip diameter), surfacing and drill. Flute length, shank, stickout, flute count and direction, feeds and speeds, chip-load calculator checked against chart chip loads for the material type, compression bits whose first pass clears the upcut length, live profile drawing. Saved to `~/Library/Application Support/NativeCAM/tools.json`. |
 | Simulator | Heightmap carved by the true tool shape (flat, ball, bull nose, V), through-cuts, tool marker, playback controls, cycle-time estimate, detection of rapids through material |
 
 ## Project layout
@@ -213,13 +222,13 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (165 tests in 17 suites, using Swift Testing):
+Run the test suite (194 tests in 23 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh
 ```
 
-The script adds the compiler and linker flags Swift Testing needs when only the Command Line Tools are installed. Extra arguments pass through to `swift test`, for example `scripts/test.sh --filter PostTests`.
+The script adds the compiler and linker flags Swift Testing needs when only the Command Line Tools are installed, and builds the tests optimized in their own folder (`.build/tests`), because the geometry and simulation run about 100× slower unoptimized. Extra arguments pass through to `swift test`, for example `scripts/test.sh --filter PostTests`. For a debuggable, unoptimized run, use `NATIVECAM_TEST_DEBUG=1 scripts/test.sh`.
 
 Developer aids for checking UI changes without clicking through the app:
 
@@ -229,7 +238,7 @@ Developer aids for checking UI changes without clicking through the app:
 
 Measuring toolpath changes:
 
-- **Timing.** `scripts/measure/analyze.py job.tap` breaks a posted job down per toolpath (cutting and rapid length, retracts, plunges, segment sizes) and times it at constant velocity and with an acceleration model (15 in/s² by default, editable at the top of the script).
+- **Timing.** `scripts/measure/analyze.py job.tap` breaks a posted job down per toolpath (cutting and rapid length, retracts, plunges, segment sizes) and times it at constant velocity and with an acceleration model (15 in/s² by default; pass `--accel 50` to match NativeCAM's own estimate).
 - **Part comparison.** Simulate the before and after G-code with the same grid, `nativecam-cli sim job.tap --cell 0.25 --heights out.bin`, then `scripts/measure/compare_parts.py before.bin after.bin --ellipse cx cy rx ry` (or `--rect x0 y0 x1 y1`, in mm) reports how much of the finished part changed.
 
 When adding test data from other open-source CAM projects, copy fixtures only from permissively licensed projects (MIT, BSD, Apache, Boost) and record the source in a `SOURCE.md` beside them. Tests for behaviour found in GPL or LGPL projects should be re-derived, not copied.
@@ -241,6 +250,7 @@ When adding test data from other open-source CAM projects, copy fixtures only fr
 - PDF clipping masks and hidden layers aren't applied. EPS isn't supported.
 - Clicking to select vectors in the 3D view isn't wired up yet; use the Design list in the sidebar.
 - No lead-in/lead-out arcs, dogbones, nesting or plasma (THC) support yet.
+- Run-time estimates come from a generic planner model with Mach4's default 20-line look-ahead and reported Avid acceleration; they haven't been timed against a real machine yet.
 - Canned drill cycles (`G81`–`G83`) in imported G-code aren't simulated. NativeCAM's own output expands them, so its files simulate fully.
 
 ## How NativeCAM was built

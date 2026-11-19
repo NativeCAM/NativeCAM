@@ -229,13 +229,18 @@ public struct SimulationTimeline: Sendable {
     public private(set) var steps: [Step] = []
     public let duration: Double
 
-    public init(toolpaths: [Toolpath], rapidRate: Double) {
+    /// `durations`, when given (e.g. `CycleTimeEstimate.motionSeconds`), sets each motion's playback time so the
+    /// simulation runs at the machine's real pace; otherwise motions take distance ÷ feed.
+    public init(toolpaths: [Toolpath], rapidRate: Double, durations: [[Double]]? = nil) {
         self.toolpaths = toolpaths
         var t = 0.0
         var steps: [Step] = []
         for (i, tp) in toolpaths.enumerated() {
+            var k = 0
             tp.forEachMotion { s, m in
-                let d = m.duration(from: s, rapidRate: rapidRate)
+                var d = m.duration(from: s, rapidRate: rapidRate)
+                if let dur = durations, i < dur.count, k < dur[i].count { d = dur[i][k] }
+                k += 1
                 steps.append(Step(toolpathIndex: i, start: s, motion: m, startTime: t, duration: d))
                 t += d
             }
@@ -285,8 +290,8 @@ public struct SimulationSession: Sendable {
     /// Steps fully applied to `simulator`.
     private var appliedSteps = 0
 
-    public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil) {
-        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate)
+    public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, durations: [[Double]]? = nil) {
+        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations)
         simulator = MaterialSimulator(stock: stock, cellSize: cellSize)
     }
 

@@ -59,6 +59,11 @@ public struct DesignShape: Identifiable, Hashable, Codable, Sendable {
     /// Uniform scale applied after rotation (1 = as defined).
     public var scale: Double
     public var layer: String
+    /// When set, this shape marks a clamp or fixture (height above the material top, mm): nothing may cut inside it
+    /// and links crossing it go over the top. Keep-out shapes are never machined.
+    public var keepOutHeight: Double?
+
+    public var isKeepOut: Bool { keepOutHeight != nil }
 
     public init(id: UUID = UUID(), name: String? = nil, kind: ShapeKind, position: Vec2, rotation: Double = 0,
                 scale: Double = 1, layer: String = "Default") {

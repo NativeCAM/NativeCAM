@@ -59,23 +59,55 @@ enum ProfileGenerator {
             contours[i].nesting = depth
         }
 
-        let levels = params.depth.passLevels(toolStepdown: tool.cutting.stepdown)
+        var depth = params.depth
+        // Rest-aware start: skip depths that earlier toolpaths already cleared all along the cut. Only the inner half of
+        // the tool's footprint counts, so a thin leftover ring at its edge (at most a quarter-diameter side cut) doesn't
+        // force the whole cut to start at the top; full-width slotting at depth can't happen.
+        if let top = context.materialTop, !contours.isEmpty {
+            var highest = -Double.infinity
+            for c in contours {
+                let walker = LoopWalker(c.loop)
+                let n = max(8, Int(walker.length / 2))
+                for k in 0..<n { highest = max(highest, top(walker.point(at: walker.length * Double(k) / Double(n)), r * 0.5)) }
+            }
+            if highest.isFinite, -highest > depth.startDepth + 0.05, -highest < depth.cutDepth - 0.05 {
+                depth.startDepth = -highest
+            }
+        }
+        var paramsAtDepth = params
+        paramsAtDepth.depth = depth
+        let levels = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
         guard !levels.isEmpty, !contours.isEmpty else {
             if levels.isEmpty { warnings.append("Cut depth must be greater than the start depth.") }
             return ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
                 .build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
 
-        // Order: deepest nesting first, nearest-neighbour within each nesting level.
+        // Order: deepest nesting first (inside before outside), shortest travel within each nesting level. A closed
+        // loop is entered wherever it's nearest the tool, so first pick entries by nearest neighbour, then improve
+        // the order of those entry points (and re-pick entries as the cut runs).
         var ordered: [Contour] = []
         var cursor = context.stock.homePosition.xy
         for depth in Set(contours.map(\.nesting)).sorted(by: >) {
             let group = contours.filter { $0.nesting == depth }
-            let sorted = nearestNeighborOrder(group, from: cursor, start: { c in
-                c.closed ? c.loop.closestPoint(to: cursor).point : c.loop.points[0]
-            }, end: { c in c.closed ? c.loop.points[0] : c.loop.points[c.loop.count - 1] })
-            ordered.append(contentsOf: sorted)
-            if let last = sorted.last { cursor = last.loop.points[0] }
+            func exit(_ i: Int, entry: Vec2) -> Vec2 { group[i].closed ? entry : group[i].loop.points[group[i].loop.count - 1] }
+            var entries: [Vec2] = group.map { $0.loop.points[0] }
+            var remaining = Array(group.indices)
+            var probe = cursor
+            while !remaining.isEmpty {
+                var best = 0, bestD = Double.infinity, bestEntry = Vec2.zero
+                for (k, i) in remaining.enumerated() {
+                    let p = group[i].closed ? group[i].loop.closestPoint(to: probe).point : group[i].loop.points[0]
+                    let d = p.distanceSquared(to: probe)
+                    if d < bestD { bestD = d; best = k; bestEntry = p }
+                }
+                let i = remaining.remove(at: best)
+                entries[i] = bestEntry
+                probe = exit(i, entry: bestEntry)
+            }
+            let tour = TourOptimizer.order(count: group.count, from: cursor, start: { entries[$0] }, end: { exit($0, entry: entries[$0]) })
+            ordered.append(contentsOf: tour.map { group[$0] })
+            if let last = tour.last { cursor = exit(last, entry: entries[last]) }
         }
 
         let firstXY = ordered.first.map { $0.loop.points[0] }
@@ -84,7 +116,7 @@ enum ProfileGenerator {
         for contour in ordered {
             if contour.closed {
                 let loop = contour.loop.startingNearest(b.position.xy)
-                cutClosed(loop, levels: levels, params: params, tool: tool, builder: &b, warnings: &warnings)
+                cutClosed(loop, levels: levels, params: paramsAtDepth, tool: tool, builder: &b, warnings: &warnings)
             } else {
                 cutOpen(contour.loop, levels: levels, builder: &b)
             }

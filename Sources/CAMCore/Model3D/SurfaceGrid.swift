@@ -101,7 +101,14 @@ public enum ModelRaster {
 
 /// Marching squares over a boolean grid: closed loops around `true` cells, outer loops counter-clockwise.
 public enum GridContours {
-    public static func loops(mask: [Bool], columns: Int, rows: Int, origin: Vec2, cellSize: Double) -> [Polyline] {
+    /// When `field` is given (with `mask[i] == field[i] <= level`), each contour point slides along its cell edge
+    /// to where the field crosses `level` instead of sitting at the edge midpoint, so slopes give smooth outlines
+    /// rather than 45° stair-steps. Linear interpolation is exact on a planar slope; across a step steeper than
+    /// `steepSlope` (rise per run) it's a guess, so there the slide is limited to `±interpolationLimit` cells from
+    /// the midpoint. Non-finite field values aren't interpolated.
+    public static func loops(mask: [Bool], columns: Int, rows: Int, origin: Vec2, cellSize: Double,
+                             field: [Float]? = nil, level: Float = 0, steepSlope: Double = 2,
+                             interpolationLimit: Double = 0.25) -> [Polyline] {
         // Lattice points on cell-centre squares live on edge midpoints. Encode an edge midpoint as doubled
         // integer coordinates: horizontal edge between (c,r)-(c+1,r) -> (2c+1, 2r); vertical (c,r)-(c,r+1) -> (2c, 2r+1).
         struct P: Hashable { let x: Int32; let y: Int32 }
@@ -140,14 +147,37 @@ public enum GridContours {
                 }
             }
         }
+        // Fraction along the edge from the lower cell to the upper one where the field crosses the level.
+        func shift(_ c0: Int, _ r0: Int, _ c1: Int, _ r1: Int) -> Double {
+            guard let field, c0 >= 0, r0 >= 0, c1 < columns, r1 < rows else { return 0 }
+            let v0 = Double(field[r0 * columns + c0]), v1 = Double(field[r1 * columns + c1])
+            guard v0.isFinite, v1.isFinite, abs(v1 - v0) > 1e-9 else { return 0 }
+            let t = (Double(level) - v0) / (v1 - v0)
+            let limit = abs(v1 - v0) <= steepSlope * cellSize ? 0.5 : interpolationLimit
+            return min(limit, max(-limit, t - 0.5))
+        }
+        func point(_ p: P) -> Vec2 {
+            var x = Double(p.x) * 0.5, y = Double(p.y) * 0.5
+            if p.x & 1 == 1 { // horizontal edge between cells (c, r) and (c+1, r)
+                let c = Int((p.x - 1) / 2), r = Int(p.y / 2)
+                x += shift(c, r, c + 1, r)
+            } else {          // vertical edge between cells (c, r) and (c, r+1)
+                let c = Int(p.x / 2), r = Int((p.y - 1) / 2)
+                y += shift(c, r, c, r + 1)
+            }
+            return Vec2(origin.x + x * cellSize, origin.y + y * cellSize)
+        }
         var loops: [Polyline] = []
         var remaining = next
-        while let (start, _) = remaining.first {
+        // Start each loop at its lowest-then-leftmost edge point, in that order: a dictionary's own order changes
+        // from run to run, which would make the same project post different (equally valid) G-code each time.
+        let starts = next.keys.sorted { ($0.y, $0.x) < ($1.y, $1.x) }
+        for start in starts where remaining[start] != nil {
             var pts: [Vec2] = []
             var p = start
             var guardCount = 0
             while let q = remaining.removeValue(forKey: p), guardCount < 10_000_000 {
-                pts.append(Vec2(origin.x + Double(p.x) * 0.5 * cellSize, origin.y + Double(p.y) * 0.5 * cellSize))
+                pts.append(point(p))
                 p = q
                 guardCount += 1
                 if p == start { break }

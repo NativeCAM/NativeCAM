@@ -82,12 +82,15 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
     public var tipDiameter: Double
     public var cutting: CuttingData
     public var notes: String
+    /// Compression bits: length of the upcut section at the tip. The first pass must go deeper than this or the bit
+    /// cuts like an upcut and frays the top face. nil means "about one diameter".
+    public var upcutLength: Double?
 
     public init(id: UUID = UUID(), number: Int, name: String, shape: ToolShape,
                 fluteDirection: FluteDirection = .upcut, fluteCount: Int = 2,
                 diameter: Double, shankDiameter: Double? = nil, fluteLength: Double, stickout: Double? = nil,
                 cornerRadius: Double = 0, includedAngle: Double = 90, tipDiameter: Double = 0,
-                cutting: CuttingData, notes: String = "") {
+                cutting: CuttingData, notes: String = "", upcutLength: Double? = nil) {
         self.id = id
         self.number = number
         self.name = name
@@ -103,6 +106,7 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
         self.tipDiameter = tipDiameter
         self.cutting = cutting
         self.notes = notes
+        self.upcutLength = upcutLength
     }
 
     public var radius: Double { diameter / 2 }
@@ -210,6 +214,11 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
     /// Feed rate (mm/min) that gives the requested chip load.
     public func feedRate(forChipLoad cl: Double) -> Double {
         cl * cutting.spindleRPM * Double(fluteCount)
+    }
+
+    /// Smallest allowed first-pass depth: compression bits must start below their upcut section (plus 0.5 mm).
+    public var firstPassMinimum: Double? {
+        fluteDirection == .compression ? (upcutLength ?? diameter) + 0.5 : nil
     }
 
     /// Maximum usable cut depth (limited by the cutting edge length).

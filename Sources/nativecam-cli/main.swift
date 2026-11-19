@@ -70,7 +70,11 @@ case "post":
     do { try gcode.write(toFile: out, atomically: true, encoding: .ascii) } catch { fail("Can't write \(out): \(error)") }
     let lines = gcode.components(separatedBy: "\r\n").count - 1
     print(String(format: "Generated %d toolpaths in %.2fs, %d lines -> %@", job.toolpaths.count, elapsed, lines, out))
-    print("Estimated run time: \(formatTime(job.estimatedSeconds(rapidRate: project.machine.rapidRateForEstimates)))")
+    if let e = job.estimate {
+        print("Estimated run time: \(formatTime(e.total)) (cutting \(formatTime(e.feedSeconds)), rapids \(formatTime(e.rapidSeconds)), "
+              + "tool changes/pauses \(formatTime(e.overheadSeconds)); distance/feed alone: \(formatTime(e.constantVelocity)))")
+        for (tp, seconds) in zip(job.toolpaths, e.toolpathSeconds) { print("  \(tp.name): \(formatTime(seconds))") }
+    }
 
 case "sim":
     guard args.count >= 2 else { fail("usage: nativecam-cli sim <project|tap> [--png out.png]") }

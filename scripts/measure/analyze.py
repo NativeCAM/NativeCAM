@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Toolpath efficiency metrics for NativeCAM Mach4 .tap files.
 
-Usage: analyze.py file.tap [--json out.json]
+Usage: analyze.py file.tap [--accel in_per_s2] [--json out.json]
 
 Time models
   CV : constant velocity. Feeds at programmed F, rapids at RAPID in/min (what NativeCAM's estimate does).
@@ -271,6 +271,8 @@ def print_table(rows, title):
 
 if __name__ == "__main__":
     path = sys.argv[1]
+    if "--accel" in sys.argv:  # acceleration in in/s^2 (default 15)
+        globals()["A"] = float(sys.argv[sys.argv.index("--accel") + 1])
     moves, tools, tp_tool, err = parse(path)
     rows = summarize(moves, path)
     print_table(rows, path)

@@ -108,9 +108,7 @@ final class Workspace {
                                            floorZ: floor, version: heightVersion)
     }
 
-    func estimatedSeconds(_ project: Project) -> Double {
-        job?.estimatedSeconds(rapidRate: project.machine.rapidRateForEstimates) ?? 0
-    }
+    func estimatedSeconds(_ project: Project) -> Double { job?.estimatedSeconds ?? 0 }
 
     // MARK: Simulation
 
@@ -118,7 +116,8 @@ final class Workspace {
         guard let job else { return }
         externalProgramName = nil
         beginSession(SimulationSession(toolpaths: job.toolpaths, stock: project.stock,
-                                       rapidRate: project.machine.rapidRateForEstimates, cellSize: nil), project: project)
+                                       rapidRate: project.machine.rapidRateForEstimates, cellSize: nil,
+                                       durations: job.estimate?.motionSeconds), project: project)
     }
 
     func simulateProgram(_ toolpaths: [Toolpath], name: String, project: Project) {
@@ -294,7 +293,8 @@ final class Workspace {
             for shape in project.shapes {
                 let isSel = selected.contains(shape.id)
                 let isOp = opShapes.contains(shape.id)
-                let color: SIMD4<Float> = isSel ? accent : (isOp ? SIMD4(0.6, 0.9, 1, 1) : SIMD4(0.92, 0.92, 0.95, dimmed ? 0.35 : 0.9))
+                let normal: SIMD4<Float> = shape.isKeepOut ? SIMD4(1, 0.35, 0.3, dimmed ? 0.4 : 0.95) : SIMD4(0.92, 0.92, 0.95, dimmed ? 0.35 : 0.9)
+                let color: SIMD4<Float> = isSel ? accent : (isOp ? SIMD4(0.6, 0.9, 1, 1) : normal)
                 let offset = dragShapeIDs.contains(shape.id) ? (dragOffset ?? .zero) : .zero
                 let z: Float = 0.05
                 for poly in outlines(shape) {

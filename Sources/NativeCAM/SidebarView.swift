@@ -8,7 +8,7 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $workspace.selection) {
-            Section("Job Setup") {
+            Section {
                 Label {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("Material & Machine")
@@ -17,12 +17,16 @@ struct SidebarView: View {
                     }
                 } icon: { Image(systemName: "shippingbox") }
                 .tag(SidebarItem.setup)
+                .cardRow(0, of: 1)
+            } header: {
+                SectionTitle("Job Setup")
             }
 
             Section {
-                ForEach(project.shapes) { shape in
-                    Label(shape.name, systemImage: icon(for: shape.kind))
+                ForEach(Array(project.shapes.enumerated()), id: \.element.id) { index, shape in
+                    Label(shape.name, systemImage: shape.isKeepOut ? "exclamationmark.shield" : icon(for: shape.kind))
                         .tag(SidebarItem.shape(shape.id))
+                        .cardRow(index, of: project.shapes.count)
                         .contextMenu {
                             Button("Duplicate") { duplicate(shape) }
                             Button("Delete", role: .destructive) { delete(shapes: [shape.id]) }
@@ -30,18 +34,18 @@ struct SidebarView: View {
                 }
                 .onMove { project.shapes.move(fromOffsets: $0, toOffset: $1) }
                 if project.shapes.isEmpty {
-                    Text("Add a shape or import DXF/SVG vectors.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    Placeholder("Add a shape, or import vectors or a 3D model.")
                 }
             } header: {
                 HStack {
-                    Text("Design")
+                    SectionTitle("Design")
                     Spacer()
                     Menu {
                         AddShapeMenu(project: $project, workspace: workspace)
                     } label: { Image(systemName: "plus") }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 }
+                .padding(.trailing, 6)
             }
 
             Section {
@@ -62,6 +66,7 @@ struct SidebarView: View {
                             .help("Include in output")
                     }
                     .tag(SidebarItem.operation(op.id))
+                    .cardRow(index, of: project.operations.count)
                     .contextMenu {
                         Button("Duplicate") { duplicate(op) }
                         Button("Delete", role: .destructive) { delete(operation: op.id) }
@@ -69,23 +74,32 @@ struct SidebarView: View {
                 }
                 .onMove { project.operations.move(fromOffsets: $0, toOffset: $1) }
                 if project.operations.isEmpty {
-                    Text("Select shapes, then add a toolpath.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    Placeholder("Select shapes, then add a toolpath.")
                 }
             } header: {
                 HStack {
-                    Text("Toolpaths (run order)")
+                    SectionTitle("Toolpaths (run order)")
                     Spacer()
+                    if let r = workspace.job?.reorder {
+                        Button {
+                            project.applyRunOrder(OperationScheduler.optimize(project).order)
+                        } label: { Image(systemName: "arrow.up.arrow.down") }
+                            .buttonStyle(.borderless)
+                            .help(r.outOfOrder.isEmpty
+                                ? "Optimize run order: \(r.toolChangesBefore) → \(r.toolChangesAfter) tool changes (⌘Z to undo)"
+                                : "Fix run order: finish the work inside each part before cutting it free (⌘Z to undo)")
+                    }
                     Menu {
                         AddOperationMenu(project: $project, workspace: workspace, library: library)
                     } label: { Image(systemName: "plus") }
                         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 }
+                .padding(.trailing, 6)
             }
 
             if let issues = workspace.job?.issues, !issues.isEmpty {
-                Section("Checks") {
-                    ForEach(issues) { issue in
+                Section {
+                    ForEach(Array(issues.enumerated()), id: \.element.id) { index, issue in
                         Label {
                             VStack(alignment: .leading, spacing: 1) {
                                 if let op = issue.operation { Text(op).font(.caption).foregroundStyle(.secondary) }
@@ -97,7 +111,10 @@ struct SidebarView: View {
                                 .foregroundStyle(issue.severity == .error ? .red : issue.severity == .warning ? .orange : .secondary)
                         }
                         .selectionDisabled()
+                        .cardRow(index, of: issues.count)
                     }
+                } header: {
+                    SectionTitle("Checks")
                 }
             }
         }
@@ -205,7 +222,7 @@ struct AddOperationMenu: View {
             Button("Profile (cut out / inside)") { add(.profile) }
             Button("Pocket") { add(.pocket) }
             Button("Drill") { add(.drill) }
-            Button("V-Carve") { add(.vcarve) }
+            Button("V-carve") { add(.vcarve) }
             Divider()
             Button("3D Roughing") { add(.rough3D) }
             Button("3D Finishing") { add(.finish3D) }
@@ -301,7 +318,7 @@ enum ShapeFactory {
             return CAMOperation(name: "Drill", kind: .drill(DrillParams(depth: t + 0.02.inch, peckDepth: endMill.diameter)),
                                 shapeIDs: shapes, tool: endMill)
         case .vcarve:
-            return CAMOperation(name: "V-Carve", kind: .vcarve(VCarveParams()), shapeIDs: shapes, tool: vBit)
+            return CAMOperation(name: "V-carve", kind: .vcarve(VCarveParams()), shapeIDs: shapes, tool: vBit)
         case .rough3D:
             let (ids, boundary) = modelBoundary(shapes, project: project)
             return CAMOperation(name: "3D Roughing", kind: .rough3D(Rough3DParams(boundary: boundary)), shapeIDs: ids, tool: endMill)
@@ -330,5 +347,69 @@ enum ShapeFactory {
             return b.contains(modelBounds.min) && b.contains(modelBounds.max)
         }
         return surrounding.isEmpty ? (selected, .model) : (selected + Array(Set(surrounding)), .vectors)
+    }
+}
+
+// MARK: Inspector-style cards
+
+/// A section title styled like the grouped form beside the list: the inspector's small grey headers, or (`prominent`)
+/// the bold headers a grouped form uses in a regular window such as the Tool Library.
+struct SectionTitle: View {
+    let title: String
+    var prominent = false
+    init(_ title: String, prominent: Bool = false) {
+        self.title = title
+        self.prominent = prominent
+    }
+    var body: some View {
+        Text(title)
+            .font(prominent ? .headline : nil)
+            .foregroundStyle(prominent ? .primary : .secondary)
+            .padding(.leading, 6)
+    }
+}
+
+/// The hint shown in an empty section, inset like the rows' text and wrapping instead of truncating.
+struct Placeholder: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text).font(.callout).foregroundStyle(.secondary)
+            .lineLimit(1...3).fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, 6)
+            .cardRow(0, of: 1)
+            .selectionDisabled()
+    }
+}
+
+/// One row's slice of a grouped card, drawn like the inspector's `.formStyle(.grouped)` sections (same system fill,
+/// corner radius, margins and inset separators), so the sidebar and the inspector read as one design.
+struct CardRowBackground: View {
+    var isFirst: Bool
+    var isLast: Bool
+    @Environment(\.displayScale) private var scale
+
+    var body: some View {
+        let r: CGFloat = 10
+        UnevenRoundedRectangle(topLeadingRadius: isFirst ? r : 0, bottomLeadingRadius: isLast ? r : 0,
+                               bottomTrailingRadius: isLast ? r : 0, topTrailingRadius: isFirst ? r : 0, style: .continuous)
+            .fill(Color(nsColor: .quaternarySystemFill))
+            .overlay(alignment: .bottom) {
+                if !isLast {
+                    Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1 / max(scale, 1)).padding(.horizontal, 10)
+                }
+            }
+            .padding(.horizontal, 10)
+    }
+}
+
+extension View {
+    /// Places a list row in an inspector-style card: `index` of `count` rows decides the rounded corners.
+    func cardRow(_ index: Int, of count: Int) -> some View {
+        // 29 pt of content plus the list's own row insets gives the inspector's 37 pt rows.
+        padding(.vertical, 2)
+            .frame(maxWidth: .infinity, minHeight: 29, alignment: .leading)
+            .listRowBackground(CardRowBackground(isFirst: index == 0, isLast: index == count - 1))
+            .listRowSeparator(.hidden)
     }
 }

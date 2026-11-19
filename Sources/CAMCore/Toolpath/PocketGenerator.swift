@@ -12,8 +12,10 @@ enum PocketGenerator {
     }
 
     /// Shared by pockets and V-carve flat-area clearing. Appends to `b`, returns warnings.
+    /// `smoothBoundary` also rounds the outermost rings' corners (for roughing that leaves an allowance; a pocket's
+    /// walls stay exact). Inner rings are always smoothed within the machine's roughing smoothing budget.
     static func generate(regions: [Region], tool: Tool, params: PocketParams, context: GenerationContext,
-                         builder b: inout ToolpathBuilder) -> [String] {
+                         smoothBoundary: Bool = false, builder b: inout ToolpathBuilder) -> [String] {
         var warnings: [String] = []
         if regions.isEmpty {
             warnings.append("Pockets need closed shapes; none were selected.")
@@ -24,7 +26,7 @@ enum PocketGenerator {
         if stepover > tool.diameter * 0.95 {
             warnings.append("Stepover is larger than the tool diameter; material will be left behind.")
         }
-        let levels = params.depth.passLevels(toolStepdown: tool.cutting.stepdown)
+        let levels = params.depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
         if levels.isEmpty {
             warnings.append("Cut depth must be greater than the start depth.")
             return warnings
@@ -42,6 +44,8 @@ enum PocketGenerator {
         switch params.strategy {
         case .offset:
             let tree = ringTree(boundary, stepover: stepover, toolRadius: r, arcTolerance: context.arcTolerance)
+            smooth(tree, deviation: context.machine.cornerSmoothing, plannerDeviation: context.machine.cornerDeviation,
+                   stepover: stepover, toolRadius: r, boundary: smoothBoundary, chordTolerance: context.arcTolerance)
             var zAbove = -params.depth.startDepth
             for z in levels {
                 var first = true
@@ -72,9 +76,33 @@ enum PocketGenerator {
     // MARK: Offset rings
 
     final class RingNode {
-        let region: Region
+        var region: Region
         var children: [RingNode] = []
         init(_ region: Region) { self.region = region }
+    }
+
+    /// Rounds ring corners (convex only, so rings only move inward). An inner ring may come in at a corner only
+    /// as far as keeps the ring outside it overlapping: at a turn α the strip between rings stays covered while
+    /// stepover + e·cos(α/2) ≤ r·(1 + cos(α/2)); a fifth of that slack is kept in reserve.
+    static func smooth(_ nodes: [RingNode], deviation: Double, plannerDeviation: Double, stepover: Double, toolRadius r: Double,
+                       boundary: Bool, chordTolerance: Double) {
+        guard deviation > 1e-6 else { return }
+        let budget = { (turn: Double) -> Double in
+            let c = cos(turn / 2)
+            return max(0, 0.8 * (r * (1 + c) - stepover) / max(c, 1e-3))
+        }
+        func visit(_ node: RingNode, isRoot: Bool) {
+            if !isRoot || boundary {
+                let reg = node.region
+                let f = { (l: Polyline) in
+                    l.filletingConvexCorners(deviation: deviation, plannerDeviation: plannerDeviation, chordTolerance: chordTolerance,
+                                             budget: isRoot ? nil : budget)
+                }
+                node.region = Region(outer: f(reg.outer), holes: reg.holes.map(f))
+            }
+            for child in node.children { visit(child, isRoot: false) }
+        }
+        for node in nodes { visit(node, isRoot: true) }
     }
 
     /// Successive inward offsets arranged as a containment tree (each level's regions under the one containing them).

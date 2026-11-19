@@ -60,7 +60,8 @@ enum VCarveGenerator {
             }
         }
 
-        let ordered = nearestNeighborOrder(paths, from: context.stock.homePosition.xy, start: { $0[0].xy }, end: { $0[$0.count - 1].xy })
+        let ordered = TourOptimizer.order(count: paths.count, from: context.stock.homePosition.xy,
+                                          start: { paths[$0][0].xy }, end: { paths[$0][paths[$0].count - 1].xy }).map { paths[$0] }
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: ordered.first?.first?.xy)
         let simplifyTol = min(0.01, context.arcTolerance * 2)
         for limit in passLimits {

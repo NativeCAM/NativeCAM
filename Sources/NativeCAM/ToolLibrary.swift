@@ -74,23 +74,29 @@ struct ToolLibraryView: View {
         @Bindable var store = store
         NavigationSplitView {
             List(selection: $selection) {
-                ForEach(store.tools) { tool in
-                    HStack {
-                        ToolShapeView(tool: tool, showDimensions: false).frame(width: 22, height: 34)
-                        VStack(alignment: .leading) {
-                            Text("T\(tool.number)  \(tool.name)")
-                            Text("\(tool.shape.label) · ⌀ \(units.format(tool.diameter)) \(units.symbol)")
-                                .font(.caption).foregroundStyle(.secondary)
+                Section {
+                    ForEach(Array(store.tools.enumerated()), id: \.element.id) { index, tool in
+                        HStack {
+                            ToolShapeView(tool: tool, showDimensions: false).frame(width: 22, height: 34)
+                            VStack(alignment: .leading) {
+                                Text("T\(tool.number)  \(tool.name)")
+                                Text("\(tool.shape.label) · ⌀ \(units.format(tool.diameter)) \(units.symbol)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .tag(tool.id)
+                        .cardRow(index, of: store.tools.count) // same cards as the editor beside it and the main sidebar
+                        .contextMenu {
+                            Button("Duplicate") { duplicate(tool) }
+                            Button("Delete", role: .destructive) { store.tools.removeAll { $0.id == tool.id } }
                         }
                     }
-                    .tag(tool.id)
-                    .contextMenu {
-                        Button("Duplicate") { duplicate(tool) }
-                        Button("Delete", role: .destructive) { store.tools.removeAll { $0.id == tool.id } }
-                    }
+                    .onMove { store.tools.move(fromOffsets: $0, toOffset: $1) }
+                } header: {
+                    SectionTitle("Tools", prominent: true)
                 }
-                .onMove { store.tools.move(fromOffsets: $0, toOffset: $1) }
             }
+            .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 240, ideal: 280)
             .toolbar {
                 Menu {
@@ -162,6 +168,10 @@ struct ToolEditor: View {
                     if tool.shape.isTapered {
                         LengthField(title: "Tip diameter", mm: $tool.tipDiameter, units: units, minimum: 0)
                         LabeledContent("V depth to full diameter", value: "\(units.format(tool.taperHeight)) \(units.symbol)")
+                    }
+                    if tool.fluteDirection == .compression {
+                        LengthField(title: "Upcut length", mm: Binding(get: { tool.upcutLength ?? tool.diameter }, set: { tool.upcutLength = max(0.1, $0) }),
+                                    units: units, help: "First passes go at least this deep (+0.5 mm) so the top face doesn't fray")
                     }
                     if tool.shape.usesCornerRadius {
                         LengthField(title: "Corner radius", mm: $tool.cornerRadius, units: units, minimum: 0)

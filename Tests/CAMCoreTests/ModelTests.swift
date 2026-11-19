@@ -70,8 +70,8 @@ struct ToolTests {
     }
 
     @Test func chipLoad() throws {
-        let t = try #require(lib.tool(number: 1)) // 150 ipm, 18k, 2 flutes
-        #expect(abs(t.chipLoad - (150.0.inch / 36000)) < 1e-12)
+        let t = try #require(lib.tool(number: 1)) // 2 flutes
+        #expect(abs(t.chipLoad - t.cutting.feedRate / (t.cutting.spindleRPM * 2)) < 1e-12)
         #expect(abs(t.feedRate(forChipLoad: t.chipLoad) - t.cutting.feedRate) < 1e-9)
     }
 
@@ -116,5 +116,58 @@ struct StockTests {
         let b = loops.bounds
         #expect(abs(b.height - 50) < 4) // round letters overshoot the cap height top and bottom
         #expect(abs(b.center.x) < 1e-6 && abs(b.center.y) < 1e-6)
+    }
+}
+
+struct ChipLoadTests {
+    func inches(_ r: ClosedRange<Double>) -> (Double, Double) { (r.lowerBound / 25.4, r.upperBound / 25.4) }
+
+    @Test func freudTableAndInterpolation() {
+        let ply = inches(ChipLoad.range(.plywood, diameter: 0.25.inch))
+        #expect(abs(ply.0 - 0.006) < 1e-9 && abs(ply.1 - 0.009) < 1e-9)
+        // 3/16" sits halfway between the 1/8" and 1/4" rows.
+        let mid = inches(ChipLoad.range(.mdf, diameter: 0.1875.inch))
+        #expect(abs(mid.0 - 0.0085) < 1e-9 && abs(mid.1 - 0.012) < 1e-9)
+        // Clamped beyond the table.
+        #expect(inches(ChipLoad.range(.hardwood, diameter: 1.inch)) == inches(ChipLoad.range(.hardwood, diameter: 0.5.inch)))
+    }
+
+    @Test func recommendationLowersRPMWhenTheFeedCapBinds() {
+        var bit = ToolLibrary.starter.tool(number: 1)!
+        bit.diameter = 0.5.inch
+        let machine = MachineProfile.avidPRO6060 // 400 IPM cutting cap
+        let rec = ChipLoad.recommend(for: bit, material: .mdf, machine: machine)
+        #expect(rec.feed <= machine.maxFeedRate + 1e-6)
+        #expect(rec.rpm < 18000)
+        let chip = rec.feed / (rec.rpm * 2) / 25.4
+        #expect(chip >= 0.023 && chip <= 0.027)
+        // A 1/4" bit in plywood fits under the cap at full speed.
+        let small = ChipLoad.recommend(for: ToolLibrary.starter.tool(number: 1)!, material: .plywood, machine: machine)
+        #expect(small.rpm == 18000)
+    }
+
+    @Test func compressionFirstPassClearsTheUpcutSection() {
+        let d = DepthSettings(cutDepth: 0.77.inch)
+        let levels = d.passLevels(toolStepdown: 0.25.inch, firstPassMinimum: 0.27.inch)
+        #expect(abs(levels[0] + 0.27.inch) < 1e-9)
+        #expect(abs(levels.last! + 0.77.inch) < 1e-9)
+        #expect(levels.count == 3)
+        // Without the rule the first pass would be shallower than the upcut section.
+        #expect(abs(d.passLevels(toolStepdown: 0.25.inch)[0]) < 0.27.inch)
+        let compression = ToolLibrary.starter.tool(number: 4)!
+        #expect(compression.firstPassMinimum! > compression.upcutLength!)
+    }
+
+    @Test func underfedBitIsFlagged() {
+        var slow = ToolLibrary.starter.tool(number: 1)!
+        slow.cutting.feedRate = 100.inch // 0.0028 in/tooth at 18k
+        let shape = DesignShape(kind: .rectangle(width: 50, height: 50, cornerRadius: 0), position: Vec2(100, 75))
+        let op = CAMOperation(kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 3))), shapeIDs: [shape.id], tool: slow)
+        let job = CAMEngine.generate(Project(stock: Stock(width: 200, height: 150, thickness: 19), shapes: [shape], operations: [op]))
+        #expect(job.issues.contains { $0.message.contains("below") && $0.message.contains("chip") || $0.message.hasPrefix("Chip load") })
+        // The starter defaults are within the chart for plywood.
+        let ok = CAMOperation(kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 3))), shapeIDs: [shape.id], tool: ToolLibrary.starter.tool(number: 1)!)
+        let job2 = CAMEngine.generate(Project(stock: Stock(width: 200, height: 150, thickness: 19), shapes: [shape], operations: [ok]))
+        #expect(!job2.issues.contains { $0.message.hasPrefix("Chip load") })
     }
 }

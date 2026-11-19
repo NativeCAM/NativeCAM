@@ -25,7 +25,8 @@ enum DrillGenerator {
         let depth = max(0, params.depth)
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
         if depth <= 0 { warnings.append("Drill depth must be greater than zero.") }
-        let ordered = nearestNeighborOrder(points, from: context.stock.homePosition.xy, start: { $0 }, end: { $0 })
+        let ordered = TourOptimizer.order(count: points.count, from: context.stock.homePosition.xy,
+                                          start: { points[$0] }, end: { points[$0] }).map { points[$0] }
         let backoff = min(0.5, depth * 0.1) // chip-break retract distance (mm)
         let reentryClearance = 0.5
 
