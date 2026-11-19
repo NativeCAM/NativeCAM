@@ -26,7 +26,7 @@
   "operations" : [
     {
       "enabled" : true,
-      "id" : "981F97B1-4FC9-48F0-9EE8-BC2FB4981D32",
+      "id" : "D3C907C3-97A9-4C8B-A536-2158A8E8B185",
       "kind" : {
         "vcarve" : {
           "_0" : {
@@ -36,7 +36,7 @@
       },
       "name" : "V-Carve title",
       "shapeIDs" : [
-        "8D41ED25-64C8-43F2-9BF6-3A73E4257E0D"
+        "98A59E72-EEF3-4902-AF4A-DC6CA87CA33F"
       ],
       "tool" : {
         "cornerRadius" : 0,
@@ -51,7 +51,7 @@
         "fluteCount" : 2,
         "fluteDirection" : "straight",
         "fluteLength" : 10.998199999999999,
-        "id" : "839FA2EA-2BD8-417F-9CFB-0FA38050880A",
+        "id" : "4E415449-5645-4341-4D00-000000000005",
         "includedAngle" : 60,
         "name" : "60° V-Bit 1\/2\"",
         "notes" : "",
@@ -64,7 +64,7 @@
     },
     {
       "enabled" : true,
-      "id" : "601019E9-5C3A-489B-8100-8AE8E5A16140",
+      "id" : "4C300B6F-2BB9-46E9-983E-A53B1C612E2D",
       "kind" : {
         "pocket" : {
           "_0" : {
@@ -85,7 +85,7 @@
       },
       "name" : "Pocket plaque",
       "shapeIDs" : [
-        "669A2345-B6DD-4D8F-8092-10687547B002"
+        "F530E087-F181-43B2-888B-850E2E30BCD3"
       ],
       "tool" : {
         "cornerRadius" : 0,
@@ -100,7 +100,7 @@
         "fluteCount" : 2,
         "fluteDirection" : "upcut",
         "fluteLength" : 25.4,
-        "id" : "48215A9A-8AA6-4B23-93FD-7871F4E88E0A",
+        "id" : "4E415449-5645-4341-4D00-000000000001",
         "includedAngle" : 90,
         "name" : "1\/4\" Upcut End Mill",
         "notes" : "",
@@ -113,7 +113,7 @@
     },
     {
       "enabled" : true,
-      "id" : "E5087AB3-9C5E-4EC2-864A-ADB27E6A4552",
+      "id" : "DF09A8FA-3C9E-42FE-9700-6FD3A72857A9",
       "kind" : {
         "drill" : {
           "_0" : {
@@ -126,10 +126,10 @@
       },
       "name" : "Drill mounting holes",
       "shapeIDs" : [
-        "0092F344-AAEE-4E56-B10E-1C0E530E1A9B",
-        "12559BD9-83BC-4285-9ADB-5C970710F250",
-        "AAF6DA74-F1BE-424E-81F2-340B2730BDA9",
-        "4163635B-E806-40AA-8EB1-8C7D73BC48F7"
+        "6C69E1F6-5FC5-4F4B-A15E-AB5FD35CD139",
+        "C55D61F0-BD32-4034-A841-1FE61F309599",
+        "AC7AB442-9493-407E-AFEF-BADC9F7CF73F",
+        "7CAC8A03-41F9-4761-95C1-E0D22930EF36"
       ],
       "tool" : {
         "cornerRadius" : 0,
@@ -144,7 +144,7 @@
         "fluteCount" : 2,
         "fluteDirection" : "upcut",
         "fluteLength" : 25.4,
-        "id" : "48215A9A-8AA6-4B23-93FD-7871F4E88E0A",
+        "id" : "4E415449-5645-4341-4D00-000000000001",
         "includedAngle" : 90,
         "name" : "1\/4\" Upcut End Mill",
         "notes" : "",
@@ -157,7 +157,7 @@
     },
     {
       "enabled" : true,
-      "id" : "716AFE17-D2D8-4454-A9E2-AB0A763CCE74",
+      "id" : "AB1A1133-3C0B-483F-963E-5E5A06B87773",
       "kind" : {
         "profile" : {
           "_0" : {
@@ -183,7 +183,7 @@
       },
       "name" : "Cut out sign",
       "shapeIDs" : [
-        "C559C8E0-B0DB-4464-9C0A-B866C5293D6C"
+        "96040ED3-DF6D-4E80-AC98-98B2F65078F2"
       ],
       "tool" : {
         "cornerRadius" : 0,
@@ -198,7 +198,7 @@
         "fluteCount" : 2,
         "fluteDirection" : "upcut",
         "fluteLength" : 25.4,
-        "id" : "48215A9A-8AA6-4B23-93FD-7871F4E88E0A",
+        "id" : "4E415449-5645-4341-4D00-000000000001",
         "includedAngle" : 90,
         "name" : "1\/4\" Upcut End Mill",
         "notes" : "",
@@ -212,7 +212,7 @@
   ],
   "shapes" : [
     {
-      "id" : "C559C8E0-B0DB-4464-9C0A-B866C5293D6C",
+      "id" : "96040ED3-DF6D-4E80-AC98-98B2F65078F2",
       "kind" : {
         "rectangle" : {
           "cornerRadius" : 25.4,
@@ -230,7 +230,7 @@
       "scale" : 1
     },
     {
-      "id" : "8D41ED25-64C8-43F2-9BF6-3A73E4257E0D",
+      "id" : "98A59E72-EEF3-4902-AF4A-DC6CA87CA33F",
       "kind" : {
         "text" : {
           "_0" : {
@@ -251,7 +251,7 @@
       "scale" : 1
     },
     {
-      "id" : "669A2345-B6DD-4D8F-8092-10687547B002",
+      "id" : "F530E087-F181-43B2-888B-850E2E30BCD3",
       "kind" : {
         "rectangle" : {
           "cornerRadius" : 6.35,
@@ -269,7 +269,7 @@
       "scale" : 1
     },
     {
-      "id" : "0092F344-AAEE-4E56-B10E-1C0E530E1A9B",
+      "id" : "6C69E1F6-5FC5-4F4B-A15E-AB5FD35CD139",
       "kind" : {
         "circle" : {
           "radius" : 3.175
@@ -285,7 +285,7 @@
       "scale" : 1
     },
     {
-      "id" : "12559BD9-83BC-4285-9ADB-5C970710F250",
+      "id" : "C55D61F0-BD32-4034-A841-1FE61F309599",
       "kind" : {
         "circle" : {
           "radius" : 3.175
@@ -301,7 +301,7 @@
       "scale" : 1
     },
     {
-      "id" : "AAF6DA74-F1BE-424E-81F2-340B2730BDA9",
+      "id" : "AC7AB442-9493-407E-AFEF-BADC9F7CF73F",
       "kind" : {
         "circle" : {
           "radius" : 3.175
@@ -317,7 +317,7 @@
       "scale" : 1
     },
     {
-      "id" : "4163635B-E806-40AA-8EB1-8C7D73BC48F7",
+      "id" : "7CAC8A03-41F9-4761-95C1-E0D22930EF36",
       "kind" : {
         "circle" : {
           "radius" : 3.175

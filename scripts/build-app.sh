@@ -12,7 +12,7 @@ APP="build/NativeCAM.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/NativeCAM" "$APP/Contents/MacOS/NativeCAM"
-cp Resources/AppIcon.icns Resources/Credits.rtf "$APP/Contents/Resources/"
+cp Resources/AppIcon.icns Resources/Credits.rtf LICENSE "$APP/Contents/Resources/"
 # SwiftPM resource bundles, if any target has resources.
 for b in "$BIN"/*.bundle(N); do cp -R "$b" "$APP/Contents/Resources/"; done
 
@@ -27,7 +27,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>com.nativecam.app</string>
   <key>CFBundleExecutable</key><string>NativeCAM</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>NSHumanReadableCopyright</key><string>NativeCAM for Avid CNC routers</string>
+  <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Daniel Smith. GPL-3.0-or-later.</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
   <key>CFBundleVersion</key><string>1</string>

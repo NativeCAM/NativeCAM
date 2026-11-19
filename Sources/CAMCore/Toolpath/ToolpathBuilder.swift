@@ -12,6 +12,8 @@ struct ToolpathBuilder {
     private(set) var position: Vec3
     private(set) var motions: [Motion] = []
     let start: Vec3
+    /// No start was given: the toolpath begins wherever its first cut is (see `build`).
+    private let startFromFirstMove: Bool
 
     init(stock: Stock, tool: Tool, startXY: Vec2?) {
         clearanceZ = max(stock.clearanceHeight, stock.plungeHeight)
@@ -21,6 +23,7 @@ struct ToolpathBuilder {
         let s = Vec3(startXY ?? .zero, clearanceZ)
         position = s
         start = s
+        startFromFirstMove = startXY == nil
     }
 
     mutating func rapid(_ p: Vec3) {
@@ -29,12 +32,14 @@ struct ToolpathBuilder {
         position = p
     }
 
-    /// Straight feed move. Steep descents use the plunge rate automatically.
+    /// Straight feed move. Steep descents (more than 45°) are plunge-like, so their vertical speed is held to the
+    /// plunge rate; the move as a whole runs faster than that instead of crawling at plunge feed. Shallower
+    /// descents (ramps, 3D surfaces following roughed stock) keep the cutting feed.
     mutating func feed(_ p: Vec3, rate: Double? = nil) {
         let d = p - position
         guard d.length > 1e-9 else { return }
         var f = rate ?? feedRate
-        if rate == nil, d.z < 0, Vec2(d.x, d.y).length < abs(d.z) { f = min(f, plungeRate) }
+        if rate == nil, d.z < 0, Vec2(d.x, d.y).length < abs(d.z) { f = min(f, plungeRate * d.length / abs(d.z)) }
         motions.append(.feed(p, f))
         position = p
     }
@@ -69,7 +74,16 @@ struct ToolpathBuilder {
     }
 
     func build(id: UUID, name: String, tool: Tool, rpm: Double, warnings: [String]) -> Toolpath {
-        Toolpath(id: id, name: name, tool: tool, spindleRPM: rpm, start: start, motions: motions, warnings: warnings)
+        var s = start
+        var m = motions[...]
+        if startFromFirstMove {
+            // Start above the first cut rather than at X0 Y0: drop the opening rapids at clearance height.
+            while let first = m.first, first.kind == .rapid, abs(first.end.z - clearanceZ) < 1e-9 {
+                s = first.end
+                m = m.dropFirst()
+            }
+        }
+        return Toolpath(id: id, name: name, tool: tool, spindleRPM: rpm, start: s, motions: Array(m), warnings: warnings)
     }
 }
 

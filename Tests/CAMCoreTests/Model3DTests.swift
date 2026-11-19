@@ -186,6 +186,71 @@ struct Model3DTests {
         #expect(abs(h - (-10 + 0.5)) < 0.3, "outside height \(h)")
     }
 
+    @Test func selectedVectorBoundaryKeepsWorkInsideTheOutline() throws {
+        let tool = ToolLibrary.starter.tool(number: 1)!
+        let ball = ToolLibrary.starter.tool(number: 7)!
+        var dome = Model3DFixture.shape(depth: 10)
+        dome.id = UUID()
+        let outline = DesignShape(kind: .circle(radius: 40), position: Model3DFixture.center)
+        let rough = CAMOperation(kind: .rough3D(Rough3DParams(allowance: 0.5, boundary: .vectors)), shapeIDs: [dome.id, outline.id], tool: tool)
+        let finish = CAMOperation(kind: .finish3D(Finish3DParams(boundary: .vectors)), shapeIDs: [dome.id, outline.id], tool: ball)
+        var project = Model3DFixture.project(dome, ops: [rough, finish])
+        project.shapes.append(outline)
+        let job = CAMEngine.generate(project)
+        #expect(job.toolpaths.count == 2)
+        #expect(!job.issues.contains { $0.message.contains("ignored") })
+        let roughMargin = Rough3DParams.autoMargin(tool: tool), finishMargin = Finish3DParams.autoMargin(tool: ball)
+        for (tp, reach) in zip(job.toolpaths, [40 + roughMargin, 40 + finishMargin]) {
+            var farthest = 0.0
+            tp.forEachMotion { _, m in
+                if m.kind != .rapid && m.end.z < 0 { farthest = max(farthest, m.end.xy.distance(to: Model3DFixture.center)) }
+            }
+            #expect(farthest <= reach + 0.05, "\(tp.name) reaches \(farthest) mm from the centre")
+        }
+        var s = SimulationSession(toolpaths: job.toolpaths, stock: Model3DFixture.stock, rapidRate: 10000, cellSize: 0.5)
+        s.runToEnd()
+        // Between the dome and the outline: cut down to the dome's base (+ finishing leaves none).
+        let between = Double(try #require(s.grid.height(at: Model3DFixture.center + Vec2(35, 0))))
+        #expect(abs(between - (-10)) < 0.3, "between dome and outline: \(between)")
+        // Well outside the outline + rougher reach: untouched.
+        #expect(try #require(s.grid.height(at: Model3DFixture.center + Vec2(60, 0))) == 0)
+        // The dome itself is not gouged.
+        var gouge = 0.0
+        let g = s.grid
+        for r in stride(from: 0.0, through: 28, by: 2) {
+            // Compare at the simulated cell's own centre (the grid stores heights there, not at arbitrary points).
+            let target = Model3DFixture.center + Vec2(r, 0)
+            let col = Int(((target.x - g.origin.x) / g.cellSize).rounded()), row = Int(((target.y - g.origin.y) / g.cellSize).rounded())
+            let p = Vec2(g.origin.x + Double(col) * g.cellSize, g.origin.y + Double(row) * g.cellSize)
+            gouge = max(gouge, Model3DFixture.modelZ(p, depth: 10)! - Double(g.heights[g.index(col, row)]))
+        }
+        #expect(gouge < 0.08, "gouged \(gouge) mm")
+    }
+
+    @Test func warnsWhenFinishingReachesPastRoughing() {
+        var dome = Model3DFixture.shape(depth: 10)
+        dome.id = UUID()
+        let outline = DesignShape(kind: .circle(radius: 40), position: Model3DFixture.center)
+        let rough = CAMOperation(kind: .rough3D(Rough3DParams(boundary: .vectors, boundaryMargin: 1)), shapeIDs: [dome.id, outline.id],
+                                 tool: ToolLibrary.starter.tool(number: 1)!)
+        let finish = CAMOperation(kind: .finish3D(Finish3DParams(boundary: .vectors)), shapeIDs: [dome.id, outline.id],
+                                  tool: ToolLibrary.starter.tool(number: 7)!)
+        var project = Model3DFixture.project(dome, ops: [rough, finish])
+        project.shapes.append(outline)
+        #expect(CAMEngine.checkModelBoundaries(project).count == 1)
+        project.operations[0].kind = .rough3D(Rough3DParams(boundary: .vectors)) // automatic margins agree
+        #expect(CAMEngine.checkModelBoundaries(project).isEmpty)
+    }
+
+    @Test func selectedVectorsWithoutAVectorFallsBackToTheModelOutline() {
+        var dome = Model3DFixture.shape()
+        dome.id = UUID()
+        let op = CAMOperation(kind: .rough3D(Rough3DParams(boundary: .vectors)), shapeIDs: [dome.id], tool: ToolLibrary.starter.tool(number: 1)!)
+        let job = CAMEngine.generate(Model3DFixture.project(dome, ops: [op]))
+        #expect(job.issues.contains { $0.message.contains("needs a closed vector") })
+        #expect(!(job.toolpaths.first?.isEmpty ?? true))
+    }
+
     @Test func vectorShapesAreIgnoredWithAWarning() {
         let rect = DesignShape(kind: .rectangle(width: 10, height: 10, cornerRadius: 0), position: Vec2(20, 20))
         let op = CAMOperation(kind: .finish3D(Finish3DParams()), shapeIDs: [rect.id], tool: ToolLibrary.starter.tool(number: 7)!)

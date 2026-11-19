@@ -12,52 +12,107 @@ enum Model3DGenerator {
         let models: [DesignShape]
         /// Where the tool centre may go.
         let boundary: [Region]
+        /// Boundary actually used (falls back to the model outline when "Selected vectors" has no vectors).
+        let mode: ModelBoundary
         let surface: SurfaceGrid
+        /// Cells inside the boundary (vectors/material modes): cut down to the model base where there's no model.
+        let inside: [Bool]
         /// Lowest model bottom (design Z).
         let baseZ: Double
         let stock: Stock
     }
 
-    static func setup(shapes: [DesignShape], boundary: ModelBoundary, tool: Tool, stock: Stock,
+    /// `reach` widens the "cut down to the base" area beyond where the tool centre may go: finishing passes the tool
+    /// radius, because the band its flank touches was cleared by roughing (whose automatic margin is wider).
+    static func setup(shapes: [DesignShape], boundary: ModelBoundary, margin: Double, reach: Double = 0, tool: Tool, stock: Stock,
                       preferredCell: Double, warnings: inout [String]) -> Setup? {
         let models = shapes.filter { $0.modelSpec != nil }
         if models.isEmpty {
             warnings.append("3D toolpaths need a 3D model; none of the selected shapes is one.")
             return nil
         }
-        if models.count < shapes.count {
-            warnings.append("Only the 3D models in the selection are used; \(shapes.count - models.count) vector shape(s) were ignored.")
+        let vectorShapes = shapes.filter { $0.modelSpec == nil }
+        if boundary != .vectors && !vectorShapes.isEmpty {
+            warnings.append("Only the 3D models in the selection are used; \(vectorShapes.count) vector shape(s) were ignored. Choose \"Selected vectors\" to use them as the machining boundary.")
         }
+        let stockRegion = Region(outer: Polyline(
+            [Vec2(0, 0), Vec2(stock.width, 0), Vec2(stock.width, stock.height), Vec2(0, stock.height)], closed: true))
         let outlineRegions = Region.build(from: models.flatMap { $0.polylines(tolerance: 0.05) }, fill: .nonZero)
-        let regions: [Region] = boundary == .material ? [Region(outer: Polyline(
-            [Vec2(0, 0), Vec2(stock.width, 0), Vec2(stock.width, stock.height), Vec2(0, stock.height)], closed: true))] : outlineRegions
+        var mode = boundary
+        var regions: [Region]
+        switch boundary {
+        case .model:
+            regions = outlineRegions
+        case .material:
+            regions = [stockRegion]
+        case .vectors:
+            let loops = vectorShapes.flatMap { $0.polylines(tolerance: 0.05) }.filter(\.isClosed)
+            let grown = Region.build(from: loops, fill: .evenOdd).flatMap { $0.offset(by: max(0, margin)) }
+            regions = Region.nest(Clipper.intersection(grown.flatMap(\.loops), stockRegion.loops, fill: .nonZero))
+            if regions.isEmpty {
+                warnings.append("\"Selected vectors\" needs a closed vector (such as the cut-out outline) selected with the model; using the model outline instead.")
+                regions = outlineRegions
+                mode = .model
+            }
+        }
         guard !regions.isEmpty else {
             warnings.append("The model has no outline from above; check its up axis.")
             return nil
         }
-        let margin = tool.radius + preferredCell * 2
-        let area = regions.map(\.bounds).reduce(Rect2.empty) { $0.union($1) }.insetBy(-margin)
+        let pad = tool.radius + preferredCell * 2
+        let area = regions.map(\.bounds).reduce(Rect2.empty) { $0.union($1) }.insetBy(-pad)
         let cell = ModelRaster.cellSize(for: area, preferred: preferredCell)
         let surface = ModelRaster.surface(of: models, over: area, cellSize: cell)
+        let maskRegions = reach > 0 && mode == .vectors ? regions.flatMap { $0.offset(by: reach) } : regions
+        let inside = mode == .model ? [Bool](repeating: false, count: surface.heights.count) : regionMask(maskRegions, surface)
         let base = models.compactMap { $0.modelSpec?.bottomZ }.min() ?? 0
         if base < -stock.thickness - 1e-6 {
             warnings.append("The model is deeper than the material; the bottom of the model will be cut off.")
         }
-        return Setup(models: models, boundary: regions, surface: surface, baseZ: base, stock: stock)
+        return Setup(models: models, boundary: regions, mode: mode, surface: surface, inside: inside, baseZ: base, stock: stock)
     }
 
-    /// Lowest Z the tool may reach at each cell so `allowance` stays on the model.
-    static func targets(_ s: Setup, boundary: ModelBoundary, allowance: Double) -> [Float] {
+    /// Scanline fill of regions (even-odd over their outer and hole loops) onto the grid's cell centres.
+    static func regionMask(_ regions: [Region], _ g: SurfaceGrid) -> [Bool] {
+        var mask = [Bool](repeating: false, count: g.heights.count)
+        let edges = regions.flatMap(\.loops).flatMap { loop in (0..<loop.segmentCount).map { loop.segment($0) } }
+        for r in 0..<g.rows {
+            let y = g.origin.y + Double(r) * g.cellSize
+            var xs: [Double] = []
+            for (a, b) in edges where (a.y <= y) != (b.y <= y) {
+                xs.append(a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x))
+            }
+            xs.sort()
+            var k = 0
+            while k + 1 < xs.count {
+                let c0 = max(0, Int(((xs[k] - g.origin.x) / g.cellSize).rounded(.up)))
+                let c1 = min(g.columns - 1, Int(((xs[k + 1] - g.origin.x) / g.cellSize).rounded(.down)))
+                if c0 <= c1 { for c in c0...c1 { mask[g.index(c, r)] = true } }
+                k += 2
+            }
+        }
+        return mask
+    }
+
+    /// Lowest Z the tool may reach at each cell so `allowance` stays on the model. Outside the boundary the
+    /// material is treated as uncut (Z 0), so neither roughing nor a finishing ball reaches into it.
+    static func targets(_ s: Setup, allowance: Double) -> [Float] {
         let g = s.surface
         let a = Float(allowance)
-        let outside: Float = boundary == .material ? Float(s.baseZ) + a : .infinity
+        let base = Float(s.baseZ) + a
         let stockRect = s.stock.bounds
         var t = [Float](repeating: .infinity, count: g.heights.count)
         for r in 0..<g.rows {
             for c in 0..<g.columns {
                 let i = g.index(c, r)
                 guard stockRect.contains(g.center(c, r)) else { t[i] = -.infinity; continue } // no material out here
-                t[i] = g.covered[i] ? min(0, g.heights[i] + a) : outside
+                if g.covered[i] {
+                    t[i] = min(0, g.heights[i] + a)
+                } else if s.mode == .model {
+                    t[i] = .infinity
+                } else {
+                    t[i] = s.inside[i] ? base : 0
+                }
             }
         }
         return t
@@ -70,12 +125,12 @@ enum Model3DGenerator {
         var warnings: [String] = []
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
         let cell = max(0.2, min(1.0, tool.diameter / 10))
-        guard let s = setup(shapes: shapes, boundary: params.boundary, tool: tool, stock: context.stock,
-                            preferredCell: cell, warnings: &warnings) else {
+        guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Rough3DParams.autoMargin(tool: tool),
+                            tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         let g = s.surface
-        let target = targets(s, boundary: params.boundary, allowance: params.allowance)
+        let target = targets(s, allowance: params.allowance)
         let deepest = target.filter { $0.isFinite }.min().map(Double.init) ?? 0
         guard deepest < -1e-3 else {
             warnings.append("Nothing to rough: the model sits at the material surface.")
@@ -119,15 +174,15 @@ enum Model3DGenerator {
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
         let stepover = max(0.02, tool.diameter * params.stepoverFraction)
         let cell = max(0.08, min(0.5, min(stepover / 2, tool.radius / 6)))
-        guard let s = setup(shapes: shapes, boundary: params.boundary, tool: tool, stock: context.stock,
-                            preferredCell: cell, warnings: &warnings) else {
+        guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
+                            reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         if tool.shape == .flatEndMill || tool.shape == .surfacing {
             warnings.append("A ball-nose bit gives a much smoother 3D finish than '\(tool.name)'.")
         }
         // Surface the tool must stay above: model + allowance; uncut material (0) outside the model in outline mode.
-        var surface = targets(s, boundary: params.boundary, allowance: params.allowance)
+        var surface = targets(s, allowance: params.allowance)
         for i in surface.indices where surface[i] == .infinity { surface[i] = 0 }
         // Ball and flat cutters drop exactly onto the triangles; the grid then only carries the material around the model.
         var triangles: [Double] = []

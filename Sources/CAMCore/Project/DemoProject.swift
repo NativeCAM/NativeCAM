@@ -39,7 +39,8 @@ public extension Project {
     }
 
     /// A 3D relief medallion (generated, no file needed) with 3D roughing, ball-nose finishing and a tabbed cut-out.
-    /// The relief stands proud of the material around it ("Whole material" boundary), and the cut-out frees it.
+    /// The relief stands proud of the material around it, and 3D work stays inside the cut-out outline
+    /// ("Selected vectors" boundary) so no time is spent machining the scrap the cut-out throws away.
     static func demoRelief() -> Project {
         let lib = ToolLibrary.starter
         let endMill = lib.tool(number: 1)!
@@ -51,10 +52,11 @@ public extension Project {
         let relief = DesignShape(name: "Relief", kind: .model(spec), position: center)
         let outline = DesignShape(name: "Medallion outline", kind: .ellipse(radiusX: 76.5, radiusY: 51.5), position: center)
         let ops: [CAMOperation] = [
-            CAMOperation(name: "Rough relief", kind: .rough3D(Rough3DParams(boundary: .material)), shapeIDs: [relief.id], tool: endMill),
+            CAMOperation(name: "Rough relief", kind: .rough3D(Rough3DParams(boundary: .vectors)),
+                         shapeIDs: [relief.id, outline.id], tool: endMill),
             CAMOperation(name: "Finish relief",
-                         kind: .finish3D(Finish3DParams(stepoverFraction: 0.1, rasterAngle: 45, boundary: .material)),
-                         shapeIDs: [relief.id], tool: ball),
+                         kind: .finish3D(Finish3DParams(stepoverFraction: 0.1, rasterAngle: 45, boundary: .vectors)),
+                         shapeIDs: [relief.id, outline.id], tool: ball),
             CAMOperation(name: "Cut out medallion",
                          kind: .profile(ProfileParams(side: .outside, depth: DepthSettings(cutDepth: 0.77.inch),
                                                       tabs: TabSettings(enabled: true, count: 4),

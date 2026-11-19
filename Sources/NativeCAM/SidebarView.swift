@@ -303,10 +303,32 @@ enum ShapeFactory {
         case .vcarve:
             return CAMOperation(name: "V-Carve", kind: .vcarve(VCarveParams()), shapeIDs: shapes, tool: vBit)
         case .rough3D:
-            return CAMOperation(name: "3D Roughing", kind: .rough3D(Rough3DParams()), shapeIDs: shapes, tool: endMill)
+            let (ids, boundary) = modelBoundary(shapes, project: project)
+            return CAMOperation(name: "3D Roughing", kind: .rough3D(Rough3DParams(boundary: boundary)), shapeIDs: ids, tool: endMill)
         case .finish3D:
             let ball = pick({ $0.shape == .ballNose }, 7)
-            return CAMOperation(name: "3D Finishing", kind: .finish3D(Finish3DParams()), shapeIDs: shapes, tool: ball)
+            let (ids, boundary) = modelBoundary(shapes, project: project)
+            return CAMOperation(name: "3D Finishing", kind: .finish3D(Finish3DParams(boundary: boundary)), shapeIDs: ids, tool: ball)
         }
+    }
+
+    /// Picks the 3D machining boundary: vectors selected with the model, or else the cut-out (an outside profile's
+    /// closed vector that surrounds the model) so 3D work doesn't machine scrap. Falls back to the model outline.
+    static func modelBoundary(_ selected: [UUID], project: Project) -> (ids: [UUID], boundary: ModelBoundary) {
+        let shapes = selected.compactMap { project.shape(id: $0) }
+        let models = shapes.filter { $0.modelSpec != nil }
+        guard !models.isEmpty else { return (selected, .model) }
+        if shapes.contains(where: { $0.modelSpec == nil }) { return (selected, .vectors) }
+        let modelBounds = models.map(\.bounds).reduce(Rect2.empty) { $0.union($1) }
+        let cutOuts = project.operations.compactMap { op -> [UUID]? in
+            guard op.enabled, case let .profile(p) = op.kind, p.side == .outside else { return nil }
+            return op.shapeIDs
+        }.flatMap { $0 }
+        let surrounding = cutOuts.filter { id in
+            guard let s = project.shape(id: id), s.modelSpec == nil else { return false }
+            let b = s.bounds
+            return b.contains(modelBounds.min) && b.contains(modelBounds.max)
+        }
+        return surrounding.isEmpty ? (selected, .model) : (selected + Array(Set(surrounding)), .vectors)
     }
 }

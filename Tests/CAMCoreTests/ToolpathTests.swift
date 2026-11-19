@@ -129,6 +129,30 @@ struct ProfileTests {
         #expect(vertical == 0)
     }
 
+    @Test func descentsRespectPlungeRateOnlyVertically() throws {
+        let shape = Fixture.rect(100, 60, at: Vec2(100, 75))
+        let op = CAMOperation(kind: .profile(ProfileParams(side: .outside, depth: DepthSettings(cutDepth: 12, passDepth: 4),
+                                                           entry: EntrySettings(kind: .ramp, rampLength: 30))),
+                              shapeIDs: [shape.id], tool: Fixture.endMill)
+        let tp = try #require(CAMEngine.generate(Fixture.project(shapes: [shape], ops: [op])).toolpaths.first)
+        let plunge = Fixture.endMill.cutting.plungeRate
+        var fasterThanPlunge = 0
+        tp.forEachMotion { s, m in
+            guard m.kind == .feed, m.end.z < s.z - 1e-9 else { return }
+            let d = m.end - s
+            // Steep (plunge-like) descents: vertical speed within the plunge rate.
+            if Vec2(d.x, d.y).length < abs(d.z) { #expect(m.feed * abs(d.z) / d.length <= plunge + 1e-6) }
+            if m.feed > plunge + 1 { fasterThanPlunge += 1 }
+        }
+        // A 60° descent runs at plunge / sin 60°, not at plunge feed.
+        let stock = Fixture.stock
+        var b = ToolpathBuilder(stock: stock, tool: Fixture.endMill, startXY: Vec2(0, 0))
+        b.rapid(Vec3(0, 0, 0))
+        b.feed(Vec3(1, 0, -1.7320508))
+        #expect(abs(b.motions.last!.feed - plunge / sin(60 * Double.pi / 180)) < 1e-3)
+        #expect(fasterThanPlunge > 0, "shallow ramps should run faster than plunge feed")
+    }
+
     @Test func rampedCutOutIsThroughAllTheWayAround() throws {
         // Long straight edges are where a missing ramp-end vertex would leave material behind.
         let shape = Fixture.rect(180, 120, at: Vec2(100, 75))
@@ -236,6 +260,20 @@ struct VCarveTests {
         // Nothing outside the rectangle is touched.
         #expect(try #require(grid.height(at: Vec2(100, 75 + 6.5))) == 0)
         #expect(try #require(grid.height(at: Vec2(115.5, 75))) == 0)
+    }
+
+    @Test func curvesDoNotSendTheBitToTheSurface() throws {
+        // A flattened ellipse has hundreds of tiny convex turns; none of them is a real corner.
+        let shape = DesignShape(kind: .ellipse(radiusX: 30, radiusY: 15), position: Vec2(100, 75))
+        let op = CAMOperation(kind: .vcarve(VCarveParams()), shapeIDs: [shape.id], tool: Fixture.vBit90)
+        let tp = try #require(CAMEngine.generate(Fixture.project(shapes: [shape], ops: [op])).toolpaths.first)
+        let surfaceVisits = tp.motions.filter { $0.kind == .feed && $0.end.z > -0.05 }.count
+        #expect(surfaceVisits == 0, "\(surfaceVisits) feed moves back at the surface")
+        // A rectangle's real corners still rise to the surface.
+        let rect = Fixture.rect(30, 12, at: Vec2(100, 75))
+        let op2 = CAMOperation(kind: .vcarve(VCarveParams()), shapeIDs: [rect.id], tool: Fixture.vBit90)
+        let tp2 = try #require(CAMEngine.generate(Fixture.project(shapes: [rect], ops: [op2])).toolpaths.first)
+        #expect(tp2.motions.filter { $0.kind == .feed && abs($0.end.z) < 1e-9 }.count >= 4)
     }
 
     @Test func flatDepthCapsTheCarve() throws {

@@ -165,10 +165,19 @@ public struct VCarveParams: Hashable, Codable, Sendable {
 public enum ModelBoundary: String, Codable, Sendable, CaseIterable, Identifiable {
     /// Only inside the model's outline; material around the model is left alone.
     case model
+    /// Inside the closed vectors selected with the model (typically the cut-out outline) plus a margin;
+    /// everything there outside the model is cut down to the model's base. Avoids machining scrap.
+    case vectors
     /// The whole material; everything outside the model is cut down to the model's base.
     case material
     public var id: String { rawValue }
-    public var label: String { self == .model ? "Model outline" : "Whole material" }
+    public var label: String {
+        switch self {
+        case .model: "Model outline"
+        case .vectors: "Selected vectors"
+        case .material: "Whole material"
+        }
+    }
 }
 
 public struct Rough3DParams: Hashable, Codable, Sendable {
@@ -179,13 +188,20 @@ public struct Rough3DParams: Hashable, Codable, Sendable {
     /// Stepover as a fraction of the tool diameter; nil uses the tool's.
     public var stepoverFraction: Double?
     public var boundary: ModelBoundary
+    /// How far beyond the selected vectors roughing may clear, mm; nil = tool diameter + 1 mm, enough for a
+    /// finishing ball of the same size to reach right up to the vector.
+    public var boundaryMargin: Double?
 
-    public init(allowance: Double = 0.02.inch, passDepth: Double? = nil, stepoverFraction: Double? = nil, boundary: ModelBoundary = .model) {
+    public init(allowance: Double = 0.02.inch, passDepth: Double? = nil, stepoverFraction: Double? = nil, boundary: ModelBoundary = .model,
+                boundaryMargin: Double? = nil) {
         self.allowance = allowance
         self.passDepth = passDepth
         self.stepoverFraction = stepoverFraction
         self.boundary = boundary
+        self.boundaryMargin = boundaryMargin
     }
+
+    public static func autoMargin(tool: Tool) -> Double { tool.diameter + 1 }
 }
 
 public struct Finish3DParams: Hashable, Codable, Sendable {
@@ -196,13 +212,20 @@ public struct Finish3DParams: Hashable, Codable, Sendable {
     /// Material left on the surface, mm (normally 0).
     public var allowance: Double
     public var boundary: ModelBoundary
+    /// How far beyond the selected vectors the tool centre may go, mm; nil = tool radius + 0.5 mm (the ball can
+    /// finish right up to the vector without reaching past what roughing cleared).
+    public var boundaryMargin: Double?
 
-    public init(stepoverFraction: Double = 0.1, rasterAngle: Double = 0, allowance: Double = 0, boundary: ModelBoundary = .model) {
+    public init(stepoverFraction: Double = 0.1, rasterAngle: Double = 0, allowance: Double = 0, boundary: ModelBoundary = .model,
+                boundaryMargin: Double? = nil) {
         self.stepoverFraction = stepoverFraction
         self.rasterAngle = rasterAngle
         self.allowance = allowance
         self.boundary = boundary
+        self.boundaryMargin = boundaryMargin
     }
+
+    public static func autoMargin(tool: Tool) -> Double { tool.radius + 0.5 }
 }
 
 public enum OperationKind: Hashable, Codable, Sendable {

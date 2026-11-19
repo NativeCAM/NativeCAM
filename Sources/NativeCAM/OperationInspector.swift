@@ -97,6 +97,12 @@ struct OperationInspector: View {
                 Picker("Machine", selection: Binding(get: { p.boundary }, set: { var q = p; q.boundary = $0; set(q) })) {
                     ForEach(ModelBoundary.allCases) { Text($0.label).tag($0) }
                 }
+                if p.boundary == .vectors {
+                    LengthField(title: "Boundary margin", mm: Binding(get: { p.boundaryMargin ?? Rough3DParams.autoMargin(tool: op.tool) },
+                                                                    set: { var q = p; q.boundaryMargin = max(0, $0); set(q) }), units: units,
+                                help: "How far past the selected vectors roughing clears. Automatic: tool diameter + 1 mm")
+                    BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
+                }
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units,
                             help: "Material left on the model for the finishing pass")
                 LengthField(title: "Layer depth", mm: Binding(get: { p.passDepth ?? op.tool.cutting.stepdown }, set: { var q = p; q.passDepth = max(0.05, $0); set(q) }),
@@ -111,6 +117,12 @@ struct OperationInspector: View {
             Section("3D Finishing") {
                 Picker("Machine", selection: Binding(get: { p.boundary }, set: { var q = p; q.boundary = $0; set(q) })) {
                     ForEach(ModelBoundary.allCases) { Text($0.label).tag($0) }
+                }
+                if p.boundary == .vectors {
+                    LengthField(title: "Boundary margin", mm: Binding(get: { p.boundaryMargin ?? Finish3DParams.autoMargin(tool: op.tool) },
+                                                                    set: { var q = p; q.boundaryMargin = max(0, $0); set(q) }), units: units,
+                                help: "How far past the selected vectors the tool centre may go. Automatic: tool radius + 0.5 mm")
+                    BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
                 }
                 PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction }, set: { var q = p; q.stepoverFraction = $0; set(q) }))
                 LabeledContent("Scallop height", value: "\(units.format(scallop(tool: op.tool, stepover: op.tool.diameter * p.stepoverFraction), decimals: 4)) \(units.symbol)")
@@ -145,6 +157,23 @@ struct OperationInspector: View {
                 if op.tool.shape.isTapered {
                     LabeledContent("Max V depth", value: "\(units.format(op.tool.taperHeight)) \(units.symbol)")
                 }
+            }
+        }
+    }
+}
+
+/// Explains the "Selected vectors" boundary and offers a way back to the automatic margin.
+struct BoundaryNote: View {
+    let automatic: Bool
+    let reset: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Stays inside the closed vectors in this toolpath's shapes (select the model with the cut-out outline).")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !automatic {
+                Spacer(minLength: 4)
+                Button("Automatic", action: reset).controlSize(.small)
             }
         }
     }

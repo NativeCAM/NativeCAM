@@ -7,7 +7,9 @@ import Foundation
 //   nativecam-cli demo3d <out.nativecam>                     write the 3D relief demo project
 //   nativecam-cli new <out.nativecam>                        write an empty project (default PRO6060 setup)
 //   nativecam-cli post <project.nativecam> [-o out.tap]      generate toolpaths + G-code, print issues
-//   nativecam-cli sim  <project.nativecam|file.tap> [--png out.png] [--cell mm]
+//   nativecam-cli sim  <project.nativecam|file.tap> [--png out.png] [--cell mm] [--heights out.bin]
+//                                                      (--heights: little-endian header Int32 cols, Int32 rows,
+//                                                       Float64 cell, origin x, origin y, then Float32 heights)
 //                                                      simulate material removal, print stats
 
 func fail(_ message: String) -> Never {
@@ -105,6 +107,13 @@ case "sim":
     print(String(format: "Removed %.1f cm³ of material; job time %@", grid.removedVolume / 1000, formatTime(session.timeline.duration)))
     if !session.rapidCollisions.isEmpty {
         print("[error] \(session.rapidCollisions.count) rapid move(s) cut through material")
+    }
+    if let path = option("--heights", in: args) {
+        var data = Data()
+        func put<T>(_ v: T) { withUnsafeBytes(of: v) { data.append(contentsOf: $0) } }
+        put(Int32(grid.columns)); put(Int32(grid.rows)); put(grid.cellSize); put(grid.origin.x); put(grid.origin.y)
+        grid.heights.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
+        do { try data.write(to: URL(fileURLWithPath: path)); print("Wrote \(path)") } catch { fail("heights: \(error)") }
     }
     if let png = option("--png", in: args) {
         do { try HeightmapImage.writePNG(grid, to: URL(fileURLWithPath: png)); print("Wrote \(png)") } catch { fail("PNG: \(error)") }

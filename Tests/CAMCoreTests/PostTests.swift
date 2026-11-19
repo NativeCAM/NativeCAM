@@ -38,6 +38,36 @@ struct PostTests {
         #expect(l[..<second].suffix(4).contains("M05"))
     }
 
+    @Test func constantVelocityModeIsStatedInTheFile() {
+        let (_, _, g) = demo()
+        let l = lines(g)
+        let safety = l.firstIndex(of: "G00 G94 G20 G17 G90 G40 G49 G80")!
+        #expect(l[safety...].prefix(3).contains("G64"))
+        // Restated after the second tool change (the M6 macro may change modes).
+        let change = l.firstIndex(of: "T1M6")!
+        #expect(l[change...].prefix(4).contains("G90 G91.1 G64"))
+    }
+
+    @Test func toolpathsStartAtTheirFirstCutNotTheOrigin() {
+        let (_, _, g) = demo()
+        // Park at the end is the only trip to X0 Y0 (the demo's home position).
+        #expect(lines(g).filter { $0 == "G00 X0.0000 Y0.0000" }.count == 1)
+    }
+
+    @Test func roundingNeverTurnsATinyArcIntoAFullCircle() throws {
+        var p = Project(displayUnits: .inch, stock: Stock(width: 100, height: 100, thickness: 10))
+        p.machine.outputUnits = .inch
+        // An arc whose endpoints differ by less than the output precision (0.0001 in = 0.00254 mm).
+        let start = Vec3(50, 50, -1)
+        let end = Vec3(50.001, 50.0005, -1)
+        let tp = Toolpath(id: UUID(), name: "tiny", tool: Fixture.endMill, spindleRPM: 18000, start: Vec3(50, 50, 5),
+                          motions: [.feed(start, 500), Motion(kind: .arcCCW, end: end, center: Vec2(45, 50), feed: 500)])
+        let g = AvidMach4Post(project: p, date: Self.fixedDate).post([tp])
+        #expect(!lines(g).contains { $0.hasPrefix("G02") || $0.hasPrefix("G03") })
+        let program = try GCodeParser.parse(g)
+        #expect(program.segments.flatMap(\.motions).allSatisfy { !$0.kind.isArc })
+    }
+
     @Test func everyLineIsCRLFAndCommentsAreSafe() {
         let (_, _, g) = demo()
         #expect(!g.replacingOccurrences(of: "\r\n", with: "").contains("\n"))

@@ -4,7 +4,8 @@ import Foundation
 ///
 /// The dialect follows Avid's own Vectric and Fusion 360 posts:
 /// - `.tap` files with CRLF line endings, parenthesised comments (nested parens swapped for braces)
-/// - safety line `G00 G94 G20|G21 G17 G90 G40 G49 G80`, then `G91.1` (incremental I/J arc centres)
+/// - safety line `G00 G94 G20|G21 G17 G90 G40 G49 G80`, then `G91.1` (incremental I/J arc centres) and `G64`
+///   (constant velocity; on Avid's profile the mode only takes effect from the file, so it's restated after every M6)
 /// - tool changes as `T#M6`, plus `G43 H#` for ATC machines
 /// - `M07`/`M09` for the dust collector relay, `S#### M03` spindle start, optional `G04 P#` spin-up dwell
 /// - arcs are G2/G3 with I/J, each under 180°
@@ -56,6 +57,7 @@ public struct AvidMach4Post: Sendable {
         // Safety block
         w.line("G00 G94 \(units == .inch ? "G20" : "G21") G17 G90 G40 G49 G80")
         w.line("G91.1")
+        w.line("G64")
 
         var currentTool: Int?
         var currentRPM: Double?
@@ -120,6 +122,8 @@ public struct AvidMach4Post: Sendable {
                 w.line("M00")
             }
         }
+        // The tool-change macro may leave other modes behind; restate absolute, I/J and constant velocity.
+        if !first { w.line("G90 G91.1 G64") }
         if machine.dustCollection { w.line("M07") }
         state = ModalState()
     }
@@ -159,15 +163,28 @@ public struct AvidMach4Post: Sendable {
             case .arcCW, .arcCCW:
                 let s = stock.toWork(position)
                 let c = stock.toWork(Vec3(m.center, 0))
-                var words = m.kind == .arcCW ? "G02" : "G03"
-                words += " X\(fmt(ex)) Y\(fmt(ey))"
-                if ez != state.z { words += " Z\(fmt(ez))" }
                 // I/J relative to the start point exactly as written, so Mach4's radius check sees consistent values.
                 let sx = state.x ?? round(s.x), sy = state.y ?? round(s.y)
-                words += " I\(fmt(round(c.x) - sx)) J\(fmt(round(c.y) - sy))"
+                let cx = round(c.x), cy = round(c.y)
                 let f = roundFeed(m.feed)
-                if f != state.feed { words += " F\(fmtFeed(f))"; state.feed = f }
-                w.line(words)
+                let feedWord = f != state.feed ? " F\(fmtFeed(f))" : ""
+                if ex == sx && ey == sy {
+                    // Rounding collapsed the arc: Mach4 would read identical endpoints as a full circle.
+                    if ez != state.z { w.line("G01 Z\(fmt(ez))" + feedWord); state.feed = f }
+                } else if abs(hypot(sx - cx, sy - cy) - hypot(ex - cx, ey - cy)) > arcRadiusTolerance {
+                    // Rounded start and end radii disagree enough for Mach4 to reject the arc: cut it as a line.
+                    var words = "G01 X\(fmt(ex)) Y\(fmt(ey))"
+                    if ez != state.z { words += " Z\(fmt(ez))" }
+                    w.line(words + feedWord)
+                    state.feed = f
+                } else {
+                    var words = m.kind == .arcCW ? "G02" : "G03"
+                    words += " X\(fmt(ex)) Y\(fmt(ey))"
+                    if ez != state.z { words += " Z\(fmt(ez))" }
+                    words += " I\(fmt(cx - sx)) J\(fmt(cy - sy))"
+                    w.line(words + feedWord)
+                    state.feed = f
+                }
             case .dwell:
                 w.line("G04 P\(String(format: "%.2f", m.feed))")
             }
@@ -183,6 +200,8 @@ public struct AvidMach4Post: Sendable {
     // MARK: Number formatting
 
     private var decimals: Int { units == .inch ? 4 : 3 }
+    /// Largest start/end radius difference (output units) an emitted arc may have after rounding.
+    private var arcRadiusTolerance: Double { units == .inch ? 0.0005 : 0.0127 }
     private var feedDecimals: Int { units == .inch ? 1 : 0 }
 
     /// Rounds an mm value to the output precision, returned in output units.

@@ -67,7 +67,30 @@ public enum CAMEngine {
                 toolpaths.append(tp)
             }
         }
+        issues.append(contentsOf: checkModelBoundaries(project))
         return JobResult(toolpaths: toolpaths, issues: issues)
+    }
+
+    /// With "Selected vectors" boundaries, a 3D finish assumes the band its tool can touch was cleared by a 3D rough
+    /// of the same model. Warn when the rough's margin is too small for that (the finish would cut uncut scrap).
+    static func checkModelBoundaries(_ project: Project) -> [JobIssue] {
+        var issues: [JobIssue] = []
+        let ops = project.operations.filter(\.enabled)
+        for finish in ops {
+            guard case let .finish3D(fp) = finish.kind, fp.boundary == .vectors else { continue }
+            let reach = (fp.boundaryMargin ?? Finish3DParams.autoMargin(tool: finish.tool)) + finish.tool.radius
+            let models = Set(project.shapes(for: finish).filter { $0.modelSpec != nil }.map(\.id))
+            for rough in ops {
+                guard case let .rough3D(rp) = rough.kind, rp.boundary == .vectors,
+                      !models.isDisjoint(with: rough.shapeIDs) else { continue }
+                let cleared = rp.boundaryMargin ?? Rough3DParams.autoMargin(tool: rough.tool)
+                if cleared + 1e-6 < reach {
+                    let u = project.displayUnits
+                    issues.append(JobIssue(.warning, "Finishing reaches \(u.format(reach)) \(u.symbol) past the boundary but '\(rough.name)' only clears \(u.format(cleared)) \(u.symbol); the ball will cut uncut material there. Increase the roughing margin.", operation: finish.name))
+                }
+            }
+        }
+        return issues
     }
 
     public static func generate(_ op: CAMOperation, shapes: [DesignShape], context: GenerationContext) -> [Toolpath] {

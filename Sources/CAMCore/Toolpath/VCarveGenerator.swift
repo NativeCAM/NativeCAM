@@ -76,6 +76,9 @@ enum VCarveGenerator {
         return toolpaths
     }
 
+    /// Convex vertices turning less than this are treated as points on a curve, not corners (10°).
+    static let minimumCornerTurn = 10.0 * Double.pi / 180
+
     /// Medial-axis path for one loop of a region (loop oriented with the region interior on its left).
     static func carvePath(loop: Polyline, segments: [(Vec2, Vec2)], grid: SegmentGrid?, spacing: Double, rCap: Double,
                           tip: Double, t: Double) -> [Vec3] {
@@ -112,8 +115,10 @@ enum VCarveGenerator {
             let (_, c2) = loop.segment((i + 1) % n)
             let nextDir = (c2 - b).normalized
             let turn = dir.cross(nextDir)
-            if turn > 1e-9 {
-                // Convex corner: the carve rises to the surface at the corner tip.
+            let turnAngle = atan2(turn, dir.dot(nextDir))
+            if turnAngle > minimumCornerTurn {
+                // Real convex corner: the carve rises to the surface at the corner tip. Gentle turns are just a
+                // flattened curve; rising there would send the bit up and down along every curve (air cutting).
                 out.append(Vec3(b, 0))
             } else if turn < -1e-9 {
                 // Reflex corner: sweep the normal around the corner, circles all touch at the vertex.
