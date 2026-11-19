@@ -54,7 +54,7 @@ Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Window
 - **Simulator.** A Metal-rendered heightmap carved by each bit's actual profile, with play, pause, scrub and speed control, timed like the real job. It also simulates `.tap` files from other CAM programs.
 - **Less time in the air.** Between cuts the tool lifts only as high as the material that's left, stays down across areas it has already cleared, and goes over clamps you mark. Cuts within a toolpath are ordered for short travel, and roughing passes round off corners so the machine keeps moving. **Optimize Run Order** groups toolpaths by tool to save manual tool changes, without ever cutting a part free before the work inside it is done.
 - **Realistic run times.** Estimates account for your machine's acceleration, corner speeds, Mach4's look-ahead and tool-change time, not just distance divided by feed.
-- **Job checks.** Before you post, NativeCAM warns about cuts into the spoilboard or a clamp, depth beyond flute length, toolpaths outside the work area, rapids through material, out-of-range feeds or RPM, chip loads too thin for the material (with a one-click recommended feed), and a run order that cuts a part free too early.
+- **Job checks.** Before you post, NativeCAM warns about cuts into the spoilboard or a clamp, depth beyond flute length, toolpaths outside the work area, rapids through material, out-of-range feeds or RPM, chip loads too thin for the material (with a one-click recommended feed), a run order that cuts a part free too early, and two different bits sharing one tool number (which would skip a tool change and cut with the wrong bit).
 - **Feels like a Mac app.** Document windows, real menus and shortcuts, undo, drag-and-drop import, right-click menus, trackpad gestures, and Liquid Glass controls on macOS 26.
 
 ## Getting started
@@ -224,7 +224,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (198 tests in 24 suites, using Swift Testing):
+Run the test suite (204 tests in 25 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

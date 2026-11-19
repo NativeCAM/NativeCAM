@@ -223,4 +223,17 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
 
     /// Maximum usable cut depth (limited by the cutting edge length).
     public var maxCutDepth: Double { fluteLength }
+
+    /// True when both describe the same physical bit: the same cutting geometry, whatever their feeds, speeds,
+    /// names or notes. Two library entries for one bit (say, one per material) can safely share a T number.
+    public func isSameBit(as other: Tool) -> Bool {
+        if id == other.id { return true }
+        func near(_ a: Double, _ b: Double, _ tol: Double = 0.005) -> Bool { abs(a - b) <= tol }
+        guard shape == other.shape, fluteDirection == other.fluteDirection, fluteCount == other.fluteCount,
+              near(diameter, other.diameter) else { return false }
+        if shape.usesCornerRadius && !near(cornerRadius, other.cornerRadius) { return false }
+        if shape.usesAngle && !near(includedAngle, other.includedAngle, 0.01) { return false }
+        if shape.isTapered && !near(tipDiameter, other.tipDiameter) { return false }
+        return true
+    }
 }

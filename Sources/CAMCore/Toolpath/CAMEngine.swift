@@ -103,6 +103,7 @@ public enum CAMEngine {
             }
         }
         issues.append(contentsOf: checkModelBoundaries(project))
+        issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         let estimate = CycleTimeEstimator.estimate(toolpaths, project: project)
         // Point out (never apply) a run order that fixes dependencies or needs fewer tool changes.
         var reorder: OperationScheduler.Result?
@@ -169,6 +170,49 @@ public enum CAMEngine {
         case let .finish3D(p):
             return [Model3DGenerator.finish(op: op, params: p, shapes: shapes, context: context)]
         }
+    }
+
+    /// Different bits under one T number. The post writes a tool change only when the number changes (and Mach4's
+    /// M6 macro only stops when it differs from the loaded tool), so a toolpath that follows another with the same
+    /// number but a different bit cuts with the wrong bit. Elsewhere in the run it's still wrong on a tool changer
+    /// (one bit per pocket and length offset) and a trap with manual changes: Optimize Run Order treats one number
+    /// as one bit, so it may put the two back to back.
+    static func sharedToolNumberIssues(_ toolpaths: [Toolpath], machine: MachineProfile) -> [JobIssue] {
+        var issues: [JobIssue] = []
+        func label(_ t: Tool) -> String { t.name.isEmpty ? "T\(t.number)" : t.name }
+        // The toolpath whose bit was loaded at the last tool change the G-code writes.
+        var loaded: Toolpath?
+        // The first toolpath for each distinct bit, per number, and the bits already reported.
+        var bits: [Int: [Toolpath]] = [:]
+        var reported: [Int: [Tool]] = [:]
+        for tp in toolpaths {
+            let n = tp.tool.number
+            if let l = loaded, l.tool.number == n {
+                if !l.tool.isSameBit(as: tp.tool) {
+                    issues.append(JobIssue(.error, "Uses T\(n) for \(label(tp.tool)), but “\(l.name)” just before it uses T\(n) "
+                        + "for \(label(l.tool)). No tool change is written between them, so this would cut with the "
+                        + "\(label(l.tool)). Give each bit its own tool number.", operation: tp.name))
+                    reported[n, default: []].append(tp.tool)
+                }
+            } else {
+                loaded = tp
+            }
+            let known = bits[n, default: []]
+            guard !known.contains(where: { $0.tool.isSameBit(as: tp.tool) }) else { continue }
+            bits[n, default: []].append(tp)
+            guard let other = known.first, !reported[n, default: []].contains(where: { $0.isSameBit(as: tp.tool) }) else { continue }
+            reported[n, default: []].append(tp.tool)
+            if machine.toolChange == .atc {
+                issues.append(JobIssue(.error, "Uses T\(n) for \(label(tp.tool)), but “\(other.name)” uses T\(n) for "
+                    + "\(label(other.tool)). The tool changer holds one bit per number, so one of them would cut with the "
+                    + "wrong bit. Give each bit its own tool number.", operation: tp.name))
+            } else {
+                issues.append(JobIssue(.warning, "Uses T\(n) for \(label(tp.tool)), but “\(other.name)” uses T\(n) for "
+                    + "\(label(other.tool)). Give each bit its own tool number: the machine and Optimize Run Order treat "
+                    + "one number as one bit, so a different run order could skip this tool change.", operation: tp.name))
+            }
+        }
+        return issues
     }
 
     /// Cutting inside a clamp zone is an error; clamps taller than the safe Z make the post's moves between
