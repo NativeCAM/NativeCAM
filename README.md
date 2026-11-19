@@ -1,15 +1,23 @@
-# NativeCAM
+<p align="center">
+  <img src="docs/images/logo.png" alt="NativeCAM icon: a V-bit carving a groove in a wooden board" width="160" height="160">
+</p>
 
-**A native Mac CAM app for Avid CNC routers.** Design or import your artwork, set up the material and bits, generate 2.5D and 3D toolpaths, watch the material-removal simulation, and export Mach4 `.tap` G-code in the same dialect Avid's own posts produce.
+<h1 align="center">NativeCAM</h1>
+
+<p align="center"><b>A native Mac CAM app for Avid CNC routers.</b></p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Apple%20silicon-arm64-555" alt="Apple silicon">
+  <img src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white" alt="Swift 6">
+  <img src="https://img.shields.io/badge/output-Mach4%20.tap-2a6fdb" alt="Output: Mach4 .tap">
+  <img src="https://img.shields.io/badge/status-v0.1%20early-orange" alt="Status: v0.1">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
+</p>
+
+Design or import your artwork, set up the material and bits, generate 2.5D and 3D toolpaths, watch the material-removal simulation, and export Mach4 `.tap` G-code in the same dialect Avid's own posts produce.
 
 Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Windows VM. Free and open source under the [GPL-3.0](#license).
-
-![macOS 14+](https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white)
-![Apple silicon](https://img.shields.io/badge/Apple%20silicon-arm64-555)
-![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
-![Output: Mach4 .tap](https://img.shields.io/badge/output-Mach4%20.tap-2a6fdb)
-![Status: v0.1](https://img.shields.io/badge/status-v0.1%20early-orange)
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
 ![NativeCAM main window simulating the demo sign job](docs/images/app-window.png)
 
@@ -217,6 +225,7 @@ Developer aids for checking UI changes without clicking through the app:
 
 - **Offscreen snapshots.** `build/NativeCAM.app/Contents/MacOS/NativeCAM -NativeCAMSnapshotProject <project.nativecam> -NativeCAMSnapshotOut <dir>` renders the main window, the finished simulation and the toolpaths to PNGs, then quits. On the demo sign it also runs a canvas interaction self-check (select, drag, marquee, nudge, copy/paste, delete). Pass the paths as `-Key value` pairs; plain file arguments would be opened as documents.
 - **Window captures.** With the app running, `scripts/capture-window.sh` saves PNGs of its windows exactly as composited on screen to `~/Library/Caches/NativeCAM/Captures/`. Arguments put the front window in a state first, for example `scripts/capture-window.sh tag=sim simulate=0.5`, `select=op:0` or `tools=1`.
+- **Icon and logo.** `scripts/make-icon.swift` draws the app icon, the README logo and the GitHub social preview from one piece of artwork: `swift scripts/make-icon.swift <iconset-dir> docs/images`, then `iconutil -c icns <iconset-dir> -o Resources/AppIcon.icns`.
 
 Measuring toolpath changes:
 

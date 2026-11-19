@@ -165,3 +165,68 @@ for (name, px) in sizes {
     try rep.representation(using: .png, properties: [:])!.write(to: outDir.appendingPathComponent("\(name).png"))
 }
 print("Wrote \(outDir.path)")
+
+// MARK: GitHub assets
+// An optional second argument names a folder for the README logo and the repository's social preview image
+// (GitHub ▸ Settings ▸ General ▸ Social preview), both drawn from the same artwork as the app icon:
+//   swift scripts/make-icon.swift <iconset-dir> docs/images
+
+func drawText(_ ctx: CGContext, _ text: String, at point: CGPoint, size: CGFloat, weight: NSFont.Weight,
+              color textColor: CGColor) {
+    let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: size, weight: weight),
+        NSAttributedString.Key(kCTForegroundColorAttributeName as String): textColor,
+    ]
+    let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+    ctx.textPosition = point
+    CTLineDraw(line, ctx)
+}
+
+func socialPreview(icon: CGImage) -> CGImage {
+    let size = CGSize(width: 1280, height: 640)
+    let ctx = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
+                        bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    // Same slate as the icon body, with its faint machine-bed grid.
+    linear(ctx, [color(0x2A3550), color(0x10141F)], from: CGPoint(x: 0, y: size.height), to: CGPoint(x: size.width, y: 0))
+    ctx.setStrokeColor(color(0x8FA8D8, 0.07))
+    ctx.setLineWidth(1.5)
+    for x in stride(from: CGFloat(0), through: size.width, by: 40) {
+        ctx.move(to: CGPoint(x: x, y: 0)); ctx.addLine(to: CGPoint(x: x, y: size.height))
+    }
+    for y in stride(from: CGFloat(0), through: size.height, by: 40) {
+        ctx.move(to: CGPoint(x: 0, y: y)); ctx.addLine(to: CGPoint(x: size.width, y: y))
+    }
+    ctx.strokePath()
+
+    ctx.interpolationQuality = .high
+    ctx.draw(icon, in: CGRect(x: 70, y: (size.height - 470) / 2, width: 470, height: 470))
+
+    let left: CGFloat = 572
+    drawText(ctx, "NativeCAM", at: CGPoint(x: left, y: 352), size: 112, weight: .bold, color: color(0xFFFFFF))
+    drawText(ctx, "Native Mac CAM for Avid CNC routers", at: CGPoint(x: left + 4, y: 282), size: 36,
+             weight: .medium, color: color(0xD5DDEB))
+    // The icon's dashed toolpath, as a divider.
+    ctx.setStrokeColor(color(0x4FA3FF, 0.95))
+    ctx.setLineWidth(4)
+    ctx.setLineCap(.round)
+    ctx.setLineDash(phase: 0, lengths: [16, 12])
+    ctx.move(to: CGPoint(x: left + 6, y: 250)); ctx.addLine(to: CGPoint(x: left + 330, y: 250))
+    ctx.strokePath()
+    drawText(ctx, "2.5D & 3D toolpaths · Simulation · Mach4 G-code", at: CGPoint(x: left + 4, y: 196), size: 27,
+             weight: .regular, color: color(0x9DB4D8))
+    return ctx.makeImage()!
+}
+
+if CommandLine.arguments.count > 2 {
+    let docs = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+    try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+    let logo = CGContext(data: nil, width: 512, height: 512, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    logo.interpolationQuality = .high
+    logo.draw(masterImage, in: CGRect(x: 0, y: 0, width: 512, height: 512))
+    for (name, image) in [("logo.png", logo.makeImage()!), ("social-preview.png", socialPreview(icon: masterImage))] {
+        try NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!
+            .write(to: docs.appendingPathComponent(name))
+    }
+    print("Wrote \(docs.path)/logo.png and social-preview.png")
+}
