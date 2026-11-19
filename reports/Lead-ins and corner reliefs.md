@@ -278,4 +278,4 @@ Leads are the larger and riskier half.
 - **Ramp fallback doesn't plunge.** When that link isn't clear, the tool lifts and drops to the floor already cut at the lead start, and the next ramp starts from there. That ramp is steeper, but each point still cuts at most one pass deeper.
 - **Arc fitting kept out-and-back moves.** `ArcFitter` treated a move that returns to its own start (corner → relief tip → corner) as collinear and dropped it. With arcs on, every relief vanished from the posted file. Such a move now merges only if its detour is within tolerance. No existing golden file changed.
 - **Tabs refactor.** Tab placement moved into a shared `TabPlan`, used by both the old and new loop cutters with the same arithmetic. The existing goldens confirm the output is unchanged.
-- **Tests:** 28 new tests across 3 new suites (327 tests in 39 suites in all), plus the `features-leads-reliefs.tap` golden.
+- **Tests:** 28 new tests across 3 new suites (328 tests in 39 suites in all, after merging the format-3 change from main), plus the `features-leads-reliefs.tap` golden.

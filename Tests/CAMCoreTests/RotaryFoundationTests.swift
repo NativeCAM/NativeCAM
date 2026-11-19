@@ -30,12 +30,13 @@ struct RotaryFoundationTests {
         }
     }
 
-    @Test func rotaryStockRoundTripsAsFormatTwo() throws {
+    @Test func rotaryStockRoundTripsAsFormatThree() throws {
         var p = Project.demoSign()
         p.stock.rotary = RotaryStock(shape: .squareBar, diameter: 50, length: 400)
-        #expect(p.formatVersion == 2)
+        // Builds that read format 2 would drop the blank and post the job flat, so rotary stock is format 3.
+        #expect(p.formatVersion == 3)
         let j = try json(p)
-        #expect(j["formatVersion"] as? Int == 2)
+        #expect(j["formatVersion"] as? Int == 3)
         let rotary = try #require((j["stock"] as? [String: Any])?["rotary"] as? [String: Any])
         #expect(rotary["shape"] as? String == "squareBar" && rotary["diameter"] as? Double == 50 && rotary["length"] as? Double == 400)
         let back = try Project.decode(p.encoded())
@@ -46,11 +47,23 @@ struct RotaryFoundationTests {
         #expect(try json(flat)["formatVersion"] as? Int == 1)
     }
 
+    @Test func formatTwoFilesWithRotaryStockStillOpen() throws {
+        // Written by the first rotary build, which saved rotary stock as format 2.
+        var p = Project.demoSign()
+        p.stock.rotary = RotaryStock(shape: .cylinder, diameter: 40, length: 250)
+        let text = try #require(String(data: p.encoded(), encoding: .utf8))
+        let old = Data(text.replacingOccurrences(of: "\"formatVersion\" : 3", with: "\"formatVersion\" : 2").utf8)
+        let back = try Project.decode(old)
+        #expect(back.stock.rotary == p.stock.rotary)
+        // Saved again, it moves to format 3.
+        #expect(try json(back)["formatVersion"] as? Int == 3)
+    }
+
     @Test func machineRotaryAxisRoundTripsAsFormatTwo() throws {
         var p = Project.demoSign()
         p.machine.rotary = RotaryAxis(letter: .a, alignment: .x, reversed: true, centerHeight: 4.inch)
-        #expect(p.machine.isLegacyAvidMach4) // still Avid's Mach4 profile, but an older build would drop the axis
-        #expect(p.formatVersion == 2)
+        #expect(p.machine.isLegacyAvidMach4) // still Avid's Mach4 profile, but a format 1 build would drop the axis
+        #expect(p.formatVersion == 2) // a flat job posts the same without it, so format 2 is enough
         let j = try json(p)
         let rotary = try #require((j["machine"] as? [String: Any])?["rotary"] as? [String: Any])
         #expect(rotary["letter"] as? String == "A" && rotary["alignment"] as? String == "x" && rotary["reversed"] as? Bool == true)
