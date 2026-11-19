@@ -101,6 +101,7 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 | | **PDF**, **Illustrator `.ai`** | PDF-compatible `.ai` files. Handles nested groups, page rotation and the crop box. |
 | 3D models | **STL** (binary/ASCII), **OBJ**, **3MF**, **USDZ/USD**, **PLY** | 3MF includes Bambu and Prusa multi-part files. Choose the up axis, flip, size, carve depth and how far below the surface the top sits. |
 | G-code | **`.tap`**, **`.nc`** | Opened for simulation only (**File ▸ Simulate G-code File…**, or drop on the canvas) |
+| Tool libraries | **Fusion 360** `.tools` / `.json`, **Vectric** `.vtdb`, NativeCAM `.json` | **Tool Library ▸ ⋯ ▸ Import Tools…** lists the bits by the library's folders. Search, filter by type and tick the ones you want. Vendors such as Amana Tool publish their bits in these formats. Values a library leaves out (Vectric files have no cutting or shank lengths) are read from the bit's name where possible, otherwise filled conservatively and marked ⚠ (details in the tool's notes). Tapered ball nose, form, dovetail, roundover and thread bits are listed as not imported. Vectric's older `.tool` files aren't supported. |
 | Projects | **`.nativecam`** | JSON document |
 
 ### Keyboard and mouse
@@ -131,6 +132,7 @@ swift run -c release nativecam-cli demo demo.nativecam              # write the 
 swift run -c release nativecam-cli post demo.nativecam -o demo.tap  # generate toolpaths, run checks, write G-code
 swift run -c release nativecam-cli sim demo.nativecam --png out.png # simulate, report, render the result as a heightmap
 swift run -c release nativecam-cli sim other-cam-job.tap            # simulate G-code from any CAM program
+swift run -c release nativecam-cli tools vendor.vtdb -o tools.json  # convert a Fusion 360 or Vectric tool library
 ```
 
 ```text
@@ -202,7 +204,7 @@ G01 Z-0.0117 F30.0
 | Links between cuts | **Minimum** (default): rise just above the remaining material plus a safe distance, feed straight across short stretches already cleared to depth, and rapid down to just above floors this job already cut. **Full** always returns to safe Z. Shapes marked as clamps raise an error if a toolpath cuts into them, and links cross them above their height. Profiles skip depths an earlier toolpath already cleared. |
 | Cut order | Holes, profile loops and V-carve strokes are ordered by nearest neighbour and then improved by local search (2-opt, Or-opt); closed loops are entered wherever they're nearest the tool. Across toolpaths, **Optimize Run Order** finds the order with the fewest tool changes that keeps the work inside each part before its cut-out, roughing before finishing, and your order wherever toolpaths overlap. |
 | Run-time estimate | Times the posted moves with a look-ahead motion planner model: per-axis acceleration and rapid speeds, corner speeds from a junction tolerance, arc speed limits, a 20-line look-ahead, and tool-change and spindle time. Drive tier, acceleration and these settings live under **Material & Machine ▸ Motion**. |
-| Tools | Flat, ball, bull nose, V-bit, engraving (tip diameter), surfacing and drill. Flute length, shank, stickout, flute count and direction, feeds and speeds, chip-load calculator checked against chart chip loads for the material type, compression bits whose first pass clears the upcut length, live profile drawing. Saved to `~/Library/Application Support/NativeCAM/tools.json`. |
+| Tools | Flat, ball, bull nose, V-bit, engraving (tip diameter), surfacing and drill. Flute length, shank, stickout, flute count and direction, feeds and speeds, chip-load calculator checked against chart chip loads for the material type, compression bits whose first pass clears the upcut length, live profile drawing, import from Fusion 360 and Vectric libraries. Saved to `~/Library/Application Support/NativeCAM/tools.json`. |
 | Simulator | Heightmap carved by the true tool shape (flat, ball, bull nose, V), through-cuts, tool marker, playback controls, cycle-time estimate, detection of rapids through material |
 
 ## Project layout
@@ -222,7 +224,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (194 tests in 23 suites, using Swift Testing):
+Run the test suite (198 tests in 24 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

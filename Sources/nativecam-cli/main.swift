@@ -11,6 +11,9 @@ import Foundation
 //                                                      (--heights: little-endian header Int32 cols, Int32 rows,
 //                                                       Float64 cell, origin x, origin y, then Float32 heights)
 //                                                      simulate material removal, print stats
+//   nativecam-cli tools <library.tools|.vtdb|.json> [-o out.json]
+//                                                      read a Fusion 360, Vectric or NativeCAM tool library, print what
+//                                                      came across, optionally save it as a NativeCAM library (T1, T2, …)
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
@@ -37,7 +40,8 @@ func formatTime(_ s: Double) -> String {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] | sim <project|tap> [--png out.png] [--cell mm]")
+    print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] | sim <project|tap> [--png out.png] [--cell mm]"
+          + " | tools <library> [-o out.json]")
     exit(0)
 }
 
@@ -74,6 +78,30 @@ case "post":
         print("Estimated run time: \(formatTime(e.total)) (cutting \(formatTime(e.feedSeconds)), rapids \(formatTime(e.rapidSeconds)), "
               + "tool changes/pauses \(formatTime(e.overheadSeconds)); distance/feed alone: \(formatTime(e.constantVelocity)))")
         for (tp, seconds) in zip(job.toolpaths, e.toolpathSeconds) { print("  \(tp.name): \(formatTime(seconds))") }
+    }
+
+case "tools":
+    guard args.count >= 2 else { fail("usage: nativecam-cli tools <library.tools|.vtdb|.json> [-o out.json]") }
+    let result: ToolImport
+    do { result = try ToolLibraryImporter.load(url: URL(fileURLWithPath: args[1])) } catch {
+        fail("Can't import \(args[1]): \(error.localizedDescription)")
+    }
+    print("\(result.format.rawValue): \(result.tools.count) tools, \(result.skipped.count) skipped")
+    for (shape, n) in Dictionary(grouping: result.tools, by: { $0.tool.shape.label }).mapValues(\.count).sorted(by: { $0.key < $1.key }) {
+        print("  \(shape): \(n)")
+    }
+    for (reason, n) in Dictionary(grouping: result.skipped, by: \.reason).mapValues(\.count).sorted(by: { $0.value > $1.value }) {
+        print("  skipped \(n): \(reason)")
+    }
+    let estimatedLength = result.tools.filter { $0.tool.notes.contains("Cutting length estimated") }.count
+    let estimatedFeeds = result.tools.filter { $0.tool.notes.contains("feed rate") }.count
+    let estimatedSteps = result.tools.filter { $0.tool.notes.contains("conservative defaults") }.count
+    print("  estimated: cutting length for \(estimatedLength), feed rate for \(estimatedFeeds), some value for \(estimatedSteps)")
+    if let out = option("-o", in: args) {
+        var lib = ToolLibrary(tools: result.tools.map(\.tool))
+        for i in lib.tools.indices { lib.tools[i].number = i + 1 }
+        do { try lib.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
+        print("Wrote \(lib.tools.count) tools to \(out)")
     }
 
 case "sim":

@@ -3,7 +3,8 @@
 #   scripts/capture-window.sh                         capture as-is
 #   scripts/capture-window.sh tag=vcarve select=op:0   put the front window in a state first, then capture
 #   keys: select=setup|none|op:N|shape:N  simulate=0..1|stop  view=top|front|iso  tools=1  inspector=show|hide
-#         optimize=1 (Toolpaths ▸ Optimize Run Order)  views=1 (also write scroll-view frames to views.txt)  tag=name
+#         optimize=1 (Toolpaths ▸ Optimize Run Order)  views=1 (also write scroll-view frames to views.txt)
+#         importtools=/path/library.vtdb (open the Tool Library's import sheet for that file; use with tools=1)  tag=name
 set -euo pipefail
 DIR="$HOME/Library/Caches/NativeCAM/Captures"
 PAIRS=""

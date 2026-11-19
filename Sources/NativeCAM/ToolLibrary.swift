@@ -55,20 +55,44 @@ final class ToolLibraryStore {
         try? data.write(to: url)
     }
 
-    func importJSON() {
+    /// Asks for a tool library file: NativeCAM .json, Fusion 360 .tools/.json or Vectric .vtdb.
+    func chooseImportFile() -> URL? {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        guard panel.runModal() == .OK, let url = panel.url,
-              let data = try? Data(contentsOf: url), let lib = try? ToolLibrary.decode(data) else { return }
-        let existing = Set(tools.map(\.id))
-        tools.append(contentsOf: lib.tools.filter { !existing.contains($0.id) })
+        panel.allowedContentTypes = ToolLibraryImporter.fileExtensions.compactMap { UTType(filenameExtension: $0) }
+        panel.message = "Choose a tool library: Fusion 360 (.tools or .json), Vectric (.vtdb) or NativeCAM (.json)"
+        return panel.runModal() == .OK ? panel.url : nil
     }
+
+    /// Adds imported tools after the existing ones, numbered on from the highest T number (the source library's numbers
+    /// rarely fit this one). Tools already in the library (same ID) are skipped. Returns the tools added.
+    @discardableResult
+    func add(_ imported: [Tool]) -> [Tool] {
+        let existing = Set(tools.map(\.id))
+        var next = (tools.map(\.number).max() ?? 0) + 1
+        var added: [Tool] = []
+        for var t in imported where !existing.contains(t.id) {
+            t.number = next
+            next += 1
+            added.append(t)
+        }
+        tools.append(contentsOf: added)
+        return added
+    }
+}
+
+/// A library file read and waiting for the user to pick tools from it.
+struct PendingToolImport: Identifiable {
+    let id = UUID()
+    let fileName: String
+    let result: ToolImport
 }
 
 struct ToolLibraryView: View {
     @Environment(ToolLibraryStore.self) private var store
     @State private var selection: UUID?
     @State private var units: LengthUnit = AppDefaults.displayUnits
+    @State private var pendingImport: PendingToolImport?
+    @State private var importError: String?
 
     var body: some View {
         @Bindable var store = store
@@ -120,7 +144,7 @@ struct ToolLibraryView: View {
                 }
                 .pickerStyle(.segmented)
                 Menu {
-                    Button("Import Tools…") { store.importJSON() }
+                    Button("Import Tools…") { beginImport() }
                     Button("Export Tools…") { store.exportJSON() }
                     Divider()
                     Button("Reset to Starter Library", role: .destructive) { store.resetToStarter() }
@@ -129,6 +153,40 @@ struct ToolLibraryView: View {
         }
         .navigationTitle("Tool Library")
         .onAppear { if selection == nil { selection = store.tools.first?.id } }
+        .onReceive(NotificationCenter.default.publisher(for: DebugCapture.command)) { note in
+            // Developer capture hook: open the import sheet for a given library file.
+            if let path = note.userInfo?["importtools"] as? String { load(URL(fileURLWithPath: path)) }
+        }
+        .sheet(item: $pendingImport) { pending in
+            ImportToolsSheet(pending: pending, units: units) { chosen in
+                let added = store.add(chosen)
+                if let first = added.first { selection = first.id }
+            }
+        }
+        .alert("Can't import tools", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importError ?? "")
+        }
+    }
+
+    private func beginImport() {
+        guard let url = store.chooseImportFile() else { return }
+        load(url)
+    }
+
+    private func load(_ url: URL) {
+        do {
+            let result = try ToolLibraryImporter.load(url: url)
+            if result.tools.isEmpty {
+                importError = "“\(url.lastPathComponent)” has no tools NativeCAM can use"
+                    + (result.skipped.isEmpty ? "." : " (\(result.skipped.count) skipped: \(Set(result.skipped.map(\.reason)).sorted().joined(separator: ", "))).")
+            } else {
+                pendingImport = PendingToolImport(fileName: url.lastPathComponent, result: result)
+            }
+        } catch {
+            importError = error.localizedDescription
+        }
     }
 
     private func duplicate(_ tool: Tool) {
@@ -286,5 +344,197 @@ struct AppSettingsView: View {
         .onChange(of: machine) { _, v in AppDefaults.machine = v }
         .onChange(of: units) { _, v in AppDefaults.displayUnits = v }
         .onChange(of: stock) { _, v in AppDefaults.stock = v }
+    }
+}
+
+// MARK: Importing from other programs
+
+/// Pick which tools to bring in from a Fusion 360, Vectric or NativeCAM library. Vendor libraries hold hundreds of bits,
+/// so nothing is selected to begin with (except for NativeCAM's own libraries); search and the shape filter narrow
+/// the list, grouped by the folders of the source library.
+struct ImportToolsSheet: View {
+    let pending: PendingToolImport
+    let units: LengthUnit
+    let onImport: ([Tool]) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var chosen: Set<UUID> = []
+    @State private var search = ""
+    @State private var shape: ToolShape?
+    @State private var showSkipped = false
+
+    init(pending: PendingToolImport, units: LengthUnit, onImport: @escaping ([Tool]) -> Void) {
+        self.pending = pending
+        self.units = units
+        self.onImport = onImport
+        _chosen = State(initialValue: pending.result.format == .nativeCAM ? Set(pending.result.tools.map(\.id)) : [])
+    }
+
+    private var shown: [ImportedTool] {
+        let words = search.lowercased().split(separator: " ")
+        return pending.result.tools.filter { item in
+            (shape == nil || item.tool.shape == shape)
+                && words.allSatisfy { (item.tool.name + " " + item.group).lowercased().contains($0) }
+        }
+    }
+
+    /// Groups in the order the source library lists them, without a top folder they all share.
+    private var groups: [(name: String, tools: [ImportedTool])] {
+        var order: [String] = []
+        var byGroup: [String: [ImportedTool]] = [:]
+        for t in shown {
+            if byGroup[t.group] == nil { order.append(t.group) }
+            byGroup[t.group, default: []].append(t)
+        }
+        return order.map { (trimmedGroup($0), byGroup[$0] ?? []) }
+    }
+
+    private var sharedRoot: String? {
+        let roots = Set(pending.result.tools.map { $0.group.components(separatedBy: " ▸ ").first ?? "" })
+        guard roots.count == 1, let root = roots.first, !root.isEmpty,
+              pending.result.tools.contains(where: { $0.group.contains(" ▸ ") }) else { return nil }
+        return root
+    }
+
+    private func trimmedGroup(_ g: String) -> String {
+        guard let root = sharedRoot, g.hasPrefix(root + " ▸ ") else { return g }
+        return String(g.dropFirst(root.count + 3))
+    }
+
+    private var anyEstimated: Bool { pending.result.tools.contains { ImportToolRow.estimates(in: $0.tool).isEmpty == false } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Import Tools").font(.title3.weight(.semibold))
+                Text("“\(pending.fileName)” · \(pending.result.format.rawValue)" + (sharedRoot.map { " · \($0)" } ?? "")
+                     + " · \(pending.result.tools.count) tools")
+                    .foregroundStyle(.secondary)
+                if anyEstimated {
+                    Label("Marked tools have values the library doesn't give (hover to see which); NativeCAM filled them "
+                          + "conservatively. Check them in the editor before cutting.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding([.horizontal, .top], 20)
+            .padding(.bottom, 12)
+
+            HStack {
+                TextField("Search names (e.g. 1/4 downcut)", text: $search)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Type", selection: $shape) {
+                    Text("All types").tag(ToolShape?.none)
+                    Divider()
+                    ForEach(ToolShape.allCases.filter { s in pending.result.tools.contains { $0.tool.shape == s } }) { s in
+                        Text(s.label).tag(ToolShape?.some(s))
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+
+            List {
+                ForEach(groups, id: \.name) { group in
+                    Section {
+                        ForEach(Array(group.tools.enumerated()), id: \.element.id) { index, item in
+                            ImportToolRow(item: item, units: units, isOn: Binding(
+                                get: { chosen.contains(item.id) },
+                                set: { if $0 { chosen.insert(item.id) } else { chosen.remove(item.id) } }))
+                            .cardRow(index, of: group.tools.count)
+                        }
+                    } header: {
+                        SectionTitle(group.name.isEmpty ? "Tools" : group.name, prominent: true)
+                    }
+                }
+                if shown.isEmpty {
+                    Placeholder("No tools match.")
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, 10) // cards line up with the search field
+
+            if !pending.result.skipped.isEmpty {
+                DisclosureGroup(isExpanded: $showSkipped) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(Array(pending.result.skipped.enumerated()), id: \.offset) { _, s in
+                                Text("\(s.name) — \(s.reason)").font(.caption).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 120)
+                } label: {
+                    Text("\(pending.result.skipped.count) tools can't be imported (\(skippedSummary))")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+            }
+
+            HStack {
+                Button("Select All Shown") { chosen.formUnion(shown.map(\.id)) }
+                    .disabled(shown.isEmpty)
+                Button("Select None") { chosen.removeAll() }
+                    .disabled(chosen.isEmpty)
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(chosen.count == 1 ? "Add 1 Tool" : "Add \(chosen.count) Tools") {
+                    onImport(pending.result.tools.filter { chosen.contains($0.id) }.map(\.tool))
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(chosen.isEmpty)
+            }
+            .padding(20)
+        }
+        .frame(width: 640, height: 640)
+    }
+
+    private var skippedSummary: String {
+        let counts = Dictionary(grouping: pending.result.skipped, by: \.reason).mapValues(\.count)
+        return counts.sorted { $0.value > $1.value }.prefix(3).map { "\($0.value) \($0.key)" }.joined(separator: ", ")
+    }
+}
+
+private struct ImportToolRow: View {
+    let item: ImportedTool
+    let units: LengthUnit
+    @Binding var isOn: Bool
+
+    /// Guesses worth checking before cutting: the cutting length and the feeds and speeds. (Stepdown and stepover
+    /// guesses are noted too, but each toolpath sets those anyway.)
+    static func estimates(in tool: Tool) -> [String] {
+        tool.notes.split(separator: "\n").map(String.init).filter { line in
+            line.contains("Cutting length estimated")
+                || (line.contains("conservative defaults") && ["feed", "speed", "plunge"].contains { line.contains($0) })
+        }
+    }
+
+    private var estimated: [String] { Self.estimates(in: item.tool) }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Toggle("", isOn: $isOn).labelsHidden().toggleStyle(.checkbox)
+            ToolShapeView(tool: item.tool, showDimensions: false).frame(width: 18, height: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.tool.name).lineLimit(1)
+                Text("\(item.tool.shape.label) · ⌀ \(units.format(item.tool.diameter)) \(units.symbol) · \(item.tool.fluteCount) flute"
+                     + (item.tool.fluteCount == 1 ? "" : "s"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            if !estimated.isEmpty {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .help(estimated.joined(separator: "\n"))
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { isOn.toggle() }
     }
 }
