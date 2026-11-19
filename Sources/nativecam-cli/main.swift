@@ -16,6 +16,10 @@ import Foundation
 //                                                      (--heights: little-endian header Int32 cols, Int32 rows,
 //                                                       Float64 cell, origin x, origin y, then Float32 heights)
 //                                                      simulate material removal, print stats
+//   nativecam-cli acceptance [machine.nativecam] [--controller grbl|grblHAL|fluidNC|carbideMotion] [--sender gSender]
+//                     [--units inch|mm] [--tool-change m6|pause|atc] [-o out]
+//                                                      write the acceptance test program for a controller: run it in
+//                                                      check mode, then as an air cut, then 0.5 mm deep in scrap
 //   nativecam-cli tools <library.tools|.vtdb|.json> [-o out.json]
 //                                                      read a Fusion 360, Vectric or NativeCAM tool library, print what
 //                                                      came across, optionally save it as a NativeCAM library (T1, T2, …)
@@ -75,20 +79,22 @@ case "post":
         print("[\(issue.severity.rawValue)] \(issue.operation.map { "\($0): " } ?? "")\(issue.message)")
     }
     let noPost = PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine."
-    let output: (gcode: String, project: Project, toolpaths: [Toolpath], post: any PostProcessor)
-    var stem = (args[1] as NSString).deletingPathExtension
+    let output: (files: [PostedFile], project: Project, post: any PostProcessor)
     if let text = option("--air-cut", in: args) {
         guard let h = Double(text), h > 0 else { fail("--air-cut needs a height above zero") }
-        guard let air = AirCut.post(project, toolpaths: job.toolpaths, height: project.machine.outputUnits.toMM(h)) else { fail(noPost) }
+        guard let air = AirCut.files(project, toolpaths: job.toolpaths, height: project.machine.outputUnits.toMM(h)) else { fail(noPost) }
         output = air
-        stem += " (air cut)"
     } else {
         guard let post = PostProcessors.post(for: project) else { fail(noPost) }
-        output = (post.post(job.toolpaths), project, job.toolpaths, post)
+        output = (post.files(job.toolpaths), project, post)
     }
-    let post = output.post, gcode = output.gcode
-    let checks = GCodeCheck.run(gcode, toolpaths: output.toolpaths, project: output.project, dialect: post.dialect)
-    for issue in checks { print("[\(issue.severity.rawValue)] G-code: \(issue.text)") }
+    let post = output.post
+    var checks: [GCodeCheck.Issue] = []
+    for file in output.files {
+        let found = GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: output.project, dialect: post.dialect)
+        for issue in found { print("[\(issue.severity.rawValue)] G-code\(output.files.count > 1 ? file.suffix ?? "" : ""): \(issue.text)") }
+        checks += found
+    }
     if let sheet = option("--sheet", in: args) {
         let html = SetupSheet.html(project: project, job: job, gcodeFile: nil, checks: checks)
         do { try html.write(toFile: sheet, atomically: true, encoding: .utf8) } catch { fail("Can't write \(sheet): \(error)") }
@@ -97,14 +103,49 @@ case "post":
     if checks.contains(where: { $0.severity == .error }) && !args.contains("--force") {
         fail("The G-code failed its checks, so it wasn't written. Fix the errors above, or pass --force to write it anyway.")
     }
-    let out = option("-o", in: args) ?? stem + "." + post.fileExtension
-    do { try gcode.write(toFile: out, atomically: true, encoding: .ascii) } catch { fail("Can't write \(out): \(error)") }
-    let lines = gcode.components(separatedBy: "\r\n").count - 1
+    let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? (args[1] as NSString).deletingPathExtension
+    var outputs: [String] = []
+    for file in output.files {
+        let path = stem + (file.suffix ?? "") + "." + post.fileExtension
+        do { try file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
+        outputs.append(path)
+    }
+    let out = outputs.joined(separator: ", ")
+    let gcode = output.files.map(\.gcode).joined()
+    let lines = gcode.components(separatedBy: "\n").count - 1
     print(String(format: "Generated %d toolpaths in %.2fs, %d lines -> %@", job.toolpaths.count, elapsed, lines, out))
     if let e = job.estimate {
         print("Estimated run time: \(formatTime(e.total)) (cutting \(formatTime(e.feedSeconds)), rapids \(formatTime(e.rapidSeconds)), "
               + "tool changes/pauses \(formatTime(e.overheadSeconds)); distance/feed alone: \(formatTime(e.constantVelocity)))")
         for (tp, seconds) in zip(job.toolpaths, e.toolpathSeconds) { print("  \(tp.name): \(formatTime(seconds))") }
+    }
+
+case "acceptance":
+    // A short program exercising everything a post writes, for trying a controller: check mode, air cut, then scrap.
+    var machine = args.count >= 2 && !args[1].hasPrefix("-") ? loadProject(args[1]).machine : MachineProfile()
+    if let family = option("--controller", in: args) {
+        machine.controller = ControllerProfile(family: ControllerFamily(rawValue: family), sender: option("--sender", in: args))
+        machine.model = .custom
+    }
+    if let units = option("--units", in: args) { machine.outputUnits = units == "mm" ? .mm : .inch }
+    switch option("--tool-change", in: args) {
+    case "pause": machine.toolChange = .manualPause
+    case "atc": machine.toolChange = .atc
+    case "m6": machine.toolChange = .manualM6
+    default: break
+    }
+    let (project, toolpaths) = AcceptanceTest.job(machine: machine)
+    guard let post = PostProcessors.post(for: project) else {
+        fail(PostProcessors.unavailableReason(for: machine) ?? "No post processor for this machine.")
+    }
+    let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? "acceptance-\(post.dialect.id)"
+    for file in post.files(toolpaths) {
+        for issue in GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: project, dialect: post.dialect) {
+            print("[\(issue.severity.rawValue)] G-code\(file.suffix ?? ""): \(issue.text)")
+        }
+        let path = stem + (file.suffix ?? "") + "." + post.fileExtension
+        do { try file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
+        print("\(post.name) acceptance test -> \(path)")
     }
 
 case "tools":

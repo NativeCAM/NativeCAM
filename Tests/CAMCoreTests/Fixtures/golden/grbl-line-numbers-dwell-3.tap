@@ -1,0 +1,27 @@
+N10 (Golden {coverage})
+N20 (Post: Grbl - NativeCAM 0.1)
+N30 (Created: 2027-01-15 08:00)
+N40 (Machine: Custom, spindle)
+N50 (File 3 of 3: one file per tool)
+N60 (Material: MDF intestin {half sheet} X11.8110 Y7.8740 Z0.7480 in)
+N70 (Z zero: Material top  XY zero: Lower left)
+N80 (Safe Z 0.5000)
+N90 (T1 1/4in Upcut End Mill D0.2500)
+N100 G90 G94 G17
+N110 G20
+N120 (Load T1 1/4in Upcut End Mill and zero Z before starting)
+N130 M8
+N140 S18000 M3
+N150 G4 P2.00
+N160 (Clean-up T1)
+N170 G0 Z0.5000
+N180 G0 X9.8425 Y5.9055
+N190 G0 Z0.0787
+N200 G1 Z-0.7677 F29.5
+N210 G1 X11.0236 F98.4
+N220 G0 Z0.1969
+N230 G0 Z1.0000
+N240 G0 X0.0000 Y0.0000
+N250 M5
+N260 M9
+N270 M30

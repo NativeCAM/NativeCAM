@@ -1,0 +1,35 @@
+(Golden {coverage})
+(Post: Grbl - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(File 2 of 3: one file per tool)
+(Material: MDF intestin {half sheet} X300.000 Y200.000 Z19.000 mm)
+(Z zero: Material top  XY zero: Lower left)
+(Safe Z 12.700)
+(T5 60deg V-Bit 1/2in D12.700)
+G90 G94 G17
+G21
+(Load T5 60deg V-Bit 1/2in and zero Z before starting)
+M8
+S24000 M3
+(V-carve insignin 60deg T5)
+G0 Z12.700
+G0 X150.000 Y100.000
+G0 Z1.000
+G1 Z-2.000 F1000
+G1 X160.000 Y105.000 Z-1.250 F2000
+G1 X170.000 Y100.000 Z-2.500
+G0 Z5.000
+S16000 M3
+(V-carve pass 2 T5)
+G0 Z12.700
+G0 X200.000 Y100.000
+G0 Z1.000
+G1 Z-1.000 F1000
+G3 X190.000 Y110.000 I-10.000 J0.000 F2000
+G0 Z5.000
+G0 Z25.400
+G0 X0.000 Y0.000
+M5
+M9
+M30

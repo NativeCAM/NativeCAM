@@ -1,0 +1,26 @@
+(Golden {coverage})
+(Post: FluidNC - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(File 3 of 3: one file per tool)
+(Material: MDF intestin {half sheet} X11.8110 Y7.8740 Z0.7480 in)
+(Z zero: Material top  XY zero: Lower left)
+(Safe Z 0.5000)
+(T1 1/4in Upcut End Mill D0.2500)
+G90 G94 G17
+G20
+(Load T1 1/4in Upcut End Mill and zero Z before starting)
+M8
+S18000 M3
+(Clean-up T1)
+G0 Z0.5000
+G0 X9.8425 Y5.9055
+G0 Z0.0787
+G1 Z-0.7677 F29.5
+G1 X11.0236 F98.4
+G0 Z0.1969
+G0 Z1.0000
+G0 X0.0000 Y0.0000
+M5
+M9
+M30

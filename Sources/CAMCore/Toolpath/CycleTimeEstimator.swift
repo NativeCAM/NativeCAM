@@ -1,7 +1,7 @@
 import Foundation
 import simd
 
-/// Run-time estimate that models how Mach4 actually moves the machine.
+/// Run-time estimate that models how the controller (Mach4, or the Grbl family) actually moves the machine.
 public struct CycleTimeEstimate: Sendable, Hashable {
     /// Whole job, seconds, including tool changes and links between toolpaths.
     public var total: Double
@@ -24,7 +24,8 @@ public struct CycleTimeEstimate: Sendable, Hashable {
 /// - Each move is limited by its feed, by every axis's velocity and acceleration projected onto the move's
 ///   direction, and on arcs by the centripetal limit √(a·R).
 /// - Corners use a junction-deviation speed (as in Grbl): v² = a·δ·sin(θ/2) / (1 − sin(θ/2)).
-/// - Rapids (G0), dwells, tool changes and spindle changes stop the machine (Mach4 runs G0 in exact stop).
+/// - Dwells, tool changes and spindle changes stop the machine. Rapids (G0) stop too on Mach4, which runs them in
+///   exact stop; Grbl blends them like feeds.
 /// - The planner can only see `lookahead` moves ahead, so it must be able to stop within them.
 /// Equations follow Grbl's planner and Klipper's trapezoid moves (reimplemented, no code copied).
 public enum CycleTimeEstimator {
@@ -48,6 +49,7 @@ public enum CycleTimeEstimator {
         let acc = machine.axisAcceleration
         let rapid = machine.axisRapid
         let delta = machine.cornerDeviation
+        let rapidsStop = machine.planner.rapidsExactStop
         var blocks: [Block] = []
         var position: Vec3?
         var currentTool: Int?
@@ -68,8 +70,9 @@ public enum CycleTimeEstimator {
                 v = min(v, axisV / 60 / c)
                 aMax = min(aMax, axisA / c)
             }
+            let stop = feed == nil && rapidsStop
             return Block(length: len, vMax: v, accel: aMax, startDir: u, endDir: u,
-                         stopBefore: feed == nil, stopAfter: feed == nil, isRapid: feed == nil, ref: ref)
+                         stopBefore: stop, stopAfter: stop, isRapid: feed == nil, ref: ref)
         }
 
         func addRapid(_ a: Vec3, _ b: Vec3) {

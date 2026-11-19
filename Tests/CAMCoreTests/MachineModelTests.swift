@@ -73,7 +73,10 @@ struct MachineModelTests {
         #expect(post.name == "Avid CNC Mach4" && post.fileExtension == "tap")
         #expect(post.post(toolpaths) == AvidMach4Post(project: p, date: Self.date).post(toolpaths))
         #expect(PostProcessors.unavailableReason(for: p.machine) == nil)
-        #expect(PostProcessors.post(for: grblProject) == nil)
+        #expect(PostProcessors.post(for: grblProject) is GenericGCodePost)
+        var masso = grblProject
+        masso.machine.controller = ControllerProfile(family: .masso)
+        #expect(PostProcessors.post(for: masso) == nil)
     }
 
     @Test func valueSourcesRoundTrip() throws {

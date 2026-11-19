@@ -352,8 +352,8 @@ public enum GCodeCheck {
         if written.count != expected.count {
             issues.append(Issue(.error, "The file has \(written.count) cutting moves and dwells, but the toolpaths have \(expected.count)."))
         }
-        // A pause-for-tool-change file has no T words to read back.
-        var toolReported = project.machine.toolChange == .manualPause, rpmReported = false
+        // A file that pauses for tool changes (M0) has no T words to read back.
+        var toolReported = !written.contains { $0.tool != 0 }, rpmReported = false
         for (w, e) in zip(written, expected) {
             let line = w.line
             if (w.motion.kind == .dwell) != (e.kind == .dwell) {

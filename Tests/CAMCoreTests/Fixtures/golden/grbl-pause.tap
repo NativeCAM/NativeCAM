@@ -1,0 +1,77 @@
+(Golden {coverage})
+(Post: Grbl - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(Tool changes: M0 pause, change the bit, re-zero Z, resume)
+(Material: MDF intestin {half sheet} X11.8110 Y7.8740 Z0.7480 in)
+(Z zero: Material top  XY zero: Lower left)
+(Safe Z 0.5000)
+(T1 1/4in Upcut End Mill D0.2500)
+(T5 60deg V-Bit 1/2in D0.5000)
+G90 G94 G17
+G20
+(Load T1 1/4in Upcut End Mill and zero Z before starting)
+M8
+S18000 M3
+(Profile {outer} - test T1)
+G0 Z0.5000
+G0 X0.7874 Y0.7874
+G0 Z0.0787
+G1 Z-0.1181 F29.5
+G1 X4.7244 F98.4
+G3 X5.5118 Y1.5748 I0.0000 J0.7874
+G1 Y5.5118
+G2 X4.7244 Y4.7244 I-0.7874 J0.0000 F78.7
+G1 X0.7874
+G2 X1.1811 Y4.3307 Z-0.1575 I0.0000 J-0.3937 F59.1
+G1 Z-0.1772
+G1 X1.5748 Y4.7256
+G1 Z0.0000 F29.5
+G4 P0.50
+G0 Z0.1969
+G0 Z0.5000
+M5
+G0 Z1.0000
+G0 X0.0000 Y0.0000
+(Change to T5 60deg V-Bit 1/2in, re-zero Z, then resume)
+M0
+G90 G94
+M8
+S24000 M3
+(V-carve insignin 60deg T5)
+G0 Z0.5000
+G0 X5.9055 Y3.9370
+G0 Z0.0394
+G1 Z-0.0787 F39.4
+G1 X6.2992 Y4.1339 Z-0.0492 F78.7
+G1 X6.6929 Y3.9370 Z-0.0984
+G0 Z0.1969
+S16000 M3
+(V-carve pass 2 T5)
+G0 Z0.5000
+G0 X7.8740 Y3.9370
+G0 Z0.0394
+G1 Z-0.0394 F39.4
+G3 X7.4803 Y4.3307 I-0.3937 J0.0000 F78.7
+G0 Z0.1969
+G0 Z0.5000
+M5
+G0 Z1.0000
+G0 X0.0000 Y0.0000
+(Change to T1 1/4in Upcut End Mill, re-zero Z, then resume)
+M0
+G90 G94
+M8
+S18000 M3
+(Clean-up T1)
+G0 Z0.5000
+G0 X9.8425 Y5.9055
+G0 Z0.0787
+G1 Z-0.7677 F29.5
+G1 X11.0236 F98.4
+G0 Z0.1969
+G0 Z1.0000
+G0 X0.0000 Y0.0000
+M5
+M9
+M30

@@ -182,7 +182,7 @@ struct ExportCheckTests {
         let toolpaths = CAMEngine.generate(p).toolpaths
         let normal = AvidMach4Post(project: p, date: GoldenPostTests.date).post(toolpaths)
         let air = try #require(AirCut.post(p, toolpaths: toolpaths, height: 1.inch, date: GoldenPostTests.date))
-        #expect(air.gcode.hasPrefix("(AIR CUT: every Z raised 1.0000 in"))
+        #expect(air.gcode.hasPrefix("(AIR CUT: Z raised 1.0000 in, X and Y unchanged)"))
         let a = try GCodeParser.parse(normal).segments.flatMap(\.motions)
         let b = try GCodeParser.parse(air.gcode).segments.flatMap(\.motions)
         #expect(a.count == b.count)

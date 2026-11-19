@@ -10,6 +10,30 @@ public protocol PostProcessor: Sendable {
     /// The controller dialect the post writes, which `GCodeCheck` reads the file back against.
     var dialect: Dialect { get }
     func post(_ toolpaths: [Toolpath]) -> String
+    /// The files to save for a job. One, unless the controller can't stop for a tool change, in which case each
+    /// tool gets its own complete program.
+    func files(_ toolpaths: [Toolpath]) -> [PostedFile]
+}
+
+/// One file of an export.
+public struct PostedFile: Sendable {
+    /// Added to the file name when a job is split, e.g. " 2 of 3 - T5"; nil for a single file.
+    public var suffix: String?
+    /// The toolpaths this file cuts, for checking it.
+    public var toolpaths: [Toolpath]
+    public var gcode: String
+
+    public init(suffix: String?, toolpaths: [Toolpath], gcode: String) {
+        self.suffix = suffix
+        self.toolpaths = toolpaths
+        self.gcode = gcode
+    }
+}
+
+public extension PostProcessor {
+    func files(_ toolpaths: [Toolpath]) -> [PostedFile] {
+        [PostedFile(suffix: nil, toolpaths: toolpaths, gcode: post(toolpaths))]
+    }
 }
 
 extension AvidMach4Post: PostProcessor {
@@ -20,16 +44,18 @@ extension AvidMach4Post: PostProcessor {
 
 public enum PostProcessors {
     /// The post for the project's machine, or nil when NativeCAM can't write that controller's G-code yet.
-    /// Avid's Mach4 profile (no controller set) always gets `AvidMach4Post`, unchanged.
+    /// Avid's Mach4 profile (no controller set) always gets `AvidMach4Post`, unchanged; the Grbl family gets
+    /// `GenericGCodePost` with its dialect.
     public static func post(for project: Project, date: Date = Date()) -> (any PostProcessor)? {
-        guard project.machine.isLegacyAvidMach4 else { return nil }
-        return AvidMach4Post(project: project, date: date)
+        if project.machine.isLegacyAvidMach4 { return AvidMach4Post(project: project, date: date) }
+        guard let dialect = Dialect.for(project.machine) else { return nil }
+        return GenericGCodePost(project: project, dialect: dialect, date: date)
     }
 
     /// Why `post(for:)` has nothing for this machine; nil when it has a post.
     public static func unavailableReason(for machine: MachineProfile) -> String? {
-        guard !machine.isLegacyAvidMach4 else { return nil }
+        guard Dialect.for(machine) == nil else { return nil }
         return "NativeCAM can't write G-code for \(machine.controllerLabel) yet, so this job can't be exported. "
-            + "Avid's Mach4 profile is the only controller supported so far."
+            + "Supported so far: Avid's Mach4 profile, Grbl, grblHAL, FluidNC and Carbide Motion."
     }
 }

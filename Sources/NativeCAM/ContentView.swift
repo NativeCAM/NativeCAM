@@ -317,27 +317,35 @@ struct ContentView: View {
         export(airCut: u.toMM(value))
     }
 
-    /// Posts the job (raised for an air cut when `airCut` is set), checks the file NativeCAM is about to save, and saves it.
+    /// Posts the job (raised for an air cut when `airCut` is set), checks the files NativeCAM is about to save, and
+    /// saves them: one file, or one per tool when the controller can't stop for a tool change.
     private func export(airCut height: Double?) {
         guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
-        let output: (gcode: String, project: Project, toolpaths: [Toolpath], post: any PostProcessor)
+        let output: (files: [PostedFile], project: Project, post: any PostProcessor)
         if let height {
-            guard let air = AirCut.post(project, toolpaths: job.toolpaths, height: height) else { return noPost() }
+            guard let air = AirCut.files(project, toolpaths: job.toolpaths, height: height) else { return noPost() }
             output = air
         } else {
             guard let post = PostProcessors.post(for: project) else { return noPost() }
-            output = (post.post(job.toolpaths), project, job.toolpaths, post)
+            output = (post.files(job.toolpaths), project, post)
         }
-        // Problems in the job, then in the file itself: read back against the controller and the toolpaths.
+        let post = output.post
+        // Problems in the job, then in each file itself: read back against the controller and the toolpaths.
         let jobErrors = job.issues.filter { $0.severity == .error }.map { "• \($0.operation.map { "\($0): " } ?? "")\($0.message)" }
-        let checks = GCodeCheck.run(output.gcode, toolpaths: output.toolpaths, project: output.project, dialect: output.post.dialect)
-            .filter { $0.severity != .info }
-        let fileErrors = checks.filter { $0.severity == .error }
-        if !jobErrors.isEmpty || !checks.isEmpty {
-            var lines = jobErrors + checks.map { "• G-code: \($0.text)" }
+        var fileLines: [String] = []
+        var fileErrors = false
+        for file in output.files {
+            let checks = GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: output.project, dialect: post.dialect)
+                .filter { $0.severity != .info }
+            fileErrors = fileErrors || checks.contains { $0.severity == .error }
+            let label = output.files.count > 1 ? "G-code\(file.suffix ?? "")" : "G-code"
+            fileLines += checks.map { "• \(label): \($0.text)" }
+        }
+        if !jobErrors.isEmpty || !fileLines.isEmpty {
+            var lines = jobErrors + fileLines
             if lines.count > 10 { lines = Array(lines.prefix(10)) + ["• …and \(lines.count - 10) more"] }
             let confirm = NSAlert()
-            let errors = !jobErrors.isEmpty || !fileErrors.isEmpty
+            let errors = !jobErrors.isEmpty || fileErrors
             confirm.messageText = errors ? "This job has errors" : "Check before running this file"
             confirm.informativeText = lines.joined(separator: "\n") + (errors ? "\n\nExport anyway?" : "")
             if errors {
@@ -352,15 +360,29 @@ struct ContentView: View {
                 guard confirm.runModal() == .alertFirstButtonReturn else { return }
             }
         }
-        let post = output.post
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: post.fileExtension, conformingTo: .plainText) ?? .plainText]
         let base = project.name.isEmpty ? "Untitled" : project.name
         panel.nameFieldStringValue = base + (height == nil ? "" : " (air cut)") + "." + post.fileExtension
-        panel.message = height == nil ? "Save G-code for \(post.name)" : "Save an air cut for \(post.name)"
+        if output.files.count > 1 {
+            panel.message = "\(post.name) can't stop for a tool change, so each tool gets its own file "
+                + "(\(output.files.count) files, named after this one). Re-zero Z before running each."
+        } else {
+            panel.message = height == nil ? "Save G-code for \(post.name)" : "Save an air cut for \(post.name)"
+        }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try output.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
+            if output.files.count == 1 {
+                try output.files[0].gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
+            } else {
+                // "Sign.nc" becomes "Sign 1 of 2 - T5.nc", "Sign 2 of 2 - T1.nc" (the air-cut marker is in the suffix).
+                var stem = url.deletingPathExtension().lastPathComponent
+                if height != nil, stem.hasSuffix(" (air cut)") { stem = String(stem.dropLast(" (air cut)".count)) }
+                for file in output.files {
+                    let target = url.deletingLastPathComponent().appendingPathComponent(stem + (file.suffix ?? "") + "." + post.fileExtension)
+                    try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: target)
+                }
+            }
         } catch {
             alert = AlertInfo(title: "Couldn't save G-code", message: error.localizedDescription)
         }
@@ -376,7 +398,9 @@ struct ContentView: View {
         guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
         var checks: [GCodeCheck.Issue] = []
         if let post = PostProcessors.post(for: project) {
-            checks = GCodeCheck.run(post.post(job.toolpaths), toolpaths: job.toolpaths, project: project, dialect: post.dialect)
+            for file in post.files(job.toolpaths) {
+                checks += GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: project, dialect: post.dialect)
+            }
         }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.html]

@@ -165,8 +165,15 @@ public struct MachineProfile: Hashable, Codable, Sendable {
     }
     /// Rapid speed per axis, mm/min.
     public var axisRapid: Vec3 { Vec3(rapidRateForEstimates, rapidRateForEstimates, rapidRateZ ?? 400.inch) }
-    public var cornerDeviation: Double { junctionDeviation ?? 0.05 }
-    public var plannerLookahead: Int { max(1, lookaheadLines ?? 20) }
+    /// The controller's planner, for estimates: its own corner tolerance and look-ahead unless set here.
+    public var planner: Dialect.Planner {
+        var p = Dialect.for(self)?.planner ?? Dialect.avidMach4.planner
+        if let d = junctionDeviation { p.junctionDeviation = d }
+        if let n = lookaheadLines { p.lookahead = max(1, n) }
+        return p
+    }
+    public var cornerDeviation: Double { planner.junctionDeviation }
+    public var plannerLookahead: Int { planner.lookahead }
     public var cornerSmoothing: Double { max(0, roughingSmoothing ?? 0.25) }
     public var toolChangeTime: Double {
         toolChangeSeconds ?? (toolChange == .atc ? 15 : 60)

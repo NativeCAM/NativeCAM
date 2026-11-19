@@ -1,0 +1,35 @@
+(Golden {coverage})
+(Post: FluidNC - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(File 2 of 3: one file per tool)
+(Material: MDF intestin {half sheet} X11.8110 Y7.8740 Z0.7480 in)
+(Z zero: Material top  XY zero: Lower left)
+(Safe Z 0.5000)
+(T5 60deg V-Bit 1/2in D0.5000)
+G90 G94 G17
+G20
+(Load T5 60deg V-Bit 1/2in and zero Z before starting)
+M8
+S24000 M3
+(V-carve insignin 60deg T5)
+G0 Z0.5000
+G0 X5.9055 Y3.9370
+G0 Z0.0394
+G1 Z-0.0787 F39.4
+G1 X6.2992 Y4.1339 Z-0.0492 F78.7
+G1 X6.6929 Y3.9370 Z-0.0984
+G0 Z0.1969
+S16000 M3
+(V-carve pass 2 T5)
+G0 Z0.5000
+G0 X7.8740 Y3.9370
+G0 Z0.0394
+G1 Z-0.0394 F39.4
+G3 X7.4803 Y4.3307 I-0.3937 J0.0000 F78.7
+G0 Z0.1969
+G0 Z1.0000
+G0 X0.0000 Y0.0000
+M5
+M9
+M30

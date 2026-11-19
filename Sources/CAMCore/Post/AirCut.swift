@@ -23,16 +23,29 @@ public enum AirCut {
         return (p, raised)
     }
 
-    /// The air-cut file for a job, with a note at the top saying so; nil when the machine has no post.
-    public static func post(_ project: Project, toolpaths: [Toolpath], height: Double, date: Date = Date())
-        -> (gcode: String, project: Project, toolpaths: [Toolpath], post: any PostProcessor)? {
+    /// The air-cut files for a job (one, or one per tool when the post splits jobs), each marked at the top; nil
+    /// when the machine has no post.
+    public static func files(_ project: Project, toolpaths: [Toolpath], height: Double, date: Date = Date())
+        -> (files: [PostedFile], project: Project, post: any PostProcessor)? {
         let (p, raised) = raise(project, toolpaths, by: height)
         guard let post = PostProcessors.post(for: p, date: date) else { return nil }
         let u = p.machine.outputUnits
         let d = post.dialect
         let amount = String(format: "%.\(d.coordinateDecimals(u))f", u.fromMM(height))
-        let note = d.comment("AIR CUT: every Z raised \(amount) \(u.symbol), X and Y unchanged. Nothing should touch the material.")
-            + d.lineEnding
-        return (note + post.post(raised), p, raised, post)
+        let note = d.comment("AIR CUT: Z raised \(amount) \(u.symbol), X and Y unchanged") + d.lineEnding
+        let files = post.files(raised).map { f in
+            var marked = f
+            marked.gcode = note + f.gcode
+            marked.suffix = " (air cut)" + (f.suffix ?? "")
+            return marked
+        }
+        return (files, p, post)
+    }
+
+    /// The air-cut file for a single-file job.
+    public static func post(_ project: Project, toolpaths: [Toolpath], height: Double, date: Date = Date())
+        -> (gcode: String, project: Project, toolpaths: [Toolpath], post: any PostProcessor)? {
+        guard let r = files(project, toolpaths: toolpaths, height: height, date: date) else { return nil }
+        return (r.files.map(\.gcode).joined(), r.project, r.files.flatMap(\.toolpaths), r.post)
     }
 }

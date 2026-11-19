@@ -105,6 +105,14 @@ public enum CAMEngine {
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
+        if let post = PostProcessors.post(for: project) as? GenericGCodePost, post.splitsByTool {
+            let files = post.files(toolpaths).count
+            if files > 1 {
+                issues.append(JobIssue(.info, "\(post.dialect.name) can't stop for a tool change here, so this job is saved as "
+                    + "\(files) files, one per tool. Change the bit and re-zero Z before running each. (If the program that "
+                    + "sends your files pauses on M6, name it in the machine's controller settings.)"))
+            }
+        }
         let estimate = CycleTimeEstimator.estimate(toolpaths, project: project)
         // Point out (never apply) a run order that fixes dependencies or needs fewer tool changes.
         var reorder: OperationScheduler.Result?

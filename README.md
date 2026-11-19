@@ -192,6 +192,24 @@ G01 Z-0.0117 F30.0
 
 </details>
 
+## Grbl-family G-code (experimental)
+
+NativeCAM also writes G-code for **Grbl 1.1, grblHAL, FluidNC and Carbide Motion** (Shapeoko, X-Carve, LongMill, many DIY machines). None of these has been run on real hardware yet, so treat the output as unverified: run the acceptance test below, then air-cut. These parsers are strict, so the post only writes what each one accepts:
+
+- `G90 G94 G17` and `G20`/`G21`; no `G64`, `G90.1`, `G43 H` or canned cycles. `.nc` files with LF line endings, every line within Grbl's 79-character limit (126 on FluidNC); long comments are shortened.
+- `M8` for the dust collector (stock Grbl has no `M7`), `S#### M3`, and `G4 P` dwells in seconds.
+- Arcs as `G2`/`G3` with incremental I/J, cut as lines where rounding would trip Grbl's arc check (error 33).
+- **Tool changes.** Stock Grbl rejects `M6` but keeps running the lines after it, so the next tool's cuts would run with the old bit. NativeCAM writes `T# M6` only where something stops for it: Carbide Motion, a tool changer, or gSender or CNCjs named as the program that sends the file (the export check then reminds you to set it to pause). Otherwise each tool gets **its own file**, as Vectric does for Grbl, because many senders won't jog or probe during an `M0` pause. Choosing the pause (`M0`) tool change keeps one file for senders that handle it.
+- Run-time estimates use Grbl's planner: 16 blocks of look-ahead, a 0.01 mm junction deviation (Grbl's `$11` default) and rapids blended like feeds.
+
+Try a controller safely with the acceptance program, which has a square, circles from 1 to 50 mm radius in all four quadrants, a helix, a 3-second dwell and two tool changes: run it in check mode first (Grbl's `$C`), then as an air cut, then 0.5 mm deep in scrap, and measure the circles.
+
+```bash
+swift run -c release nativecam-cli acceptance --controller grbl --sender gSender --units mm
+```
+
+A project picks its controller in its machine settings (`controller` in the project file for now; a setup flow is coming). Projects for any controller other than Avid's Mach4 profile are saved as format 2, which older NativeCAM builds refuse to open rather than silently writing Mach4 code.
+
 ## Feature details
 
 | Area | Details |
@@ -226,7 +244,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (247 tests in 29 suites, using Swift Testing):
+Run the test suite (255 tests in 30 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

@@ -49,6 +49,16 @@ public struct Dialect: Hashable, Sendable {
         case senderDependent
     }
 
+    /// How the controller plans motion, for run-time estimates.
+    public struct Planner: Hashable, Sendable {
+        /// Moves the controller looks ahead (Mach4 20 lines, Grbl 16 blocks).
+        public var lookahead: Int
+        /// Default corner tolerance, mm (Grbl's `$11` is 0.01 mm; 0.05 mm fits Mach4's constant velocity mode).
+        public var junctionDeviation: Double
+        /// True when rapids stop at each end (Mach4 runs G0 in exact stop); Grbl blends rapids like feeds.
+        public var rapidsExactStop: Bool
+    }
+
     public var id: String
     public var name: String
     /// Longest line the controller accepts, not counting the line ending; nil when there's no small limit.
@@ -73,6 +83,12 @@ public struct Dialect: Hashable, Sendable {
     public var feedDecimals: [LengthUnit: Int]
     /// Tested on a real controller.
     public var verified: Bool
+    public var planner: Planner = Planner(lookahead: 20, junctionDeviation: 0.05, rapidsExactStop: true)
+    /// M code that switches the dust collector (Avid's profile wires it to M7; stock Grbl only has M8).
+    public var dustOn: Int = 7
+    public var fileExtension: String = "tap"
+    /// Restate `G91.1` (incremental I/J) in the safety block. Grbl accepts it only as a no-op.
+    public var statesIncrementalArcs: Bool = true
 
     public func coordinateDecimals(_ u: LengthUnit) -> Int { coordinateDecimals[u] ?? (u == .inch ? 4 : 3) }
     public func feedDecimals(_ u: LengthUnit) -> Int { feedDecimals[u] ?? (u == .inch ? 1 : 0) }
@@ -94,6 +110,75 @@ public struct Dialect: Hashable, Sendable {
 
     /// The dialect a machine's post writes; nil when NativeCAM has no post for its controller yet.
     public static func `for`(_ machine: MachineProfile) -> Dialect? {
-        machine.isLegacyAvidMach4 ? .avidMach4 : nil
+        guard let controller = machine.controller else { return .avidMach4 }
+        switch controller.family {
+        case .grbl, .grblHAL, .fluidNC, .carbideMotion:
+            return grblFamily(controller, toolChange: machine.toolChange)
+        default:
+            return nil
+        }
+    }
+
+    // MARK: Grbl family
+
+    /// G codes stock Grbl 1.1 accepts (gnea/grbl README and gcode.c). G61 is accepted but does nothing; G64,
+    /// G90.1 and canned cycles raise error 20.
+    static let grblG: Set<Double> = [0, 1, 2, 3, 4, 10, 17, 18, 19, 20, 21, 28, 28.1, 30, 30.1, 38.2, 38.3, 38.4, 38.5,
+                                     40, 43.1, 49, 53, 54, 55, 56, 57, 58, 59, 61, 80, 90, 91, 91.1, 92, 92.1, 93, 94]
+
+    /// Senders known to pause a Grbl job on M6 (when set up to): gSender (Config ▸ Tool Changing ▸ Pause or a
+    /// wizard) and CNCjs from 1.9.11. Others, UGS included, pass M6 to Grbl, which rejects it.
+    public static func senderPausesOnM6(_ sender: String?) -> Bool {
+        guard let s = sender?.lowercased() else { return false }
+        return s.contains("gsender") || s.contains("cncjs")
+    }
+
+    /// Grbl 1.1, grblHAL, FluidNC and Carbide Motion: strict parsers that stop on anything they don't know
+    /// (error 20), with incremental I/J only, Grbl's arc check, G4 P in seconds, M8 for the dust collector and a
+    /// 16-block planner. What M6 does depends on the firmware and the program sending the file.
+    public static func grblFamily(_ controller: ControllerProfile, toolChange: ToolChangeMode) -> Dialect {
+        var d = Dialect(
+            id: "grbl", name: "Grbl", maxLineLength: 79, lineEnding: "\n", allowedG: grblG,
+            allowedM: [0, 1, 2, 3, 4, 5, 8, 9, 30], allowedLetters: Set("FGIJKLMNPRSTXYZ"), strict: true,
+            acceptedUnits: [.inch, .mm], dwell: .seconds, arcCheck: .grbl, maxToolNumber: 255, maxLineNumber: 9_999_999,
+            m6: senderPausesOnM6(controller.sender) ? .senderDependent : .rejected,
+            coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: false)
+        d.planner = Planner(lookahead: 16, junctionDeviation: 0.01, rapidsExactStop: false)
+        d.dustOn = 8
+        d.fileExtension = "nc"
+        d.statesIncrementalArcs = false
+        switch controller.family {
+        case .grblHAL:
+            // Adds canned cycles, G43 (configuration-dependent), letters A–Z.
+            d.id = "grblhal"
+            d.name = "grblHAL"
+            d.allowedG = grblG.union([43, 73, 81, 82, 83, 85, 86, 89, 98, 99])
+            d.allowedM = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 56, 62, 63, 64, 65, 66, 67, 68]
+            d.allowedLetters = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            // Without an ATC, M6 depends on $341: modes 1–3 stop with a compatible sender, mode 4 ignores it.
+            d.m6 = toolChange == .atc ? .macro : (senderPausesOnM6(controller.sender) ? .senderDependent : .recordsOnly)
+        case .fluidNC:
+            // 127-character lines, G59.1–G59.3, M6 only acts with a configured ATC or M6 macro.
+            d.id = "fluidnc"
+            d.name = "FluidNC"
+            d.maxLineLength = 126
+            d.maxLineNumber = 10_000_000
+            d.allowedG = grblG.union([59.1, 59.2, 59.3])
+            d.allowedM = Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 56, 62, 63, 64, 65, 66, 67, 68, 70, 71, 72, 73])
+            d.m6 = toolChange == .atc ? .macro : .recordsOnly
+        case .carbideMotion:
+            // Carbide Motion runs M6 itself (prompts for the change, then probes with a BitSetter or sensor) and
+            // ignores G54–G59.
+            d.id = "carbide-motion"
+            d.name = "Carbide Motion"
+            d.allowedM = [0, 1, 2, 3, 4, 5, 6, 8, 9, 30]
+            d.m6 = .macro
+        default:
+            break
+        }
+        if let sender = controller.sender, !sender.isEmpty, controller.family != .carbideMotion {
+            d.name += " via \(sender)"
+        }
+        return d
     }
 }
