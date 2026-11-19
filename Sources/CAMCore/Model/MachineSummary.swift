@@ -28,9 +28,13 @@ public extension MachineProfile {
             }
         } else if let g = post as? GenericGCodePost {
             if g.usesM6 {
-                lines.append(d.m6 == .macro
+                var line = d.m6 == .macro
                     ? "Tool changes call T# M6, which \(d.name) handles itself: it stops for the change."
-                    : "Tool changes call T# M6. Make sure \(controller?.sender ?? "the program that sends your files") is set to pause on M6.")
+                    : "Tool changes call T# M6. Make sure \(controller?.sender ?? "the program that sends your files") is set to pause on M6."
+                if g.appliesLengthOffset {
+                    line += " G43 H# then applies the tool's length from the controller's tool table: measure each tool there, or leave its length at 0 and re-zero Z."
+                }
+                lines.append(line)
             } else if g.splitsByTool {
                 lines.append("\(d.name) can't stop for a tool change, so a job with several tools is saved as one file per tool. "
                     + "Change the bit and re-zero Z before running each.")

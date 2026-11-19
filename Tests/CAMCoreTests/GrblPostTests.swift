@@ -177,8 +177,8 @@ struct GrblPostTests {
 
     @Test func unsupportedControllersStillHaveNoPost() {
         var m = MachineProfile()
-        m.controller = ControllerProfile(family: .masso)
+        m.controller = ControllerProfile(family: .winCNC)
         #expect(Dialect.for(m) == nil)
-        #expect(PostProcessors.unavailableReason(for: m)?.contains("Masso") == true)
+        #expect(PostProcessors.unavailableReason(for: m)?.contains("WinCNC") == true)
     }
 }

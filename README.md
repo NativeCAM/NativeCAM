@@ -193,9 +193,20 @@ G01 Z-0.0117 F30.0
 
 </details>
 
-## Grbl-family G-code (experimental)
+## Other controllers (experimental)
 
-NativeCAM also writes G-code for **Grbl 1.1, grblHAL, FluidNC and Carbide Motion** (Shapeoko, X-Carve, LongMill, many DIY machines). None of these has been run on real hardware yet, so treat the output as unverified: run the acceptance test below, then air-cut. These parsers are strict, so the post only writes what each one accepts:
+Besides Avid's Mach4 profile, NativeCAM writes G-code for **Grbl 1.1, grblHAL, FluidNC and Carbide Motion** (Shapeoko, X-Carve, LongMill, many DIY machines) and for **LinuxCNC, Masso, Centroid CNC12** (including Avid's EX controller) **and Buildbotics** (Onefinity's original controller). None of these has been run on real hardware yet: they follow each controller's documentation, so treat the output as unverified, run the acceptance test below, then air-cut.
+
+| Controller | What NativeCAM writes |
+|---|---|
+| LinuxCNC | `.ngc`; `G91.1` and `G64 P` blending at the arc tolerance; `T# M6` then `G43 H#` (LinuxCNC's M6 doesn't apply the tool length); `M8`; `G4 P` in seconds; checked strictly, as LinuxCNC rejects anything it doesn't know |
+| Masso | `.nc`; `T# M06` (Masso applies the length itself); `G4 P` in whole **milliseconds**; no `G43`, `G64` or `G91.1`, which Masso's documentation doesn't list |
+| Centroid CNC12 | `.cnc` with CRLF, as Avid's EX posts write; `T# M6` then `G43 H#` from CNC12's tool library (a tool with no length gets 0, so re-zeroing Z still works); `M7` |
+| Buildbotics | `.nc`; `G91.1`; `T# M6`, which pauses for the change by default |
+
+### Grbl family
+
+These parsers are strict, so the post only writes what each one accepts:
 
 - `G90 G94 G17` and `G20`/`G21`; no `G64`, `G90.1`, `G43 H` or canned cycles. `.nc` files with LF line endings, every line within Grbl's 79-character limit (126 on FluidNC); long comments are shortened.
 - `M8` for the dust collector (stock Grbl has no `M7`), `S#### M3`, and `G4 P` dwells in seconds.
@@ -263,7 +274,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (275 tests in 33 suites, using Swift Testing):
+Run the test suite (280 tests in 34 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

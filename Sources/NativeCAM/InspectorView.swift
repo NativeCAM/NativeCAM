@@ -134,7 +134,9 @@ struct MachineSection: View {
                     machine.controller = raw.isEmpty ? nil : ControllerProfile(family: ControllerFamily(rawValue: raw), sender: machine.controller?.sender)
                 })) {
                 Text("Avid Mach4 profile").tag("")
-                ForEach([ControllerFamily.grbl, .grblHAL, .fluidNC, .carbideMotion], id: \.rawValue) { Text($0.label).tag($0.rawValue) }
+                ForEach([ControllerFamily.grbl, .grblHAL, .fluidNC, .carbideMotion, .linuxCNC, .masso, .centroid, .buildbotics], id: \.rawValue) {
+                    Text($0.label).tag($0.rawValue)
+                }
                 if let c = machine.controller, Dialect.for(machine) == nil {
                     Text("\(c.family.label) (no post yet)").tag(c.family.rawValue)
                 }

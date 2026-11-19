@@ -57,6 +57,7 @@ public enum PostProcessors {
     public static func unavailableReason(for machine: MachineProfile) -> String? {
         guard Dialect.for(machine) == nil else { return nil }
         return "NativeCAM can't write G-code for \(machine.controllerLabel) yet, so this job can't be exported. "
-            + "Supported so far: Avid's Mach4 profile, Grbl, grblHAL, FluidNC and Carbide Motion."
+            + "Supported so far: Avid's Mach4 profile, Grbl, grblHAL, FluidNC, Carbide Motion, LinuxCNC, Masso, Centroid CNC12 "
+            + "and Buildbotics, or your own Vectric post."
     }
 }

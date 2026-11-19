@@ -74,9 +74,9 @@ struct MachineModelTests {
         #expect(post.post(toolpaths) == AvidMach4Post(project: p, date: Self.date).post(toolpaths))
         #expect(PostProcessors.unavailableReason(for: p.machine) == nil)
         #expect(PostProcessors.post(for: grblProject) is GenericGCodePost)
-        var masso = grblProject
-        masso.machine.controller = ControllerProfile(family: .masso)
-        #expect(PostProcessors.post(for: masso) == nil)
+        var other = grblProject
+        other.machine.controller = ControllerProfile(family: .winCNC)
+        #expect(PostProcessors.post(for: other) == nil)
     }
 
     @Test func valueSourcesRoundTrip() throws {

@@ -85,6 +85,7 @@ public struct GenericGCodePost: PostProcessor {
         w.line("G90 G94 G17")
         w.line(units == .inch ? "G20" : "G21")
         if dialect.statesIncrementalArcs { w.line("G91.1") }
+        if let blend = blendingLine { w.line(blend) }
 
         var currentTool: Int?
         var currentRPM: Double?
@@ -133,6 +134,7 @@ public struct GenericGCodePost: PostProcessor {
         if usesM6 {
             w.comment("Change to T\(tool.number) \(tool.name)")
             w.line("T\(tool.number) M6")
+            if appliesLengthOffset { w.line("G43 H\(tool.number)") }
         } else if first {
             w.comment("Load T\(tool.number) \(tool.name) and zero Z before starting")
         } else {
@@ -143,8 +145,29 @@ public struct GenericGCodePost: PostProcessor {
             w.line("M0")
         }
         // A tool-change macro or wizard may leave relative moves behind.
-        if !first { w.line("G90 G94") }
+        if !first {
+            w.line("G90 G94")
+            if let blend = blendingLine { w.line(blend) }
+        }
         if machine.dustCollection { w.line("M\(dialect.dustOn)") }
+    }
+
+    /// True when each tool change is followed by `G43 H#`.
+    public var appliesLengthOffset: Bool {
+        switch dialect.lengthOffset {
+        case .never: false
+        case .withATC: machine.toolChange == .atc
+        case .always: true
+        }
+    }
+
+    /// The corner-blending line for the safety block, if the controller takes one.
+    private var blendingLine: String? {
+        switch dialect.blending {
+        case .none: nil
+        case .g64: "G64"
+        case .g64P: "G64 P\(fmt(max(units.fromMM(machine.arcFitTolerance), pow(10, -Double(decimals)))))"
+        }
     }
 
     private func dwell(_ seconds: Double) -> String {

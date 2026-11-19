@@ -94,6 +94,26 @@ public struct Dialect: Hashable, Sendable {
     /// Dwells in the file all come from the toolpaths (false when a template post adds its own, say after M3).
     public var comparesDwells: Bool = true
 
+    /// How the controller is told to blend corners.
+    public enum Blending: Hashable, Sendable {
+        case none
+        /// `G64` (Mach4's constant velocity).
+        case g64
+        /// `G64 P<tolerance>` (LinuxCNC: blend within the arc-fit tolerance).
+        case g64P
+    }
+    public var blending: Blending = .none
+
+    /// When a tool change is followed by `G43 H#` to apply the tool's length from the controller's tool table.
+    public enum LengthOffset: Hashable, Sendable {
+        case never
+        /// Only with an automatic tool changer.
+        case withATC
+        /// After every tool change (LinuxCNC and CNC12 don't apply a length on M6; a tool with no length gets 0).
+        case always
+    }
+    public var lengthOffset: LengthOffset = .never
+
     public func coordinateDecimals(_ u: LengthUnit) -> Int { coordinateDecimals[u] ?? (u == .inch ? 4 : 3) }
     public func feedDecimals(_ u: LengthUnit) -> Int { feedDecimals[u] ?? (u == .inch ? 1 : 0) }
 
@@ -119,10 +139,89 @@ public struct Dialect: Hashable, Sendable {
         switch controller.family {
         case .grbl, .grblHAL, .fluidNC, .carbideMotion:
             return grblFamily(controller, toolChange: machine.toolChange)
+        case .linuxCNC: return .linuxCNC
+        case .masso: return .masso
+        case .centroid: return .centroid
+        case .buildbotics: return .buildbotics
         default:
             return nil
         }
     }
+
+    // MARK: Second-wave controllers (from documentation only; none tested on hardware)
+
+    /// LinuxCNC 2.9 (and PathPilot's base): strict ("any input not explicitly allowed is illegal"), 256-character
+    /// lines, G4 P in seconds, incremental I/J, Grbl's arc rule, G64 P blending, M6 that prompts but leaves the tool
+    /// length alone (so G43 H# follows), M7 mist and M8 flood.
+    public static let linuxCNC: Dialect = {
+        var d = Dialect(
+            id: "linuxcnc", name: "LinuxCNC", maxLineLength: 255, lineEnding: "\n",
+            allowedG: Set([0, 1, 2, 3, 4, 5, 5.1, 5.2, 5.3, 7, 8, 10, 17, 17.1, 18, 18.1, 19, 19.1, 20, 21, 28, 28.1, 30, 30.1, 33,
+                           33.1, 38.2, 38.3, 38.4, 38.5, 40, 41, 41.1, 42, 42.1, 43, 43.1, 43.2, 49, 52, 53, 54, 55, 56, 57, 58, 59,
+                           59.1, 59.2, 59.3, 61, 61.1, 64, 73, 74, 76, 80, 81, 82, 83, 84, 85, 86, 89, 90, 90.1, 91, 91.1, 92,
+                           92.1, 92.2, 92.3, 93, 94, 95, 96, 97, 98, 99]),
+            allowedM: Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 48, 49, 50, 51, 52, 53, 60, 61, 62, 63, 64, 65, 66, 67, 68, 70, 71, 72, 73]
+                          + Array(100...199)),
+            allowedLetters: Set("ABCDFGHIJKLMNPQRSTUVWXYZ"), strict: true, acceptedUnits: [.inch, .mm], dwell: .seconds,
+            arcCheck: .grbl, maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
+            coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: false)
+        d.planner = Planner(lookahead: 50, junctionDeviation: 0.02, rapidsExactStop: false)
+        d.dustOn = 8
+        d.fileExtension = "ngc"
+        d.blending = .g64P
+        d.lengthOffset = .always
+        return d
+    }()
+
+    /// Masso G3: G4 P in whole milliseconds (`G04 P2000` is two seconds), M06 runs Masso's own tool change (and
+    /// applies the tool length itself), M07/M08 outputs. G43, G64 and G90.1/G91.1 aren't in its documentation, so
+    /// none are written.
+    public static let masso: Dialect = {
+        var d = Dialect(
+            id: "masso", name: "Masso", maxLineLength: nil, lineEnding: "\n",
+            allowedG: Set([0, 1, 2, 3, 4, 10, 17, 18, 19, 20, 21, 28, 30, 40, 49, 53, 54, 55, 56, 57, 58, 59, 80, 81, 82, 83, 90, 91, 94]),
+            allowedM: Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 98, 99]),
+            allowedLetters: Set("FGHIJKLMNPQRSTXYZ"), strict: false, acceptedUnits: [.inch, .mm], dwell: .milliseconds,
+            arcCheck: .grbl, maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
+            coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: false)
+        d.planner = Planner(lookahead: 20, junctionDeviation: 0.05, rapidsExactStop: false)
+        d.dustOn = 8
+        d.fileExtension = "nc"
+        d.statesIncrementalArcs = false
+        return d
+    }()
+
+    /// Centroid CNC12 (Acorn, Oak, and Avid's EX controller): M6 runs the mfunc6 macro and G43 H# applies the
+    /// length from CNC12's tool library, as Avid's own EX posts do. Seconds for G4 P and .cnc files follow Avid's EX
+    /// posts; CNC12's own manuals weren't available, so the code lists aren't checked.
+    public static let centroid: Dialect = {
+        var d = Dialect(
+            id: "centroid", name: "Centroid CNC12", maxLineLength: nil, lineEnding: "\r\n", allowedG: nil, allowedM: nil,
+            allowedLetters: Set("ABCDFGHIJKLMNOPQRSTUVWXYZ"), strict: false, acceptedUnits: [.inch, .mm], dwell: .secondsWithDecimal,
+            arcCheck: .absolute(0.0127), maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
+            coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: false)
+        d.planner = Planner(lookahead: 20, junctionDeviation: 0.05, rapidsExactStop: true)
+        d.dustOn = 7
+        d.fileExtension = "cnc"
+        d.statesIncrementalArcs = false
+        d.lengthOffset = .always
+        return d
+    }()
+
+    /// Buildbotics (and Onefinity's BB controller), which follows LinuxCNC's conventions through the CAMotics
+    /// interpreter: G4 P in seconds, G91.1, M6 pausing for the change by default. Its canned-cycle support is
+    /// documented inconsistently, so drilling stays as plain moves and the code lists aren't checked.
+    public static let buildbotics: Dialect = {
+        var d = Dialect(
+            id: "buildbotics", name: "Buildbotics", maxLineLength: nil, lineEnding: "\n", allowedG: nil, allowedM: nil,
+            allowedLetters: Set("ABCDFGHIJKLMNPQRSTUVWXYZ"), strict: false, acceptedUnits: [.inch, .mm], dwell: .seconds,
+            arcCheck: .grbl, maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
+            coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: false)
+        d.planner = Planner(lookahead: 20, junctionDeviation: 0.05, rapidsExactStop: false)
+        d.dustOn = 8
+        d.fileExtension = "nc"
+        return d
+    }()
 
     // MARK: Grbl family
 

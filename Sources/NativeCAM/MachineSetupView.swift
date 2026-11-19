@@ -157,7 +157,8 @@ struct MachineSetupView: View {
         if let entry { return entry.controllers }
         var list: [MachineCatalogue.ControllerOption] = [
             .init(family: "grbl", label: "Grbl 1.1"), .init(family: "grblHAL"), .init(family: "fluidNC"),
-            .init(family: "carbideMotion"), .init(family: "mach4", label: "Mach4 (Avid's profile)"),
+            .init(family: "carbideMotion"), .init(family: "linuxCNC"), .init(family: "masso"), .init(family: "centroid"),
+            .init(family: "buildbotics"), .init(family: "mach4", label: "Mach4 (Avid's profile)"),
         ]
         if let c = imported?.controller, let i = list.firstIndex(where: { $0.family == c.family.rawValue }) {
             list.insert(list.remove(at: i), at: 0)
