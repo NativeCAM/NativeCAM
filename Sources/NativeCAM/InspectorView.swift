@@ -158,8 +158,11 @@ struct MachineSection: View {
         } header: {
             Text("Motion (for run-time estimates)")
         } footer: {
-            Text("Avid doesn't publish acceleration; 50 in/s² is what Mach4 reportedly ships with. Copy your values from Mach4's Configure ▸ Control ▸ Motors for accurate estimates.")
-                .font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                MachineImportButtons(machine: $machine, units: units)
+                Text("Avid doesn't publish acceleration; 50 in/s² is what Mach4 reportedly ships with. Import your controller's settings (Mach4's Machine.ini, Grbl's $$) for accurate estimates.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }

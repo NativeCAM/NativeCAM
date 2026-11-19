@@ -135,6 +135,7 @@ swift run -c release nativecam-cli post demo.nativecam --air-cut 1 --sheet demo.
 swift run -c release nativecam-cli sim demo.nativecam --png out.png # simulate, report, render the result as a heightmap
 swift run -c release nativecam-cli sim other-cam-job.tap            # simulate G-code from any CAM program
 swift run -c release nativecam-cli tools vendor.vtdb -o tools.json  # convert a Fusion 360 or Vectric tool library
+swift run -c release nativecam-cli machine Machine.ini --apply job.nativecam  # read controller limits into a project
 ```
 
 ```text
@@ -223,7 +224,8 @@ A project picks its controller in its machine settings (`controller` in the proj
 | Arc fitting | Line segments are re-fitted to `G02`/`G03` arcs, helical ones included |
 | Links between cuts | **Minimum** (default): rise just above the remaining material plus a safe distance, feed straight across short stretches already cleared to depth, and rapid down to just above floors this job already cut. **Full** always returns to safe Z. Shapes marked as clamps raise an error if a toolpath cuts into them, and links cross them above their height. Profiles skip depths an earlier toolpath already cleared. |
 | Cut order | Holes, profile loops and V-carve strokes are ordered by nearest neighbour and then improved by local search (2-opt, Or-opt); closed loops are entered wherever they're nearest the tool. Across toolpaths, **Optimize Run Order** finds the order with the fewest tool changes that keeps the work inside each part before its cut-out, roughing before finishing, and your order wherever toolpaths overlap. |
-| Run-time estimate | Times the posted moves with a look-ahead motion planner model: per-axis acceleration and rapid speeds, corner speeds from a junction tolerance, arc speed limits, a 20-line look-ahead, and tool-change and spindle time. Drive tier, acceleration and these settings live under **Material & Machine ▸ Motion**. |
+| Run-time estimate | Times the posted moves with a look-ahead motion planner model: per-axis acceleration and rapid speeds, corner speeds from a junction tolerance, arc speed limits, the controller's look-ahead (20 lines on Mach4, 16 blocks on Grbl), and tool-change and spindle time. Drive tier, acceleration and these settings live under **Material & Machine ▸ Motion**. |
+| Machine settings import | **Import Controller Settings…** reads travel, rapid and cutting speeds, accelerations, corner tolerance and spindle range from Mach4's `Machine.ini` (motor values converted from counts, the slower of a gantry's two motors), a Grbl or grblHAL `$$` dump (or **Paste Grbl $$…**), a LinuxCNC INI, a FluidNC `config.yaml` or a Fusion 360 `.mch`. You pick which values to apply, and each one records where it came from. |
 | Tools | Flat, ball, bull nose, V-bit, engraving (tip diameter), surfacing and drill. Flute length, shank, stickout, flute count and direction, feeds and speeds, chip-load calculator checked against chart chip loads for the material type, compression bits whose first pass clears the upcut length, live profile drawing, import from Fusion 360 and Vectric libraries. Saved to `~/Library/Application Support/NativeCAM/tools.json`. |
 | Simulator | Heightmap carved by the true tool shape (flat, ball, bull nose, V), through-cuts, tool marker, playback controls, cycle-time estimate, detection of rapids through material |
 
@@ -244,7 +246,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (255 tests in 30 suites, using Swift Testing):
+Run the test suite (263 tests in 31 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

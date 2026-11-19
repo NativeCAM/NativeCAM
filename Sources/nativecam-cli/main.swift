@@ -20,6 +20,9 @@ import Foundation
 //                     [--units inch|mm] [--tool-change m6|pause|atc] [-o out]
 //                                                      write the acceptance test program for a controller: run it in
 //                                                      check mode, then as an air cut, then 0.5 mm deep in scrap
+//   nativecam-cli machine <settings> [--apply project.nativecam [-o out.nativecam]]
+//                                                      read machine limits from Grbl $$, Mach4 Machine.ini, LinuxCNC
+//                                                      INI, FluidNC YAML or Fusion .mch; optionally apply to a project
 //   nativecam-cli tools <library.tools|.vtdb|.json> [-o out.json]
 //                                                      read a Fusion 360, Vectric or NativeCAM tool library, print what
 //                                                      came across, optionally save it as a NativeCAM library (T1, T2, …)
@@ -146,6 +149,30 @@ case "acceptance":
         let path = stem + (file.suffix ?? "") + "." + post.fileExtension
         do { try file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
         print("\(post.name) acceptance test -> \(path)")
+    }
+
+case "machine":
+    // Read machine limits from a controller's settings ($$ dump, Machine.ini, LinuxCNC INI, FluidNC YAML, Fusion .mch).
+    guard args.count >= 2 else { fail("usage: nativecam-cli machine <settings file> [--apply project.nativecam [-o out.nativecam]]") }
+    let found: MachineImport
+    do { found = try MachineSettingsImporter.load(url: URL(fileURLWithPath: args[1])) } catch {
+        fail("Can't read \(args[1]): \(error.localizedDescription)")
+    }
+    let target = option("--apply", in: args).map(loadProject)
+    let u = target?.displayUnits ?? found.outputUnits ?? .inch
+    print("\(found.format.rawValue)\(found.machineName.map { ": \($0)" } ?? "")")
+    if let c = found.controller { print("  Controller: \(c.family.label)") }
+    if let units = found.outputUnits { print("  G-code units: \(units.symbol)") }
+    if found.hasToolChanger == true { print("  Tool changer: yes") }
+    for s in found.settings {
+        print("  \(s.key.label): \(s.display(u))  (\(s.source.note ?? ""))")
+    }
+    for n in found.notes { print("  Note: \(n)") }
+    if var project = target {
+        found.apply(to: &project.machine, keys: Set(found.settings.map(\.key)))
+        let out = option("-o", in: args) ?? option("--apply", in: args)!
+        do { try project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error)") }
+        print("Applied to \(out)")
     }
 
 case "tools":
