@@ -1,0 +1,15 @@
+# Known limits and roadmap
+
+[← Back to the README](../README.md)
+
+- Only Avid Mach4 output has run on a real machine. Every other controller's output follows its documentation (and, for Centroid, Avid's EX posts) and should be treated as unverified: [run the acceptance test](controllers.md#trying-a-new-controller-safely) in check mode where there is one, then air-cut.
+- Run-time estimates use each controller's planner model and look-ahead, with acceleration from your controller's settings when you import them and labelled class defaults otherwise. They haven't been timed against a real machine yet.
+- 3D finishing uses one raster direction per toolpath; add a second at 90° for cross-hatching. No waterline or pencil passes yet.
+- V-bit and bull-nose 3D finishing use the height-grid drop-cutter; the exact triangle drop-cutter covers ball and flat bits only.
+- PDF clipping masks and hidden layers aren't applied. EPS isn't supported.
+- Clicking to select vectors in the 3D view isn't wired up yet; use the Design list in the sidebar.
+- No lead-in/lead-out arcs, dogbones, nesting or plasma (THC) support yet.
+- No rotary (4th-axis) toolpaths yet. Rotary stock and a machine's rotary axis can be described (saved as format 2), but jobs are still cut as flat blocks. Imported G-code with A words is simulated as if the part never turned, with a warning.
+- Canned drill cycles (`G81`–`G83`) in imported G-code aren't simulated. NativeCAM's own output expands them, so its files simulate fully.
+
+Bug reports, results from your own machine and code reviews are all very welcome.
