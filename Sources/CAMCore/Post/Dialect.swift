@@ -132,6 +132,34 @@ public struct Dialect: Hashable, Sendable {
     /// The modal codes at the top of the file.
     public var safetyLine: String = "G90 G94 G17"
 
+    // Rotary axes (research_notes/Rotary milling/rotary_milling.md §3.4). NativeCAM doesn't write rotary moves
+    // yet; these say what a post may write and what `GCodeCheck` accepts.
+
+    /// What F means on an ordinary (G94, units per minute) move that turns a rotary axis.
+    public enum RotaryFeed: Hashable, Sendable {
+        /// F is spread over the whole move, counting degrees as if they were millimetres (Grbl's planner).
+        case allAxes
+        /// F applies to X, Y and Z only; a move that only turns the rotary axis runs in degrees per minute (NIST
+        /// and LinuxCNC).
+        case linearAxesOnly
+        /// F is degrees per minute on the rotary axis, and a combined move runs at the pace of its slowest axis
+        /// (Masso).
+        case degreesPerMinute
+        /// Not documented (Mach4). Rotary moves should use G93 inverse time, where F means the same everywhere.
+        case unknown
+    }
+
+    /// Rotary axis letters the controller can drive (A turns about X, B about Y, C about Z); empty when it has none.
+    /// Always a subset of `allowedLetters`.
+    public var rotaryAxes: Set<Character> = []
+    /// What F means when a rotary axis moves in G94 mode.
+    public var rotaryFeed: RotaryFeed = .unknown
+    /// Accepts G93 inverse-time feeds, where F is one over the move's time in minutes. It's the one way to give a
+    /// rotary move an exact feed on every controller that has it.
+    public var inverseTime: Bool = false
+
+    public var hasAAxis: Bool { rotaryAxes.contains("A") }
+
     public func coordinateDecimals(_ u: LengthUnit) -> Int { coordinateDecimals[u] ?? (u == .inch ? 4 : 3) }
     public func feedDecimals(_ u: LengthUnit) -> Int { feedDecimals[u] ?? (u == .inch ? 1 : 0) }
 
@@ -140,6 +168,9 @@ public struct Dialect: Hashable, Sendable {
 
     /// Avid CNC's Mach4 profile, as `AvidMach4Post` writes for it. Mach4 accepts much more than these lists; they
     /// hold what Mach4's Mill reference documents, so a typo or a code from another dialect stands out.
+    ///
+    /// Rotary: Mach4 drives A, B and C in any motion command and documents G93. Avid's own rotary posts all feed in
+    /// G93, and nothing documents how Mach4 applies F to a G94 move that turns A, so `rotaryFeed` is unknown.
     public static let avidMach4 = Dialect(
         id: "avid-mach4", name: "Avid Mach4", maxLineLength: nil, lineEnding: "\r\n",
         allowedG: Set([0, 1, 2, 3, 4, 9, 10, 12, 13, 15, 16, 17, 18, 19, 20, 21, 28, 28.1, 30, 31, 32, 40, 41, 42, 43, 49,
@@ -148,7 +179,8 @@ public struct Dialect: Hashable, Sendable {
         allowedM: Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 19, 30, 47, 48, 49, 98, 99]),
         allowedLetters: Set("ABCDFGHIJKLMNPQRSTUVWXYZ"), strict: false, acceptedUnits: [.inch, .mm],
         dwell: .secondsWithDecimal, arcCheck: .absolute(0.0127), maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
-        coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: true)
+        coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: true,
+        rotaryAxes: Set("ABC"), inverseTime: true)
 
     /// The dialect a machine's post writes; nil when NativeCAM has no post for its controller yet.
     public static func `for`(_ machine: MachineProfile) -> Dialect? {
@@ -228,6 +260,10 @@ public struct Dialect: Hashable, Sendable {
         d.fileExtension = "ngc"
         d.blending = .g64P
         d.lengthOffset = .always
+        // "If any of XYZ are moving, F is in units per minute in the XYZ cartesian system" (machining-center docs).
+        d.rotaryAxes = Set("ABC")
+        d.rotaryFeed = .linearAxesOnly
+        d.inverseTime = true
         return d
     }()
 
@@ -246,6 +282,9 @@ public struct Dialect: Hashable, Sendable {
         d.dustOn = 8
         d.fileExtension = "nc"
         d.statesIncrementalArcs = false
+        // Masso drives an A axis ("on a rotary axis, F is in degrees per minute"), but A stays out of its letters
+        // until NativeCAM writes rotary moves for it. G93 isn't in its documented codes.
+        d.rotaryFeed = .degreesPerMinute
         return d
     }()
 
@@ -263,6 +302,8 @@ public struct Dialect: Hashable, Sendable {
         d.fileExtension = "cnc"
         d.statesIncrementalArcs = false
         d.lengthOffset = .always
+        // Avid's EX rotary runs on A. Whether CNC12 itself takes G93 isn't confirmed.
+        d.rotaryAxes = ["A"]
         return d
     }()
 
@@ -278,6 +319,9 @@ public struct Dialect: Hashable, Sendable {
         d.planner = Planner(lookahead: 20, junctionDeviation: 0.05, rapidsExactStop: false)
         d.dustOn = 8
         d.fileExtension = "nc"
+        // A fourth motor channel can drive A (Buildbotics publishes a 4-axis Fusion post); its G93 and rotary feed
+        // handling aren't documented.
+        d.rotaryAxes = ["A"]
         return d
     }()
 
@@ -309,14 +353,21 @@ public struct Dialect: Hashable, Sendable {
         d.dustOn = 8
         d.fileExtension = "nc"
         d.statesIncrementalArcs = false
+        // Stock Grbl has three axes (gSender's rotary mode drives the rotary from the Y port, with Y words). The whole
+        // family takes G93, and its planner counts rotary degrees as millimetres. FluidNC can drive A–C when
+        // configured, but A stays out of its letters until NativeCAM writes rotary moves for it.
+        d.rotaryFeed = .allAxes
+        d.inverseTime = true
         switch controller.family {
         case .grblHAL:
-            // Adds canned cycles, G43 (configuration-dependent), letters A–Z.
+            // Adds canned cycles, G43 (configuration-dependent), letters A–Z, and A–C when the build has them
+            // ($376 marks them rotary).
             d.id = "grblhal"
             d.name = "grblHAL"
             d.allowedG = grblG.union([43, 73, 81, 82, 83, 85, 86, 89, 98, 99])
             d.allowedM = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 56, 62, 63, 64, 65, 66, 67, 68]
             d.allowedLetters = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            d.rotaryAxes = Set("ABC")
             // Without an ATC, M6 depends on $341: modes 1–3 stop with a compatible sender, mode 4 ignores it.
             d.m6 = toolChange == .atc ? .macro : (senderPausesOnM6(controller.sender) ? .senderDependent : .recordsOnly)
         case .fluidNC:

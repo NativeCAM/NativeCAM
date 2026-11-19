@@ -105,6 +105,10 @@ public enum CAMEngine {
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
+        if stock.rotary != nil {
+            issues.append(JobIssue(.warning, "NativeCAM can't cut rotary stock yet: these toolpaths treat the blank as a "
+                + "flat block and never turn the rotary axis."))
+        }
         if let post = PostProcessors.post(for: project), !(post is AvidMach4Post) {
             let files = post.files(toolpaths).count
             if files > 1 {

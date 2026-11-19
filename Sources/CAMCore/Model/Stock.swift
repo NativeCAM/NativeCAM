@@ -23,6 +23,47 @@ public enum ZZero: String, Codable, Sendable, CaseIterable, Identifiable {
     public var label: String { self == .materialTop ? "Material top" : "Spoilboard" }
 }
 
+/// A blank turned on a rotary axis: a round dowel or a square bar held in the chuck, with its rotation axis along
+/// machine X.
+///
+/// Rotary jobs put Z zero on the rotation axis, as Avid's Rotary tab (Z Axis Touch), Vectric ("Center of
+/// Cylinder") and Fusion all recommend, so a Z value on the machine is a distance from the axis. Touching off on
+/// the top of the blank instead would drive the tool a radius too deep.
+public struct RotaryStock: Hashable, Codable, Sendable {
+    public enum Shape: String, Codable, Sendable, CaseIterable, Identifiable {
+        case cylinder, squareBar
+        public var id: String { rawValue }
+        public var label: String { self == .cylinder ? "Round" : "Square bar" }
+    }
+
+    public var shape: Shape
+    /// Diameter of a round blank, or the width across the faces of a square bar, mm.
+    public var diameter: Double
+    /// Length along the rotation axis (machine X), mm.
+    public var length: Double
+
+    public init(shape: Shape = .cylinder, diameter: Double = 2.inch, length: Double = 12.inch) {
+        self.shape = shape
+        self.diameter = diameter
+        self.length = length
+    }
+
+    /// Distance from the axis to the nearest point of the surface (the middle of a face on a square bar), mm.
+    public var radius: Double { diameter / 2 }
+
+    /// Distance from the axis to the farthest point of the blank (a square bar's corners), mm. The tool has to stay
+    /// outside this whenever the rotary axis turns.
+    public var outerRadius: Double { shape == .cylinder ? radius : radius * 2.0.squareRoot() }
+
+    /// Distance from the axis to the surface in the direction `degrees` around it, mm. 0° points straight up at A0,
+    /// where a square bar has a face square to the spindle.
+    public func surfaceRadius(atDegrees degrees: Double) -> Double {
+        guard shape == .squareBar else { return radius }
+        let t = degrees * .pi / 180
+        return radius / max(abs(cos(t)), abs(sin(t)))
+    }
+}
+
 /// The blank being cut. Design coordinates have (0,0) at the material's lower-left corner;
 /// toolpath Z = 0 is the material's top surface and Z = -thickness is its bottom.
 public struct Stock: Hashable, Codable, Sendable {
@@ -48,9 +89,17 @@ public struct Stock: Hashable, Codable, Sendable {
     public var retractMode: RetractMode?
     /// Minimum-retract links keep at least this much above remaining material, mm (nil = 0.2 in).
     public var linkSafeDistance: Double?
+    /// Set when the blank turns on a rotary axis (nil = a flat sheet, as in every older file). Nothing machines
+    /// rotary stock yet: toolpaths still treat the blank as the flat width × height × thickness block, and the job
+    /// checks say so.
+    public var rotary: RotaryStock?
 
     public var retract: RetractMode { retractMode ?? .minimum }
     public var safeDistance: Double { linkSafeDistance ?? 0.2.inch }
+
+    /// The project file format this stock needs. Rotary stock is format 2: an older build would drop it and cut the
+    /// job as a flat sheet.
+    public var requiredFormatVersion: Int { rotary == nil ? 1 : 2 }
 
     public init(width: Double = 24.inch, height: Double = 18.inch, thickness: Double = 0.75.inch,
                 materialName: String = "Plywood", xyOrigin: XYOrigin = .lowerLeft, zZero: ZZero = .materialTop,

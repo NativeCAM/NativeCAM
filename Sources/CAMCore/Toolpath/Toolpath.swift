@@ -21,12 +21,17 @@ public struct Motion: Hashable, Codable, Sendable {
     public var center: Vec2
     /// Feed rate in mm/min (0 for rapids).
     public var feed: Double
+    /// Rotary A position at the end of the move, degrees, unwound (720 is two full turns, not 0); nil when no
+    /// rotary axis is involved. Only G-code read back from a file sets it so far: every toolpath generator, the
+    /// simulator and the posts ignore it.
+    public var a: Double?
 
-    public init(kind: MotionKind, end: Vec3, center: Vec2 = .zero, feed: Double = 0) {
+    public init(kind: MotionKind, end: Vec3, center: Vec2 = .zero, feed: Double = 0, a: Double? = nil) {
         self.kind = kind
         self.end = end
         self.center = center
         self.feed = feed
+        self.a = a
     }
 
     public static func rapid(_ p: Vec3) -> Motion { Motion(kind: .rapid, end: p) }

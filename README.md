@@ -282,7 +282,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (286 tests in 35 suites, using Swift Testing):
+Run the test suite (299 tests in 36 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh
@@ -315,6 +315,7 @@ When adding test data from other open-source CAM projects, copy fixtures only fr
 - Only Avid Mach4 output has run on a real machine. Every other controller's output follows its documentation (and, for Centroid, Avid's EX posts) and should be treated as unverified: run the acceptance test in check mode where there is one, then air-cut.
 - Run-time estimates use each controller's planner model and look-ahead, with acceleration from your controller's settings when you import them and labelled class defaults otherwise. They haven't been timed against a real machine yet.
 - Canned drill cycles (`G81`–`G83`) in imported G-code aren't simulated. NativeCAM's own output expands them, so its files simulate fully.
+- No rotary (4th-axis) toolpaths yet. Rotary stock and a machine's rotary axis can be described (saved as format 2), but jobs are still cut as flat blocks. Imported G-code with A words is simulated as if the part never turned, with a warning.
 
 ## How NativeCAM was built
 
