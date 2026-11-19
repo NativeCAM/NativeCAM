@@ -97,9 +97,9 @@ public struct Stock: Hashable, Codable, Sendable {
     public var retract: RetractMode { retractMode ?? .minimum }
     public var safeDistance: Double { linkSafeDistance ?? 0.2.inch }
 
-    /// The project file format this stock needs. Rotary stock is format 2: an older build would drop it and cut the
-    /// job as a flat sheet.
-    public var requiredFormatVersion: Int { rotary == nil ? 1 : 2 }
+    /// The project file format this stock needs. Rotary stock is format 3: every build that reads format 2 would
+    /// drop it and post the job as a flat sheet.
+    public var requiredFormatVersion: Int { rotary == nil ? 1 : 3 }
 
     public init(width: Double = 24.inch, height: Double = 18.inch, thickness: Double = 0.75.inch,
                 materialName: String = "Plywood", xyOrigin: XYOrigin = .lowerLeft, zZero: ZZero = .materialTop,

@@ -9,7 +9,7 @@
 - PDF clipping masks and hidden layers aren't applied. EPS isn't supported.
 - Clicking to select vectors in the 3D view isn't wired up yet; use the Design list in the sidebar.
 - No lead-in/lead-out arcs, dogbones, nesting or plasma (THC) support yet.
-- No rotary (4th-axis) toolpaths yet. Rotary stock and a machine's rotary axis can be described (saved as format 2), but jobs are still cut as flat blocks. Imported G-code with A words is simulated as if the part never turned, with a warning.
+- No rotary (4th-axis) toolpaths yet. Rotary stock and a machine's rotary axis can be described (rotary stock is saved as format 3), but jobs are still cut as flat blocks. Imported G-code with A words is simulated as if the part never turned, with a warning.
 - Canned drill cycles (`G81`–`G83`) in imported G-code aren't simulated. NativeCAM's own output expands them, so its files simulate fully.
 
 Bug reports, results from your own machine and code reviews are all very welcome.
