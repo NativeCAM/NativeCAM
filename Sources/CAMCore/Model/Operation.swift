@@ -79,6 +79,84 @@ public struct EntrySettings: Hashable, Codable, Sendable {
     }
 }
 
+public enum LeadKind: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// Tangent arc onto the cut.
+    case arc
+    /// Straight line meeting the cut at an angle.
+    case line
+    public var id: String { rawValue }
+    public var label: String { rawValue.capitalized }
+}
+
+/// Short moves in the waste that start and end each closed profile loop, so the bit never plunges or stops
+/// against the finished wall.
+public struct LeadSettings: Hashable, Codable, Sendable {
+    public var kind: LeadKind
+    /// Arc radius, mm.
+    public var radius: Double
+    /// Arc sweep, degrees (15–180).
+    public var sweep: Double
+    /// Line length, mm.
+    public var length: Double
+    /// Angle between a line lead and the cut, degrees (10–90; 90 comes in square to it).
+    public var angle: Double
+    /// Leave each loop on a lead too (otherwise the last lap ends on the wall).
+    public var leadOut: Bool
+    /// How far the last lap runs past its start before leading out, mm.
+    public var overlap: Double
+
+    public init(kind: LeadKind = .arc, radius: Double = 0.25.inch, sweep: Double = 90, length: Double = 0.25.inch,
+                angle: Double = 45, leadOut: Bool = true, overlap: Double = 0) {
+        self.kind = kind
+        self.radius = radius
+        self.sweep = sweep
+        self.length = length
+        self.angle = angle
+        self.leadOut = leadOut
+        self.overlap = overlap
+    }
+
+    /// The lead's main size (arc radius or line length).
+    var size: Double { kind == .arc ? radius : length }
+}
+
+public enum CornerReliefStyle: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// Cut into the corner along its bisector.
+    case dogbone
+    /// Cut past the corner along one wall, so the notch is in the other wall only.
+    case tBone
+    public var id: String { rawValue }
+    public var label: String { self == .dogbone ? "Dogbone" : "T-bone" }
+}
+
+/// Which wall of a corner a T-bone's notch goes into.
+public enum TBoneSide: String, Codable, Sendable, CaseIterable, Identifiable {
+    case longer, shorter, alongX, alongY
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .longer: "Longer side"
+        case .shorter: "Shorter side"
+        case .alongX: "Sides along X"
+        case .alongY: "Sides along Y"
+        }
+    }
+}
+
+/// Relief for inside corners the bit can't reach (so square tenons, tabs and finger joints fit).
+public struct CornerReliefSettings: Hashable, Codable, Sendable {
+    public var style: CornerReliefStyle
+    public var tBoneSide: TBoneSide
+    /// Corners up to this angle (degrees, measured across the cut-away area; a square corner is 90) are relieved.
+    public var maxCornerAngle: Double
+
+    public init(style: CornerReliefStyle = .dogbone, tBoneSide: TBoneSide = .longer, maxCornerAngle: Double = 120) {
+        self.style = style
+        self.tBoneSide = tBoneSide
+        self.maxCornerAngle = maxCornerAngle
+    }
+}
+
 public struct ProfileParams: Hashable, Codable, Sendable {
     public var side: CutSide
     public var direction: CutDirection
@@ -87,15 +165,22 @@ public struct ProfileParams: Hashable, Codable, Sendable {
     public var allowance: Double
     public var tabs: TabSettings
     public var entry: EntrySettings
+    /// Lead-in and lead-out moves on closed loops; nil = none.
+    public var leads: LeadSettings?
+    /// Dogbone or T-bone relief in inside corners; nil = corners stay as the bit cuts them.
+    public var cornerRelief: CornerReliefSettings?
 
     public init(side: CutSide = .outside, direction: CutDirection = .climb, depth: DepthSettings,
-                allowance: Double = 0, tabs: TabSettings = TabSettings(), entry: EntrySettings = EntrySettings()) {
+                allowance: Double = 0, tabs: TabSettings = TabSettings(), entry: EntrySettings = EntrySettings(),
+                leads: LeadSettings? = nil, cornerRelief: CornerReliefSettings? = nil) {
         self.side = side
         self.direction = direction
         self.depth = depth
         self.allowance = allowance
         self.tabs = tabs
         self.entry = entry
+        self.leads = leads
+        self.cornerRelief = cornerRelief
     }
 }
 
@@ -118,10 +203,12 @@ public struct PocketParams: Hashable, Codable, Sendable {
     /// Stepover override as a fraction of tool diameter; nil uses the tool's stepover.
     public var stepoverFraction: Double?
     public var entry: EntrySettings
+    /// Dogbone or T-bone relief in the wall's inside corners (islands included); nil = none.
+    public var cornerRelief: CornerReliefSettings?
 
     public init(strategy: PocketStrategy = .offset, direction: CutDirection = .climb, depth: DepthSettings,
                 allowance: Double = 0, rasterAngle: Double = 0, stepoverFraction: Double? = nil,
-                entry: EntrySettings = EntrySettings()) {
+                entry: EntrySettings = EntrySettings(), cornerRelief: CornerReliefSettings? = nil) {
         self.strategy = strategy
         self.direction = direction
         self.depth = depth
@@ -129,6 +216,7 @@ public struct PocketParams: Hashable, Codable, Sendable {
         self.rasterAngle = rasterAngle
         self.stepoverFraction = stepoverFraction
         self.entry = entry
+        self.cornerRelief = cornerRelief
     }
 }
 

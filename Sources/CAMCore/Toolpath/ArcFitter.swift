@@ -73,7 +73,9 @@ public enum ArcFitter {
     private static func collinear(_ a: Vec3, _ b: Vec3, _ c: Vec3, tolerance: Double) -> Bool {
         let ab = b - a, ac = c - a
         let l = ac.length
-        guard l > 1e-12 else { return true }
+        // Back where it started: only a detour of nothing is collinear (an out-and-back move, such as a corner
+        // relief, must stay).
+        guard l > 1e-12 else { return ab.length <= tolerance }
         // Distance of b from line ac, and b must lie between a and c.
         let t = (ab.x * ac.x + ab.y * ac.y + ab.z * ac.z) / (l * l)
         guard t > 0 && t < 1 else { return false }
