@@ -22,7 +22,7 @@ Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Window
 ![NativeCAM main window simulating the demo sign job](docs/images/app-window.png)
 
 > [!WARNING]
-> NativeCAM is early software that drives a machine with a spinning cutter. **Air-cut every new program before running it on material**, and keep a hand near the E-stop. Default feeds and speeds are conservative starting points for plywood and hardwood, not recommendations for every bit and material.
+> NativeCAM is early and incomplete. It was written almost entirely by AI ([details](#how-nativecam-was-built)), and testing on actual machines is ongoing. Because it drives a machine with a spinning cutter, **air-cut every new program before running it on material**, and keep a hand near the E-stop. Default feeds and speeds are conservative starting points for plywood and hardwood, not recommendations for every bit and material.
 
 ---
 
@@ -242,6 +242,12 @@ When adding test data from other open-source CAM projects, copy fixtures only fr
 - Clicking to select vectors in the 3D view isn't wired up yet; use the Design list in the sidebar.
 - No lead-in/lead-out arcs, dogbones, nesting or plasma (THC) support yet.
 - Canned drill cycles (`G81`–`G83`) in imported G-code aren't simulated. NativeCAM's own output expands them, so its files simulate fully.
+
+## How NativeCAM was built
+
+NativeCAM was written almost entirely by an AI coding assistant (Anthropic's Claude, using Claude Code), working from my requirements and design decisions. I chose the scope, file formats, machine defaults and G-code conventions, and I checked the results with the test suite and the simulator. I haven't reviewed every line by hand.
+
+**It's a work in progress.** Testing on actual machines is ongoing, and some features are incomplete (see [Known limits and roadmap](#known-limits-and-roadmap)). Until it has more hours on real routers, treat every program it makes as unproven: check the toolpaths in the simulator, read the G-code, and air-cut before cutting material. Bug reports, results from your own machine, and code reviews are all very welcome.
 
 ## Acknowledgements
 
