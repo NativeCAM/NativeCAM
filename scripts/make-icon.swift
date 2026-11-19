@@ -203,7 +203,7 @@ func socialPreview(icon: CGImage) -> CGImage {
 
     let left: CGFloat = 572
     drawText(ctx, "NativeCAM", at: CGPoint(x: left, y: 352), size: 112, weight: .bold, color: color(0xFFFFFF))
-    drawText(ctx, "Native Mac CAM for Avid CNC routers", at: CGPoint(x: left + 4, y: 282), size: 36,
+    drawText(ctx, "Native Mac CAM for CNC routers", at: CGPoint(x: left + 4, y: 282), size: 36,
              weight: .medium, color: color(0xD5DDEB))
     // The icon's dashed toolpath, as a divider.
     ctx.setStrokeColor(color(0x4FA3FF, 0.95))
@@ -212,7 +212,7 @@ func socialPreview(icon: CGImage) -> CGImage {
     ctx.setLineDash(phase: 0, lengths: [16, 12])
     ctx.move(to: CGPoint(x: left + 6, y: 250)); ctx.addLine(to: CGPoint(x: left + 330, y: 250))
     ctx.strokePath()
-    drawText(ctx, "2.5D & 3D toolpaths · Simulation · Mach4 G-code", at: CGPoint(x: left + 4, y: 196), size: 27,
+    drawText(ctx, "2.5D & 3D toolpaths · Simulation · G-code export", at: CGPoint(x: left + 4, y: 196), size: 27,
              weight: .regular, color: color(0x9DB4D8))
     return ctx.makeImage()!
 }
