@@ -4,25 +4,25 @@
 
 <h1 align="center">NativeCAM</h1>
 
-<p align="center"><b>A native Mac CAM app for Avid CNC routers.</b></p>
+<p align="center"><b>A native Mac CAM app for hobby and prosumer CNC routers.</b></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14%2B-000?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Apple%20silicon-arm64-555" alt="Apple silicon">
   <img src="https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white" alt="Swift 6">
-  <img src="https://img.shields.io/badge/output-Mach4%20.tap-2a6fdb" alt="Output: Mach4 .tap">
+  <img src="https://img.shields.io/badge/output-G--code%20%26%20OpenSBP-2a6fdb" alt="Output: G-code and OpenSBP">
   <img src="https://img.shields.io/badge/status-v0.1%20early-orange" alt="Status: v0.1">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
 </p>
 
-Design or import your artwork, set up the material and bits, generate 2.5D and 3D toolpaths, watch the material-removal simulation, and export Mach4 `.tap` G-code in the same dialect Avid's own posts produce.
+Design or import your artwork, set up the material and bits, generate 2.5D and 3D toolpaths, watch the material-removal simulation, and export the file your controller reads: Avid's Mach4 profile, Grbl and its relatives (grblHAL, FluidNC, Carbide Motion), LinuxCNC, Masso, Centroid CNC12, Buildbotics, RichAuto or ShopBot, or any controller through your own Vectric post. Every file is checked against the controller and read back against the toolpaths before it's saved.
 
 Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Windows VM. Free and open source under the [GPL-3.0](#license).
 
 ![NativeCAM main window simulating the demo sign job](docs/images/app-window.png)
 
 > [!WARNING]
-> NativeCAM is early and incomplete. It was written almost entirely by AI ([details](#how-nativecam-was-built)), and testing on actual machines is ongoing. Because it drives a machine with a spinning cutter, **air-cut every new program before running it on material**, and keep a hand near the E-stop. Default feeds and speeds are conservative starting points for plywood and hardwood, not recommendations for every bit and material.
+> NativeCAM is early and incomplete. It was written almost entirely by AI ([details](#how-nativecam-was-built)), and testing on actual machines is ongoing: so far only Avid Mach4 output has run on a real machine, and every other controller's output follows its documentation until owners confirm it. Because it drives a machine with a spinning cutter, **air-cut every new program before running it on material**, and keep a hand near the E-stop. Default feeds and speeds are conservative starting points for plywood and hardwood, not recommendations for every bit and material.
 
 ---
 
@@ -47,13 +47,13 @@ Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Window
   </tr>
 </table>
 
-- **Made for Avid machines.** PRO4848, PRO4896 and PRO6060 presets (PRO6060 with a VFD spindle, manual tool change and touch plate by default), or custom travel. Router or spindle, ATC, M6 or M0 tool changes, dust collector control.
+- **Works with your machine.** A catalogue of 37 routers from 20 makers (Avid, Shapeoko, X-Carve, LongMill, AltMill, Onefinity, ShopBot, Axiom and more) with a setup assistant, or any custom machine. Import your controller's own settings (Mach4's `Machine.ini`, Grbl's `$$`, LinuxCNC, FluidNC) for real speeds and accelerations. Router or spindle, tool changers, M6 or pause tool changes, dust collector control.
 - **Real stock setup.** Material size and thickness, XY zero at any corner or the centre, Z zero on the material top or the spoilboard, safe and plunge heights, park position. Work in inches or millimetres.
 - **2.5D toolpaths.** Profile, pocket, drill and V-carve, with tabs, ramps, islands, multi-pass and climb or conventional cutting.
 - **3D toolpaths.** Import STL, OBJ, 3MF, USDZ or PLY and carve it as a relief with layered roughing and drop-cutter finishing.
 - **Simulator.** A Metal-rendered heightmap carved by each bit's actual profile, with play, pause, scrub and speed control, timed like the real job. It also simulates `.tap` files from other CAM programs.
 - **Less time in the air.** Between cuts the tool lifts only as high as the material that's left, stays down across areas it has already cleared, and goes over clamps you mark. Cuts within a toolpath are ordered for short travel, and roughing passes round off corners so the machine keeps moving. **Optimize Run Order** groups toolpaths by tool to save manual tool changes, without ever cutting a part free before the work inside it is done.
-- **Realistic run times.** Estimates account for your machine's acceleration, corner speeds, Mach4's look-ahead and tool-change time, not just distance divided by feed.
+- **Realistic run times.** Estimates account for your machine's acceleration, corner speeds, the controller's look-ahead and tool-change time, not just distance divided by feed.
 - **Job checks.** Before you post, NativeCAM warns about cuts into the spoilboard or a clamp, depth beyond flute length, toolpaths outside the work area, rapids through material, out-of-range feeds or RPM, chip loads too thin for the material (with a one-click recommended feed), a run order that cuts a part free too early, and two different bits sharing one tool number (which would skip a tool change and cut with the wrong bit). On export it also reads the G-code file back: every line is checked against the controller (units, accepted codes, arc radii, dwell format, the spindle on before cutting, a lift to safe Z after each tool change), every cutting move, arc, feed, dwell and tool is compared with the toolpaths it came from, and the whole program, retracts and park included, is measured against the machine's travel.
 - **Feels like a Mac app.** Document windows, real menus and shortcuts, undo, drag-and-drop import, right-click menus, trackpad gestures, and Liquid Glass controls on macOS 26.
 
@@ -78,19 +78,19 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 
 1. Choose **File ▸ New Demo Sign Project** (2.5D) or **File ▸ New Demo Relief Project (3D)** to open a ready-made job. Both are also saved in [`examples/`](examples/) with their G-code.
 2. Press **⌘R** to simulate, and scrub the timeline at the bottom of the window.
-3. Press **⌘E** to export G-code for Mach4.
+3. Press **⌘E** to export G-code. New documents start on an Avid PRO6060 with Mach4; set up your own machine first under **Settings ▸ Machine ▸ Set Up a Machine…** (see [Setting up a machine](#setting-up-a-machine)).
 
 ## Workflow
 
 | Step | Where |
 |---|---|
-| **1. Set up the job** | Select **Material & Machine** in the sidebar. Set the material size and thickness, XY and Z zero, heights, and your Avid model. |
+| **1. Set up the job** | Select **Material & Machine** in the sidebar. Set the material size and thickness, XY and Z zero, heights, and your machine (pick a saved one or set up a new one). |
 | **2. Add artwork** | Use the shape button in the toolbar for rectangles, circles, ellipses, polygons, stars and text (any installed macOS font), or import a file with **⌘I** or by dropping it on the canvas. |
 | **3. Pick bits** | Open the **Tool Library** (**⇧⌘T**) to add or edit bits: flat, ball, bull nose, V-bit, engraving, surfacing and drill, with full geometry and feeds and speeds. |
 | **4. Create toolpaths** | Select vectors, then use the toolpath button in the toolbar or right-click them. Toolpaths run in sidebar order; drag to reorder, or choose **Toolpaths ▸ Optimize Run Order** for the fewest tool changes (**⌘Z** puts the old order back). |
 | **5. Review checks** | Warnings appear under **Checks** in the sidebar as you edit. |
 | **6. Simulate** | **⌘R** plays the material-removal simulation; **⌘.** stops it. |
-| **7. Export** | **⌘E** checks and saves a `.tap` file. **File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z raised by a height you choose, to run above the material first. **File ▸ Export Setup Sheet…** saves a printable page with the material, zero, tools in loading order, run order and times. In Mach4, load the file, zero X/Y and touch off Z with your plate. |
+| **7. Export** | **⌘E** checks and saves the file for your controller (`.tap` for Mach4, `.nc` for Grbl, `.sbp` for ShopBot, and so on; one file per tool where the controller can't stop for a tool change). **File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z raised by a height you choose, to run above the material first. **File ▸ Export Setup Sheet…** saves a printable page with the material, zero, tools in loading order, run order and times. Load the file on your controller, zero X/Y and touch off Z. |
 
 ### Supported files
 
@@ -100,7 +100,9 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 | | **SVG** | Full path grammar, transforms, viewBox units |
 | | **PDF**, **Illustrator `.ai`** | PDF-compatible `.ai` files. Handles nested groups, page rotation and the crop box. |
 | 3D models | **STL** (binary/ASCII), **OBJ**, **3MF**, **USDZ/USD**, **PLY** | 3MF includes Bambu and Prusa multi-part files. Choose the up axis, flip, size, carve depth and how far below the surface the top sits. |
-| G-code | **`.tap`**, **`.nc`** | Opened for simulation only (**File ▸ Simulate G-code File…**, or drop on the canvas) |
+| G-code | **`.tap`**, **`.nc`**, **`.gcode`**, **`.ngc`**, **`.cnc`**, ShopBot **`.sbp`** | Opened for simulation only (**File ▸ Simulate G-code File…**, or drop on the canvas) |
+| Machines | Mach4 **`Machine.ini`**, Grbl **`$$`** output, **LinuxCNC** INI, **FluidNC** `config.yaml`, **Fusion 360** `.mch` | Speeds, accelerations, travel and spindle range for a machine (**Import Controller Settings…** in Machine settings) |
+| Posts | Your own **Vectric `.pp`** | Writes G-code for a controller NativeCAM has no post for (**Use a Vectric Post…** in G-code Output) |
 | Tool libraries | **Fusion 360** `.tools` / `.json`, **Vectric** `.vtdb`, NativeCAM `.json` | **Tool Library ▸ ⋯ ▸ Import Tools…** lists the bits by the library's folders. Search, filter by type and tick the ones you want. Vendors such as Amana Tool publish their bits in these formats. Values a library leaves out (Vectric files have no cutting or shank lengths) are read from the bit's name where possible, otherwise filled conservatively and marked ⚠ (details in the tool's notes). Tapered ball nose, form, dovetail, roundover and thread bits are listed as not imported. Vectric's older `.tool` files aren't supported. |
 | Projects | **`.nativecam`** | JSON document |
 
@@ -152,7 +154,11 @@ Estimated run time: 0:06:54 (cutting 0:05:30, rapids 0:00:24, tool changes/pause
 
 `post` refuses to write a file that fails its checks unless you pass `--force`. `sim` also accepts `--cell <mm>` to set the simulation grid resolution.
 
-## Avid Mach4 G-code
+## G-code for each controller
+
+NativeCAM writes each controller's own dialect, and the export checks hold every file to that controller's rules. Pick the controller under **Job Setup ▸ Machine ▸ Controller** or with the setup assistant.
+
+### Avid Mach4
 
 The post is modelled on Avid's own Vectric post (v3) and Fusion 360 post, so files behave like the ones Avid supports:
 
@@ -193,7 +199,7 @@ G01 Z-0.0117 F30.0
 
 </details>
 
-## Other controllers (experimental)
+### Other controllers (experimental)
 
 Besides Avid's Mach4 profile, NativeCAM writes G-code for **Grbl 1.1, grblHAL, FluidNC and Carbide Motion** (Shapeoko, X-Carve, LongMill, many DIY machines), for **LinuxCNC, Masso, Centroid CNC12** (including Avid's EX controller) **and Buildbotics** (Onefinity's original controller), **RichAuto DSP** controllers (Axiom and many full-sheet routers), and **ShopBot** part files in OpenSBP. None of these has been run on real hardware yet: they follow each controller's documentation, so treat the output as unverified, run the acceptance test below, then air-cut.
 
@@ -206,7 +212,7 @@ Besides Avid's Mach4 profile, NativeCAM writes G-code for **Grbl 1.1, grblHAL, F
 | ShopBot (OpenSBP) | `.sbp` part files, not G-code: a check of ShopBot's unit setting before any move, `SA`, `MS`/`JS` speeds in units per second, `M2`/`M3`/`MZ` and `J2`/`J3`/`JZ` moves, `CG` arcs (depth-changing arcs as short moves), `PAUSE n` dwells and `END`. Spindle `TR`/`C6`/`C7` and tool change `&Tool`/`C9` follow ShopBot's own posts. Without a tool changer each tool gets its own file. NativeCAM reads `.sbp` files back to check them, and **Simulate G-code File…** opens them too |
 | RichAuto DSP | `.nc` in millimetres only, with no comments and arcs as short lines (their handling isn't documented), one file per tool |
 
-### Grbl family
+#### Grbl family
 
 These parsers are strict, so the post only writes what each one accepts:
 
@@ -306,7 +312,8 @@ When adding test data from other open-source CAM projects, copy fixtures only fr
 - PDF clipping masks and hidden layers aren't applied. EPS isn't supported.
 - Clicking to select vectors in the 3D view isn't wired up yet; use the Design list in the sidebar.
 - No lead-in/lead-out arcs, dogbones, nesting or plasma (THC) support yet.
-- Run-time estimates come from a generic planner model with Mach4's default 20-line look-ahead and reported Avid acceleration; they haven't been timed against a real machine yet.
+- Only Avid Mach4 output has run on a real machine. Every other controller's output follows its documentation (and, for Centroid, Avid's EX posts) and should be treated as unverified: run the acceptance test in check mode where there is one, then air-cut.
+- Run-time estimates use each controller's planner model and look-ahead, with acceleration from your controller's settings when you import them and labelled class defaults otherwise. They haven't been timed against a real machine yet.
 - Canned drill cycles (`G81`–`G83`) in imported G-code aren't simulated. NativeCAM's own output expands them, so its files simulate fully.
 
 ## How NativeCAM was built
@@ -336,6 +343,6 @@ Bundled third-party code keeps its own GPL-compatible licence: Clipper2 under th
 
 ## Disclaimer
 
-NativeCAM is an independent project. It is not affiliated with or endorsed by Avid CNC, Vectric, Autodesk or Newfangled Solutions (Mach4). Product names are trademarks of their owners and are used only to describe compatibility.
+NativeCAM is an independent project. It is not affiliated with or endorsed by any machine or controller maker named here (including Avid CNC, Carbide 3D, Inventables, Sienci Labs, Onefinity, ShopBot Tools, Centroid and Masso), or by Vectric, Autodesk or Newfangled Solutions (Mach4). Product names are trademarks of their owners and are used only to describe compatibility.
 
 You are responsible for checking every program before you run it. As the GPL states, NativeCAM comes with no warranty; CNC machines can damage material, tooling, the machine and people.

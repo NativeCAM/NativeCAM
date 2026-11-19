@@ -219,7 +219,9 @@ struct MachineSection: View {
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 MachineImportButtons(machine: $machine, units: units)
-                Text("Avid doesn't publish acceleration; 50 in/s² is what Mach4 reportedly ships with. Import your controller's settings (Mach4's Machine.ini, Grbl's $$) for accurate estimates.")
+                Text(machine.isLegacyAvidMach4
+                     ? "Avid doesn't publish acceleration; 50 in/s² is what Mach4 reportedly ships with. Import your Machine.ini for accurate estimates."
+                     : "Makers rarely publish acceleration. Import your controller's settings (Grbl's $$, Machine.ini, a LinuxCNC or FluidNC config) for accurate estimates.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

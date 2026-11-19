@@ -1,7 +1,7 @@
 import CAMCore
 import Foundation
 
-// nativecam-cli: generate G-code (Avid Mach4 so far) and simulate jobs without the UI.
+// nativecam-cli: generate G-code for a project's machine and simulate jobs without the UI.
 //
 //   nativecam-cli demo <out.nativecam>                       write the demo sign project
 //   nativecam-cli demo3d <out.nativecam>                     write the 3D relief demo project
