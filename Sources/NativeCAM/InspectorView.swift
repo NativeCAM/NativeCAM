@@ -177,10 +177,13 @@ struct MachineSection: View {
             Toggle("Dust collector (M\(Dialect.for(machine)?.dustOn ?? 7)/M9)", isOn: $machine.dustCollection)
         }
         Section("G-code Output") {
+            VectricPostControls(machine: $machine)
             Picker("Units", selection: $machine.outputUnits) {
                 Text("Inches (G20)").tag(LengthUnit.inch)
                 Text("Millimetres (G21)").tag(LengthUnit.mm)
             }
+            .disabled(machine.customPost != nil)
+            .help(machine.customPost != nil ? "The imported post decides the units" : "")
             Toggle("Fit arcs (G2/G3)", isOn: $machine.outputArcs)
             if machine.outputArcs {
                 LengthField(title: "Arc tolerance", mm: $machine.arcFitTolerance, units: units, minimum: 0.001)

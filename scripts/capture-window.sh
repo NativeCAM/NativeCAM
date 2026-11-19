@@ -5,6 +5,8 @@
 #   keys: select=setup|none|op:N|shape:N  simulate=0..1|stop  view=top|front|iso  tools=1  inspector=show|hide
 #         optimize=1 (Toolpaths ▸ Optimize Run Order)  views=1 (also write scroll-view frames to views.txt)
 #         importtools=/path/library.vtdb (open the Tool Library's import sheet for that file; use with tools=1)  tag=name
+#         machinesetup=<catalogue id|generic>:<machine|controller|setup|summary> (open the machine setup assistant there)
+#         vectricpp=/path/post.pp (open the Vectric post sheet for that file)
 set -euo pipefail
 DIR="$HOME/Library/Caches/NativeCAM/Captures"
 PAIRS=""

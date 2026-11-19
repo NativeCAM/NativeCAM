@@ -47,6 +47,7 @@ public enum PostProcessors {
     /// Avid's Mach4 profile (no controller set) always gets `AvidMach4Post`, unchanged; the Grbl family gets
     /// `GenericGCodePost` with its dialect.
     public static func post(for project: Project, date: Date = Date()) -> (any PostProcessor)? {
+        if let pp = project.machine.customPost { return VectricTemplatePost(project: project, pp: pp, date: date) }
         if project.machine.isLegacyAvidMach4 { return AvidMach4Post(project: project, date: date) }
         guard let dialect = Dialect.for(project.machine) else { return nil }
         return GenericGCodePost(project: project, dialect: dialect, date: date)

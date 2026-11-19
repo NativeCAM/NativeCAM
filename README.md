@@ -211,6 +211,10 @@ swift run -c release nativecam-cli acceptance --controller grbl --sender gSender
 
 Pick the controller under **Job Setup ▸ Machine ▸ Controller** (and, for Grbl, the program that sends your files), or let the setup assistant do it. Projects for any controller other than Avid's Mach4 profile are saved as format 2, which older NativeCAM builds refuse to open rather than silently writing Mach4 code.
 
+## Using your own Vectric post
+
+For a controller NativeCAM has no post for, **Job Setup ▸ G-code Output ▸ Use a Vectric Post…** runs your own Vectric `.pp` file (the one your machine's maker publishes for VCarve or Aspire) as a template. NativeCAM fills its header, tool-change, spindle and move blocks and its variable formats; writes arcs it can't express as short lines; and saves a file per tool when the post has no tool-change block. It refuses posts that need rotary wrapping or inverse-time feeds and tells you why. Before you use it, the sheet compares the post's output with NativeCAM's own post on the acceptance test program. Every exported file still goes through the export checks, which use the controller's rules when NativeCAM knows them. The project keeps its own copy of the post (saved as format 2); NativeCAM never ships or shares anyone's posts.
+
 ## Setting up a machine
 
 **Settings ▸ Machine ▸ Set Up a Machine…** (or the **Machine** menu in Job Setup) walks through what forum threads show people getting wrong:
@@ -259,7 +263,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (263 tests in 31 suites, using Swift Testing):
+Run the test suite (275 tests in 33 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

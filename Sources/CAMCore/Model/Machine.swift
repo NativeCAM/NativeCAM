@@ -157,6 +157,8 @@ public struct MachineProfile: Hashable, Codable, Sendable {
     public var libraryRevision: Int?
     /// Where values came from, keyed by `Field` name. A value with no entry was typed in or is NativeCAM's default.
     public var provenance: [String: ValueSource]?
+    /// A Vectric post the user imported, which writes this machine's G-code in place of NativeCAM's own post.
+    public var customPost: VectricPost?
 
     public var driveTier: DriveTier { drive ?? .nema34 }
     public var axisAcceleration: Vec3 {

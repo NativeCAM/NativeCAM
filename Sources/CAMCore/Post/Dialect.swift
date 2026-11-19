@@ -89,6 +89,10 @@ public struct Dialect: Hashable, Sendable {
     public var fileExtension: String = "tap"
     /// Restate `G91.1` (incremental I/J) in the safety block. Grbl accepts it only as a no-op.
     public var statesIncrementalArcs: Bool = true
+    /// The file can be read back as G-code (false for posts that write another language, such as OpenSBP).
+    public var readsBack: Bool = true
+    /// Dwells in the file all come from the toolpaths (false when a template post adds its own, say after M3).
+    public var comparesDwells: Bool = true
 
     public func coordinateDecimals(_ u: LengthUnit) -> Int { coordinateDecimals[u] ?? (u == .inch ? 4 : 3) }
     public func feedDecimals(_ u: LengthUnit) -> Int { feedDecimals[u] ?? (u == .inch ? 1 : 0) }
@@ -110,6 +114,7 @@ public struct Dialect: Hashable, Sendable {
 
     /// The dialect a machine's post writes; nil when NativeCAM has no post for its controller yet.
     public static func `for`(_ machine: MachineProfile) -> Dialect? {
+        if let pp = machine.customPost { return template(pp, machine: machine) }
         guard let controller = machine.controller else { return .avidMach4 }
         switch controller.family {
         case .grbl, .grblHAL, .fluidNC, .carbideMotion:

@@ -163,9 +163,12 @@ public extension MachineProfile {
     /// Name of the controller, for summaries and messages.
     var controllerLabel: String { controller?.family.label ?? "Avid Mach4" }
 
+    /// What writes the G-code: an imported post's name, or the controller.
+    var postLabel: String { customPost.map { $0.name.isEmpty ? "Imported Vectric post" : $0.name } ?? controllerLabel }
+
     /// The project file format this machine needs. Format 1 builds would ignore `controller` and post Mach4 code
     /// for any machine, so anything but Avid's Mach4 profile is written as format 2, which they refuse to open.
-    var requiredFormatVersion: Int { isLegacyAvidMach4 ? 1 : 2 }
+    var requiredFormatVersion: Int { isLegacyAvidMach4 && customPost == nil ? 1 : 2 }
 
     func source(of field: Field) -> ValueSource? { provenance?[field.rawValue] }
 

@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var alert: AlertInfo?
     @State private var debugSetup: DebugSetup?
+    @State private var debugPost: DebugPost?
     @Environment(ToolLibraryStore.self) private var library
     @Environment(\.openWindow) private var openWindow
 
@@ -73,6 +74,9 @@ struct ContentView: View {
         .onChange(of: workspace.showRapids) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showToolpathsWhileSimulating) { _, _ in workspace.rebuildLines(project) }
         .onReceive(NotificationCenter.default.publisher(for: DebugCapture.command)) { handleDebug($0.userInfo ?? [:]) }
+        .sheet(item: $debugPost) { d in
+            VectricPostSheet(pp: d.pp, machine: project.machine, applied: false) { _ in }
+        }
         .sheet(item: $debugSetup) { d in
             MachineSetupView(offerUseHere: true, start: (d.selection, d.step)) { _, _, _ in }
         }
@@ -177,6 +181,10 @@ struct ContentView: View {
         if let path = info["import"] as? String { importFiles([URL(fileURLWithPath: path)]) }
         if let i = info["inspector"] as? String { showInspector = i != "hide" }
         if info["optimize"] != nil { optimizeOrder() }
+        if let path = info["vectricpp"] as? String, let text = try? String(contentsOfFile: path, encoding: .utf8),
+           let pp = try? VectricPost.parse(text) {
+            debugPost = DebugPost(pp: pp)
+        }
         if let setup = info["machinesetup"] as? String {
             // "sienci-altmill-4x4:summary" opens the setup assistant on that machine at that step.
             let parts = setup.split(separator: ":").map(String.init)
@@ -423,6 +431,12 @@ struct ContentView: View {
             alert = AlertInfo(title: "Couldn't save the setup sheet", message: error.localizedDescription)
         }
     }
+}
+
+/// Developer capture state for the Vectric post sheet.
+struct DebugPost: Identifiable {
+    let id = UUID()
+    var pp: VectricPost
 }
 
 /// Developer capture state for the machine setup assistant.

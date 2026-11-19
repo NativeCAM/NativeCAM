@@ -8,7 +8,14 @@ public extension MachineProfile {
             return ["NativeCAM can't write G-code for \(controllerLabel) yet. You can set the machine up now; export will "
                 + "say so until a post for it is added."]
         }
-        let u = outputUnits
+        let u = customPost?.units ?? outputUnits
+        if let pp = customPost {
+            var lines = ["G-code written by your Vectric post “\(pp.name)”, in \(u == .inch ? "inches" : "millimetres"), as .\(pp.fileExtension) files."]
+            lines.append(pp.changesTools ? "Tool changes use the post's own tool-change block." : "The post has no tool-change block, so a job with several tools is saved as one file per tool.")
+            lines.append(pp.writesGCode ? "Every file is read back and checked against the toolpaths before it's saved."
+                : "The post doesn't write G-code NativeCAM can read back, so files aren't checked. Air-cut them first.")
+            return lines
+        }
         var lines = ["\(d.name) G-code in \(u == .inch ? "inches (G20)" : "millimetres (G21)"), saved as .\(d.fileExtension) files. "
             + "The controller won't convert units, so make sure it's set up for \(u == .inch ? "inches" : "millimetres")."]
 

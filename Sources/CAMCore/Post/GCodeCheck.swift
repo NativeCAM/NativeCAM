@@ -27,6 +27,11 @@ public enum GCodeCheck {
 
     /// All three checks.
     public static func run(_ gcode: String, toolpaths: [Toolpath], project: Project, dialect: Dialect) -> [Issue] {
+        guard dialect.readsBack else {
+            return [Issue(.warning, "\(dialect.name) doesn't write G-code NativeCAM can read back, so this file isn't checked. Air-cut it first.")]
+        }
+        var project = project
+        project.machine.outputUnits = dialect.acceptedUnits.count == 1 ? dialect.acceptedUnits.first! : project.machine.outputUnits
         var issues = lint(gcode, project: project, dialect: dialect)
         do {
             let program = try GCodeParser.parse(gcode, dwellUnit: dialect.dwell.parserUnit)
@@ -329,12 +334,12 @@ public enum GCodeCheck {
         let step = units.toMM(pow(10, -Double(dialect.coordinateDecimals(units))))
         let tol = step / 2 + 1e-6
         let feedTol = units.toMM(pow(10, -Double(dialect.feedDecimals(units)))) / 2 + 1e-6
-        let expected = expectedMoves(toolpaths, project: project, dialect: dialect)
+        let expected = expectedMoves(toolpaths, project: project, dialect: dialect).filter { dialect.comparesDwells || $0.kind != .dwell }
         var written: [(motion: Motion, start: Vec3, tool: Int, rpm: Double, line: Int)] = []
         for seg in program.segments {
             var p = seg.start
             for (k, m) in seg.motions.enumerated() {
-                if m.kind != .rapid {
+                if m.kind != .rapid && (dialect.comparesDwells || m.kind != .dwell) {
                     written.append((m, p, seg.toolNumber, seg.spindleRPM, k < seg.lines.count ? seg.lines[k] : 0))
                 }
                 if m.kind != .dwell { p = m.end }
