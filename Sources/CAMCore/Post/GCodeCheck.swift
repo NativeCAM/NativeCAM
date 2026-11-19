@@ -3,8 +3,9 @@ import Foundation
 /// Checks an exported file, the one the machine will actually run, before it's saved:
 ///
 /// - `lint`: line by line against the controller's `Dialect` and the machine (units, line length, accepted codes,
-///   arc radii, feed before the first feed move, tool numbers, dwell format, spindle on before cutting, a lift to
-///   safe Z before the first sideways move after a tool change, feed and RPM limits, a program end).
+///   rotary words for an axis the controller or machine doesn't have, arc radii, feed before the first feed move,
+///   tool numbers, dwell format, spindle on before cutting, a lift to safe Z before the first sideways move after a
+///   tool change, feed and RPM limits, a program end).
 /// - `roundTrip`: reads the file back under the dialect's rules and compares every cutting move, arc, feed, dwell,
 ///   tool and spindle speed with the toolpaths it came from. This catches post bugs a simulation of the toolpaths
 ///   can't, such as doubled coordinates or a dwell in the wrong unit.
@@ -110,7 +111,16 @@ public enum GCodeCheck {
             var gs: [Double] = [], ms: [Int] = []
             var v: [Character: Double] = [:]
             for (letter, value) in words {
-                if !dialect.allowedLetters.contains(letter) {
+                if Self.rotaryLetters.contains(letter) {
+                    if !dialect.rotaryAxes.contains(letter) {
+                        add(.error, n, "rotary \(letter)", "\(name) has no \(letter) axis, so it can't run the rotary moves "
+                            + "(\(letter) words) in this file.")
+                    } else if machine.rotary?.letter.rawValue != String(letter) {
+                        add(.warning, n, "rotary \(letter)", "This file turns a rotary \(letter) axis, but "
+                            + (machine.rotary.map { "the machine's rotary axis is \($0.letter.rawValue)." }
+                                ?? "the machine has no rotary axis set up."))
+                    }
+                } else if !dialect.allowedLetters.contains(letter) {
                     add(unsupported, n, "letter \(letter)", "\(name) doesn't accept \(letter) words.")
                 }
                 switch letter {
@@ -332,6 +342,9 @@ public enum GCodeCheck {
         if !ended { add(.error, nil, "end", "The file doesn't finish with END.") }
         return issues
     }
+
+    /// Address letters for rotary axes: A turns about X, B about Y, C about Z.
+    static let rotaryLetters: Set<Character> = ["A", "B", "C"]
 
     static func gNumber(_ g: Double) -> String {
         g == g.rounded() ? String(Int(g)) : String(format: "%g", g)

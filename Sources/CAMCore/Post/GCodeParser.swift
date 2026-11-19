@@ -3,7 +3,8 @@ import Foundation
 /// Reads RS-274 style G-code (the subset routers use) back into motions.
 ///
 /// Used to verify our own output (post → parse → compare) and to load `.tap`/`.nc` files from other CAM
-/// programs into the simulator. Coordinates come back in millimetres in the program's work coordinates.
+/// programs into the simulator. Coordinates come back in millimetres in the program's work coordinates, and a
+/// rotary A position (once the program moves A) in degrees on each motion.
 public struct GCodeProgram: Sendable {
     public struct Segment: Sendable {
         public var toolNumber: Int
@@ -68,6 +69,8 @@ public enum GCodeParser {
         var rpm = 0.0
         var tool = 0
         var pos = Vec3.zero
+        // Rotary A in degrees, unwound; nil until the program first moves it.
+        var rotary: Double?
         var warnings: [String] = []
         var warned = Set<String>()
         func warnOnce(_ s: String) { if warned.insert(s).inserted { warnings.append(s) } }
@@ -141,13 +144,19 @@ public enum GCodeParser {
                         seconds = p
                     }
                 }
-                current.motions.append(Motion(kind: .dwell, end: pos, feed: seconds))
+                current.motions.append(Motion(kind: .dwell, end: pos, feed: seconds, a: rotary))
                 current.lines.append(lineNo)
                 continue
             }
 
+            // A is in degrees whatever the units (G20 doesn't scale it).
+            if let a = values["A"] {
+                warnOnce("This program turns a rotary axis (A words). Rotary moves aren't simulated yet, so the "
+                    + "preview shows every cut as if the part never turned.")
+                if motionMode <= 1 { rotary = absolute ? a : (rotary ?? 0) + a }
+            }
             let hasAxis = values["X"] != nil || values["Y"] != nil || values["Z"] != nil
-            guard hasAxis else { continue }
+            guard hasAxis || (values["A"] != nil && motionMode <= 1) else { continue }
             func axis(_ c: Character, _ cur: Double) -> Double {
                 guard let v = values[c] else { return cur }
                 return absolute ? units.toMM(v) : cur + units.toMM(v)
@@ -155,9 +164,9 @@ public enum GCodeParser {
             let target = Vec3(axis("X", pos.x), axis("Y", pos.y), axis("Z", pos.z))
             switch motionMode {
             case 0:
-                current.motions.append(.rapid(target))
+                current.motions.append(Motion(kind: .rapid, end: target, a: rotary))
             case 1:
-                current.motions.append(.feed(target, feed))
+                current.motions.append(Motion(kind: .feed, end: target, feed: feed, a: rotary))
             case 2, 3:
                 var center: Vec2
                 if let r = values["R"] {
@@ -166,7 +175,9 @@ public enum GCodeParser {
                     let i = units.toMM(values["I"] ?? 0), j = units.toMM(values["J"] ?? 0)
                     center = arcIncremental ? Vec2(pos.x + i, pos.y + j) : Vec2(i, j)
                 }
-                current.motions.append(Motion(kind: motionMode == 2 ? .arcCW : .arcCCW, end: target, center: center, feed: feed))
+                if values["A"] != nil { warnOnce("A words on arcs (G2/G3) are ignored.") }
+                current.motions.append(Motion(kind: motionMode == 2 ? .arcCW : .arcCCW, end: target, center: center,
+                                              feed: feed, a: rotary))
             default:
                 break
             }

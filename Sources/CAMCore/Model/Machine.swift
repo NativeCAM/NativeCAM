@@ -105,6 +105,41 @@ public enum DriveTier: String, Codable, Sendable, CaseIterable, Identifiable {
     }
 }
 
+/// A rotary (4th) axis fitted to the machine: a chuck and tailstock that turn the blank while the router cuts it.
+public struct RotaryAxis: Hashable, Codable, Sendable {
+    /// The address letter the controller drives the axis with.
+    public enum Letter: String, Codable, Sendable, CaseIterable, Identifiable {
+        case a = "A", b = "B", c = "C"
+        public var id: String { rawValue }
+    }
+
+    /// The machine axis the rotation axis runs along.
+    public enum Alignment: String, Codable, Sendable, CaseIterable, Identifiable {
+        case x, y
+        public var id: String { rawValue }
+        public var label: String { self == .x ? "Along X" : "Along Y" }
+    }
+
+    /// A for Avid's rotary, whichever way it's mounted. By the usual convention A turns about X and B about Y.
+    public var letter: Letter
+    /// NativeCAM's rotary stock turns about X; Avid's rotary can also be mounted along Y.
+    public var alignment: Alignment
+    /// True when a positive move turns the other way from the right-hand rule about the axis (thumb along +X,
+    /// fingers curling the positive way). Avid's EX controller reverses the motor depending on which end the chuck
+    /// is. Getting this wrong mirrors anything wrapped around the blank.
+    public var reversed: Bool
+    /// Height of the rotation axis (the chuck centre) above the spoilboard, mm; nil until it's measured. Avid
+    /// doesn't publish it.
+    public var centerHeight: Double?
+
+    public init(letter: Letter = .a, alignment: Alignment = .x, reversed: Bool = false, centerHeight: Double? = nil) {
+        self.letter = letter
+        self.alignment = alignment
+        self.reversed = reversed
+        self.centerHeight = centerHeight
+    }
+}
+
 /// Everything the post processor and validators need to know about the machine.
 public struct MachineProfile: Hashable, Codable, Sendable {
     public var model: AvidModel
@@ -159,6 +194,8 @@ public struct MachineProfile: Hashable, Codable, Sendable {
     public var provenance: [String: ValueSource]?
     /// A Vectric post the user imported, which writes this machine's G-code in place of NativeCAM's own post.
     public var customPost: VectricPost?
+    /// The machine's rotary axis; nil when it has none (every older file).
+    public var rotary: RotaryAxis?
 
     public var driveTier: DriveTier { drive ?? .nema34 }
     public var axisAcceleration: Vec3 {

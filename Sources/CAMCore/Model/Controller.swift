@@ -168,7 +168,8 @@ public extension MachineProfile {
 
     /// The project file format this machine needs. Format 1 builds would ignore `controller` and post Mach4 code
     /// for any machine, so anything but Avid's Mach4 profile is written as format 2, which they refuse to open.
-    var requiredFormatVersion: Int { isLegacyAvidMach4 && customPost == nil ? 1 : 2 }
+    /// A rotary axis is format 2 as well: a format 1 build would drop it and post the job as a flat one.
+    var requiredFormatVersion: Int { isLegacyAvidMach4 && customPost == nil && rotary == nil ? 1 : 2 }
 
     func source(of field: Field) -> ValueSource? { provenance?[field.rawValue] }
 
