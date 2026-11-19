@@ -282,14 +282,26 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     public var shapeIDs: [UUID]
     /// A copy of the tool so the project stays self-contained if the library changes.
     public var tool: Tool
+    /// On rotary stock, the angles (degrees, in cutting order) the blank turns to before this operation cuts the
+    /// face under the spindle; the same shapes are cut at each angle. nil cuts at 0° only. Only rotary jobs take
+    /// angles.
+    public var indexAngles: [Double]?
 
     public init(id: UUID = UUID(), name: String? = nil, enabled: Bool = true, kind: OperationKind,
-                shapeIDs: [UUID], tool: Tool) {
+                shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil) {
         self.id = id
         self.name = name ?? kind.label
         self.enabled = enabled
         self.kind = kind
         self.shapeIDs = shapeIDs
         self.tool = tool
+        self.indexAngles = indexAngles
     }
+
+    /// The angles this operation cuts at on rotary stock.
+    public var rotaryAngles: [Double] { indexAngles ?? [0] }
+
+    /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
+    /// drop them and cut every face's shapes at one angle.
+    public var requiredFormatVersion: Int { indexAngles == nil ? 1 : 3 }
 }

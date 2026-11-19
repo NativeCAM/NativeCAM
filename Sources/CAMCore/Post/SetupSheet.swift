@@ -16,6 +16,30 @@ public enum SetupSheet {
         df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "yyyy-MM-dd HH:mm"
 
+        // The material and zero rows: a flat sheet, or one face of a rotary blank with Z zero on the axis.
+        let setupRows: String
+        if let blank = stock.rotary {
+            let avid = machine.isLegacyAvidMach4 || machine.controller?.family == .centroid
+            let shape = blank.shape == .cylinder ? "round, \(len(blank.diameter)) diameter" : "square bar, \(len(blank.diameter)) across"
+            setupRows = """
+            <dt>Material</dt><dd>\(esc(stock.materialName)) rotary blank: \(shape), \(len(blank.length)) long</dd>
+            <dt>XY zero</dt><dd>X at the \(RotaryOutput.xZero(stock)), Y on the rotation axis centreline</dd>
+            <dt>Z zero</dt><dd class="error">On the rotation axis\(avid ? " (Avid: Rotary tab ▸ Z Axis Touch)" : ""), not the top of the blank</dd>
+            <dt>Rotary</dt><dd>Turns on \(esc(machine.rotary?.letter.rawValue ?? "A")) between faces, with the tool at safe Z. Raise the tool clear of the chuck and tailstock before starting.</dd>
+            <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the top face (\(len(blank.radius + stock.clearanceHeight)) from the axis)</dd>
+            """
+        } else {
+            setupRows = """
+            <dt>Material</dt><dd>\(esc(stock.materialName)): \(len(stock.width)) × \(len(stock.height)) × \(len(stock.thickness))</dd>
+            <dt>XY zero</dt><dd>\(esc(stock.xyOrigin.label)) of the material</dd>
+            <dt>Z zero</dt><dd>\(esc(stock.zZero.label))</dd>
+            <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the material</dd>
+            """
+        }
+        let zeroZ = stock.rotary == nil ? "zero Z (\(esc(stock.zZero.label.lowercased())))" : "zero Z on the rotation axis"
+        let rezeroZ = stock.rotary == nil ? "re-zero Z with the touch plate" : "re-zero Z on the rotation axis"
+        let angleColumn = stock.rotary != nil
+
         var h = """
         <!doctype html>
         <html lang="en"><head><meta charset="utf-8"><title>\(esc(project.name)) setup sheet</title>
@@ -35,10 +59,7 @@ public enum SetupSheet {
         <h2>Job</h2>
         <dl>
         <dt>Machine</dt><dd>\(esc(machine.displayName)), \(esc(machine.controllerLabel)), \(esc(machine.spindle.label)), \(esc(machine.toolChange.label))</dd>
-        <dt>Material</dt><dd>\(esc(stock.materialName)): \(len(stock.width)) × \(len(stock.height)) × \(len(stock.thickness))</dd>
-        <dt>XY zero</dt><dd>\(esc(stock.xyOrigin.label)) of the material</dd>
-        <dt>Z zero</dt><dd>\(esc(stock.zZero.label))</dd>
-        <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the material</dd>
+        \(setupRows)
         <dt>G-code units</dt><dd>\(machine.outputUnits == .inch ? "Inches (G20)" : "Millimetres (G21)")</dd>
         <dt>Run time</dt><dd>About \(time(job.estimatedSeconds))</dd>
 
@@ -62,7 +83,7 @@ public enum SetupSheet {
         }
         h += "</table>\n"
 
-        h += "<h2>Run order</h2>\n<table><tr><th>#</th><th>Toolpath</th><th>Tool</th><th class=\"num\">RPM</th><th class=\"num\">Feed</th><th class=\"num\">Depth</th><th class=\"num\">Time</th></tr>\n"
+        h += "<h2>Run order</h2>\n<table><tr><th>#</th><th>Toolpath</th><th>Tool</th>\(angleColumn ? "<th class=\"num\">Angle</th>" : "")<th class=\"num\">RPM</th><th class=\"num\">Feed</th><th class=\"num\">Depth</th><th class=\"num\">Time</th></tr>\n"
         var current: Int?
         var step = 0
         for tp in job.toolpaths where !tp.isEmpty {
@@ -72,10 +93,10 @@ public enum SetupSheet {
                 case .atc: what = "Tool changer loads T\(tp.tool.number)."
                 case .manualM6, .manualPause:
                     what = current == nil
-                        ? "Load T\(tp.tool.number) \(esc(tp.tool.name)) and zero Z (\(esc(stock.zZero.label.lowercased()))) before starting."
-                        : "Change to T\(tp.tool.number) \(esc(tp.tool.name)) and re-zero Z with the touch plate, then press Cycle Start."
+                        ? "Load T\(tp.tool.number) \(esc(tp.tool.name)) and \(zeroZ) before starting."
+                        : "Change to T\(tp.tool.number) \(esc(tp.tool.name)) and \(rezeroZ), then press Cycle Start."
                 }
-                h += "<tr class=\"change\"><td></td><td colspan=\"6\">\(what)</td></tr>\n"
+                h += "<tr class=\"change\"><td></td><td colspan=\"\(angleColumn ? 7 : 6)\">\(what)</td></tr>\n"
                 current = tp.tool.number
             }
             step += 1
@@ -83,7 +104,8 @@ public enum SetupSheet {
             let maxFeed = tp.motions.filter { $0.kind == .feed || $0.kind.isArc }.map(\.feed).max() ?? 0
             let depth = tp.cuttingExtents.map { -$0.min.z } ?? 0
             let seconds = job.estimatedSeconds(toolpath: tp.id).map(time) ?? "–"
-            h += "<tr><td>\(step)</td><td>\(esc(tp.name))</td><td>T\(tp.tool.number)</td><td class=\"num\">\(Int(rpm.rounded()))\(machine.spindle == .router ? " (dial)" : "")</td>"
+            let angle = angleColumn ? "<td class=\"num\">\(tp.indexAngle.map { esc(RotaryIndex.label($0)) } ?? "–")</td>" : ""
+            h += "<tr><td>\(step)</td><td>\(esc(tp.name))</td><td>T\(tp.tool.number)</td>\(angle)<td class=\"num\">\(Int(rpm.rounded()))\(machine.spindle == .router ? " (dial)" : "")</td>"
                 + "<td class=\"num\">\(feed(maxFeed))</td><td class=\"num\">\(len(max(0, depth)))</td><td class=\"num\">\(seconds)</td></tr>\n"
         }
         h += "</table>\n"

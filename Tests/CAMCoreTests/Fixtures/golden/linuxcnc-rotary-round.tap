@@ -1,0 +1,96 @@
+(Golden {rotary})
+(Post: LinuxCNC - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(Tool changes: M6)
+(Material: Maple rotary blank, round, D=50.000, L=300.000 mm)
+(Z ZERO = CENTRE OF ROTATION)
+(Y ZERO = AXIS CENTRELINE   X ZERO = LEFT END OF THE BLANK)
+(Raise the tool clear of the chuck and tailstock before Cycle Start)
+(Safe Z 37.700)
+(T1 1/4in Upcut End Mill D6.350)
+(T2 1/8in Upcut End Mill D3.175)
+G90 G94 G17
+G21
+G91.1
+G64 P0.010
+(Change to T1 1/4in Upcut End Mill)
+(Rotary job: re-zero Z on the rotation axis, not on the blank)
+T1 M6
+G43 H1
+M8
+S18000 M3
+(Slot @ 0deg T1)
+G0 Z37.700
+G0 X100.000 Y0.000
+G0 A0.000
+G0 Z27.000
+G1 Z22.000 F750
+G1 X160.000 F2000
+G0 Z37.700
+(Slot @ 180deg T1)
+G0 Z37.700
+G0 X100.000 Y0.000
+G0 A180.000
+G0 Z27.000
+G1 Z22.000 F750
+G1 X160.000 F2000
+G0 Z37.700
+G0 Z37.700
+M5
+(Change to T2 1/8in Upcut End Mill)
+(Rotary job: re-zero Z on the rotation axis, not on the blank)
+T2 M6
+G43 H2
+G90 G94
+G64 P0.010
+M8
+S18000 M3
+(Hole @ 0deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 A0.000
+G0 Z27.000
+G1 Z13.000 F500
+G0 Z37.700
+(Hole @ 60deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 A60.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+(Hole @ 120deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 A120.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+(Hole @ 180deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 A180.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+(Hole @ 240deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 A240.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+(Hole @ 300deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 A300.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+G0 Z50.400
+G0 A0.000
+G0 X150.000 Y0.000
+M5
+M9
+M30

@@ -38,8 +38,10 @@ public enum OperationScheduler {
             let op = ops[idx]
             return project.shapes(for: op).map(\.bounds).filter { !$0.isEmpty }.map { $0.insetBy(-op.tool.radius) }
         }
+        // On rotary stock a profile to the full thickness only reaches the axis, and the blank stays in the chuck.
+        let flat = project.stock.rotary == nil
         func cutsThrough(_ op: CAMOperation) -> Bool {
-            if case let .profile(p) = op.kind { return p.depth.cutDepth >= thickness - 0.01 }
+            if flat, case let .profile(p) = op.kind { return p.depth.cutDepth >= thickness - 0.01 }
             return false
         }
         func inside(_ inner: [Rect2], _ outer: [Rect2]) -> Bool {

@@ -65,10 +65,15 @@ public enum CAMEngine {
                                     arcTolerance: min(0.005, project.machine.arcFitTolerance / 2))
         var toolpaths: [Toolpath] = []
         var issues: [JobIssue] = []
-        // Coarse model of the material as each toolpath removes it (drives links and rest-aware depths).
+        // Coarse model of the material as each toolpath removes it (drives links and rest-aware depths). A rotary job
+        // keeps one per face: each starts as the full block above the axis and other faces only ever remove material,
+        // so a face's model never shows less than is really there, and links never stay down through uncut wood.
         let stock = project.stock
-        var model = MaterialSimulator(stock: stock, cellSize: ModelRaster.cellSize(
-            for: stock.bounds, preferred: max(0.5, min(1.0, max(stock.width, stock.height) / 600)), maxCells: 1_000_000))
+        var models: [Double: MaterialSimulator] = [:]
+        func newModel() -> MaterialSimulator {
+            MaterialSimulator(stock: stock, cellSize: ModelRaster.cellSize(
+                for: stock.bounds, preferred: max(0.5, min(1.0, max(stock.width, stock.height) / 600)), maxCells: 1_000_000))
+        }
         let keepOuts = project.shapes.compactMap { s -> [KeepOut]? in
             guard let h = s.keepOutHeight else { return nil }
             return s.polylines(tolerance: 0.1).filter(\.isClosed).map { KeepOut(outline: $0, height: h) }
@@ -80,42 +85,53 @@ public enum CAMEngine {
                 issues.append(JobIssue(.warning, "No shapes selected.", operation: op.name))
                 continue
             }
-            var opContext = ctx
-            let snapshot = model.grid
-            opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
-            let generated = generate(op, shapes: shapes, context: opContext)
-            for var tp in generated {
-                if stock.retract == .minimum {
-                    let settings = LinkOptimizer.Settings(safeDistance: stock.safeDistance, clearanceZ: clearanceZ,
-                                                          stayDownLimit: max(3 * tp.tool.diameter, 10), floorZ: -stock.thickness,
-                                                          keepOuts: keepOuts)
-                    tp = LinkOptimizer.optimize(tp, model: &model, settings: settings)
-                } else {
-                    tp.forEachMotion { s, m in model.apply(m, from: s, tool: tp.tool) }
+            // Flat jobs cut once; rotary jobs once per index angle, each on its own face model.
+            let angles: [Double?] = stock.rotary == nil ? [nil] : op.rotaryAngles
+            for (position, angle) in angles.enumerated() {
+                let face = angle.map(RotaryIndex.normalized) ?? 0
+                var model = models.removeValue(forKey: face) ?? newModel()
+                defer { models[face] = model }
+                var opContext = ctx
+                let snapshot = model.grid
+                opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
+                let generated = generate(op, shapes: shapes, context: opContext)
+                for (role, var tp) in generated.enumerated() {
+                    if let angle {
+                        tp.indexAngle = angle
+                        tp.operationID = op.id
+                        tp.name += " @ \(RotaryIndex.label(angle))"
+                        if position > 0 { tp.id = RotaryIndex.toolpathID(operation: op.id, role: role, position: position) }
+                    }
+                    if stock.retract == .minimum {
+                        let settings = LinkOptimizer.Settings(safeDistance: stock.safeDistance, clearanceZ: clearanceZ,
+                                                              stayDownLimit: max(3 * tp.tool.diameter, 10), floorZ: -stock.thickness,
+                                                              keepOuts: keepOuts)
+                        tp = LinkOptimizer.optimize(tp, model: &model, settings: settings)
+                    } else {
+                        tp.forEachMotion { s, m in model.apply(m, from: s, tool: tp.tool) }
+                    }
+                    issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
+                    if project.machine.outputArcs {
+                        tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
+                    }
+                    issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
+                    issues.append(contentsOf: validate(tp, operation: op, project: project))
+                    toolpaths.append(tp)
                 }
-                issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
-                if project.machine.outputArcs {
-                    tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
-                }
-                issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
-                issues.append(contentsOf: validate(tp, operation: op, project: project))
-                toolpaths.append(tp)
             }
         }
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
-        if stock.rotary != nil {
-            issues.append(JobIssue(.warning, "NativeCAM can't cut rotary stock yet: these toolpaths treat the blank as a "
-                + "flat block and never turn the rotary axis."))
-        }
+        issues.append(contentsOf: RotaryIndex.issues(project, toolpaths: toolpaths))
         if let post = PostProcessors.post(for: project), !(post is AvidMach4Post) {
             let files = post.files(toolpaths).count
             if files > 1 {
                 let hint = post is GenericGCodePost
                     ? " (If the program that sends your files pauses on M6, name it under Machine ▸ Sends files with.)" : ""
                 issues.append(JobIssue(.info, "\(post.name) can't stop for a tool change here, so this job is saved as "
-                    + "\(files) files, one per tool. Change the bit and re-zero Z before running each.\(hint)"))
+                    + "\(files) files, one per tool. Change the bit and re-zero Z\(stock.rotary == nil ? "" : " on the rotation axis") "
+                    + "before running each.\(hint)"))
             }
         }
         let estimate = CycleTimeEstimator.estimate(toolpaths, project: project)
@@ -284,8 +300,17 @@ public enum CAMEngine {
             return issues
         }
         let deepest = -ext.min.z
+        if let blank = stock.rotary {
+            // Cutting past the axis is fine (a hole through a dowel); past the far side the tool is in the air.
+            let past = deepest - blank.diameter
+            if past > 1 {
+                issues.append(JobIssue(.warning, "Cuts \(fmt(past)) past the far side of the blank.", operation: tp.name))
+            } else if past > 1e-6 {
+                issues.append(JobIssue(.info, "Cuts through the blank.", operation: tp.name))
+            }
+        }
         // Material thickness: through-cuts are fine, but flag anything that digs well into the spoilboard.
-        let breakthrough = deepest - stock.thickness
+        let breakthrough = stock.rotary == nil ? deepest - stock.thickness : 0
         if breakthrough > 0.04.inch {
             issues.append(JobIssue(.warning, "Cuts \(fmt(breakthrough)) into the spoilboard (material is \(fmt(stock.thickness)) thick).",
                                    operation: tp.name))
@@ -296,6 +321,11 @@ public enum CAMEngine {
         if deepest > tp.tool.fluteLength + 1e-6 {
             issues.append(JobIssue(.warning, "Depth \(fmt(deepest)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))).",
                                    operation: tp.name))
+        }
+        // On rotary stock the chuck and tailstock are past the ends of the blank: the whole cutter stays inside it.
+        if stock.rotary != nil, ext.min.x < tp.tool.radius - 1e-6 || ext.max.x > stock.width - tp.tool.radius + 1e-6 {
+            issues.append(JobIssue(.error, "Cuts past an end of the blank, where the chuck or tailstock is. Keep the cutter "
+                + "inside the blank's length, clear of the chuck jaws.", operation: tp.name))
         }
         // Outside the stock in XY (allow the tool radius for outside profiles).
         let margin = tp.tool.radius + 0.01
@@ -309,7 +339,13 @@ public enum CAMEngine {
         if hi.x - lo.x > machine.travel.x || hi.y - lo.y > machine.travel.y {
             issues.append(JobIssue(.error, "Toolpath is larger than the \(machine.displayName) work area.", operation: tp.name))
         }
-        if stock.thickness + stock.clearanceHeight + tp.tool.stickout > machine.travel.z {
+        if let blank = stock.rotary {
+            // Safe Z above the spoilboard: the axis height, the blank's radius and the clearance.
+            if let center = machine.rotary?.centerHeight, center + blank.radius + stock.clearanceHeight + tp.tool.stickout > machine.travel.z {
+                issues.append(JobIssue(.warning, "Rotary centre height + blank radius + clearance + tool stickout may exceed the "
+                    + "Z travel (\(fmt(machine.travel.z))).", operation: tp.name))
+            }
+        } else if stock.thickness + stock.clearanceHeight + tp.tool.stickout > machine.travel.z {
             issues.append(JobIssue(.warning, "Material + clearance + tool stickout may exceed the Z travel (\(fmt(machine.travel.z))).",
                                    operation: tp.name))
         }
