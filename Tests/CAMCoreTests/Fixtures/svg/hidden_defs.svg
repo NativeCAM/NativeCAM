@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="100mm" height="100mm" viewBox="0 0 100 100">
+  <defs>
+    <rect id="r" width="10" height="10"/>
+    <path id="tri" d="M0 0 L10 0 L0 10z"/>
+    <clipPath id="clip"><rect width="90" height="90"/></clipPath>
+  </defs>
+  <mask id="m"><rect width="80" height="80"/></mask>
+  <symbol id="sym" viewBox="0 0 1 1"><rect width="1" height="1"/></symbol>
+  <symbol id="unused"><circle cx="50" cy="50" r="45"/></symbol>
+  <rect x="10" y="10" width="20" height="20"/>
+  <use href="#r" x="50" y="50"/>
+  <use xlink:href="#tri" transform="translate(70,10)"/>
+  <use href="#sym" x="10" y="70" width="20" height="20"/>
+  <use href="#missing"/>
+  <rect width="99" height="99" display="none"/>
+  <g style="fill:red; display: none"><circle cx="50" cy="50" r="40"/></g>
+  <text x="10" y="95">Hello</text>
+</svg>

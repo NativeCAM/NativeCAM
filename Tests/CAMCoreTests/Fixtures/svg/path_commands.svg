@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 1 user unit = 1 mm on a 200 x 200 mm page. Each path sits in its own spot so tests can find it. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="200mm" viewBox="0 0 200 200">
+  <!-- M/H/V/Z absolute: 20 x 20 square -->
+  <path d="M10 10 H30 V30 H10 Z"/>
+  <!-- relative m/h/v/z -->
+  <path d="m50 10 h20 v20 h-20 z"/>
+  <!-- implicit lineto after M -->
+  <path d="M90,10 110,10 110,30 90,30z"/>
+  <!-- implicit relative lineto after m, minus sign as separator -->
+  <path d="m130 10 20 0 0 20-20 0z"/>
+  <!-- exponents: triangle (10,50) (30,50) (20,70) -->
+  <path d="M1e1 50L3e1 50L2.0E1 7e1z"/>
+  <!-- packed decimals and exponents: trapezoid (50,50) (70,50) (65,70) (55,70) -->
+  <path d="M50 50h20l-.5e1 2e1h-1e1z"/>
+  <!-- arc with packed flags (large=1, sweep=0, x=20, y=0): half disk on (10,100)-(30,100) -->
+  <path d="M10 100a10 10 0 1020 0z"/>
+  <!-- arc "0110 10": large=0, sweep=1, dx=10, dy=10: quarter circle about (50,110) -->
+  <path d="M50 100a10 10 0 0110 10"/>
+  <!-- cubic + smooth cubic -->
+  <path d="M90 120 C90 105 110 105 110 120 S130 135 130 120"/>
+  <!-- quadratic + smooth quadratic -->
+  <path d="M140 120 Q150 100 160 120 T180 120"/>
+  <!-- relative cubic + smooth cubic -->
+  <path d="m10 150 c0 -20 20 -20 20 0 s20 20 20 0"/>
+  <!-- relative quadratic + smooth quadratic -->
+  <path d="m60 150 q10 -20 20 0 t20 0"/>
+  <!-- full ellipse from two arcs, centre (150,160), rx 20, ry 10 -->
+  <path d="M130 160 a20 10 0 1 0 40 0 a20 10 0 1 0 -40 0z"/>
+  <!-- two subpaths: 30 x 15 outer and 5 x 5 inner -->
+  <path d="M10 180 h30 v15 h-30z M15 185 h5 v5 h-5z"/>
+</svg>

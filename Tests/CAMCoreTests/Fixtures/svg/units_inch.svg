@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 4 x 2 inch page, 100 user units per inch. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="4in" height="2in" viewBox="0 0 400 200">
+  <rect x="0" y="0" width="100" height="100"/>
+  <circle cx="300" cy="100" r="50"/>
+</svg>

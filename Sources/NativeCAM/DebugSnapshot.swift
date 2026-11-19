@@ -1,0 +1,167 @@
+import AppKit
+import CAMCore
+import ImageIO
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// Developer check:
+///   NativeCAM -NativeCAMSnapshotProject <project.nativecam> -NativeCAMSnapshotOut <out-dir>
+/// renders the main window and the finished simulation offscreen to PNGs, then quits. The `-Key value` form is read
+/// from the user-defaults argument domain, so AppKit doesn't treat the paths as documents to open.
+enum DebugSnapshot {
+    static var requested: (project: String, outDir: String)? {
+        let d = UserDefaults.standard
+        guard let project = d.string(forKey: "NativeCAMSnapshotProject"), let out = d.string(forKey: "NativeCAMSnapshotOut") else { return nil }
+        return (project, out)
+    }
+
+    @MainActor
+    static func run(projectPath: String, outDir: String) {
+        // Called from App.init before any scene exists. Pumping the run loop here (outside any dispatch block)
+        // lets SwiftUI updates and main-actor tasks run between steps.
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        app.finishLaunching()
+        let out = URL(fileURLWithPath: outDir, isDirectory: true)
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: projectPath)),
+              let project = try? Project.decode(data) else {
+            print("snapshot: can't read \(projectPath)")
+            exit(1)
+        }
+        func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+        func log(_ s: String) { FileHandle.standardError.write(("snapshot: " + s + "\n").data(using: .utf8)!) }
+        log("start")
+
+        // 1. The whole window (sidebar, viewport, inspector) hosted offscreen.
+        let host = NSHostingView(rootView: ContentView(document: .constant(NativeCAMDocument(project: project)))
+            .environment(ToolLibraryStore.shared))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1500, height: 900),
+                              styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
+        window.contentView = host
+        // AppKit skips drawing fully off-screen (occluded) windows, so keep it on screen but invisible.
+        if let screen = NSScreen.main { window.setFrameOrigin(screen.visibleFrame.origin) }
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.orderFrontRegardless()
+        log("window created")
+        spin(4)
+        log("window rendered")
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("window.png"))
+        }
+        // Core Animation render of the whole frame view (includes titlebar/toolbar and layer-backed AppKit controls).
+        if let frameView = window.contentView?.superview, let layer = frameView.layer {
+            let scale = window.backingScaleFactor
+            let size = frameView.bounds.size
+            if let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
+                                   bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.scaleBy(x: scale, y: scale)
+                layer.render(in: ctx)
+                if let img = ctx.makeImage() { write(img, to: out.appendingPathComponent("window-layer.png")) }
+            }
+        }
+        window.close()
+
+        // 2. The finished simulation through the real Metal renderer.
+        let ws = Workspace()
+        ws.regenerate(project, debounce: false)
+        let deadline = Date().addingTimeInterval(30)
+        while ws.job == nil && Date() < deadline { spin(0.05) }
+        log("job ready: \(ws.job != nil)")
+        ws.startSimulation(project)
+        ws.jumpToEnd()
+        let scene = ws.viewportScene(project)
+        for preset in [ViewPreset.iso, .top] {
+            if let img = ViewportRenderer.snapshot(scene: scene, width: 1600, height: 1000, preset: preset) {
+                write(img, to: out.appendingPathComponent("sim-\(preset.rawValue).png"))
+            }
+        }
+        // 3. Toolpaths (no simulation) from the iso view.
+        ws.stopSimulation(project)
+        if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .iso) {
+            write(img, to: out.appendingPathComponent("toolpaths-iso.png"))
+        }
+        interactionSelfCheck(project, log: log)
+        print("snapshot: wrote PNGs to \(out.path)")
+        exit(0)
+    }
+
+    private static func write(_ image: CGImage, to url: URL) {
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, image, nil)
+        CGImageDestinationFinalize(dest)
+    }
+
+    /// Drives CanvasController the way the Metal view does and reports what happened.
+    @MainActor
+    static func interactionSelfCheck(_ start: Project, log: (String) -> Void) {
+        var doc = start
+        let binding = Binding(get: { doc }, set: { doc = $0 })
+        let ws = Workspace()
+        let canvas = CanvasController(project: binding, workspace: ws)
+        func check(_ name: String, _ ok: Bool) { log("check \(ok ? "PASS" : "FAIL"): \(name)") }
+        guard let pocket = doc.shapes.first(where: { $0.name == "Plaque pocket" }) else { log("no pocket"); return }
+        let tol = 0.05.inch
+        // Click on the pocket outline (top edge) selects it.
+        let edge = Vec2(pocket.position.x, pocket.position.y + 1.25.inch)
+        let took = canvas.viewportMouseDown(at: edge, tolerance: tol, modifiers: [])
+        check("click on outline selects shape", took && ws.selectedShapeIDs == [pocket.id])
+        // Drag 1" right commits one move.
+        canvas.viewportDragMoved(to: edge + Vec2(0.5.inch, 0))
+        canvas.viewportDragEnded(at: edge + Vec2(1.inch, 0), moved: true, clickCount: 1, modifiers: [])
+        let moved = doc.shape(id: pocket.id)!.position
+        check("drag moves shape by 1in", abs(moved.x - (pocket.position.x + 1.inch)) < 1e-6 && abs(moved.y - pocket.position.y) < 1e-6)
+        // Clicking inside a big outline (away from its lines) does not grab it: it's empty canvas and deselects.
+        let inside = Vec2(6.inch, 8.inch)
+        let insideHit = canvas.viewportMouseDown(at: inside, tolerance: tol, modifiers: [])
+        if !insideHit { canvas.viewportClickedEmpty(modifiers: []) }
+        check("click inside sign outline is empty canvas", !insideHit && ws.selection.isEmpty)
+        // Clicking inside a letter selects the text.
+        if let title = doc.shapes.first(where: { $0.name == "Title" }) {
+            let letters = ws.outlines(title)
+            let inLetter = letters.compactMap { $0.interiorPoint() }.first { p in letters.filter { $0.contains(p) }.count == 1 }
+            if let pt = inLetter {
+                _ = canvas.viewportMouseDown(at: pt, tolerance: tol, modifiers: [])
+                canvas.viewportDragEnded(at: pt, moved: false, clickCount: 1, modifiers: [])
+                check("click inside a letter selects text", ws.selectedShapeIDs == [title.id])
+            }
+        }
+        // Marquee around the two left mounting holes.
+        canvas.viewportMarquee([Vec2(1.inch, 1.inch), Vec2(4.inch, 1.inch), Vec2(4.inch, 17.inch), Vec2(1.inch, 17.inch)], modifiers: [])
+        let holes = Set(doc.shapes.filter { $0.name.hasPrefix("Mounting hole") && $0.position.x < 5.inch }.map(\.id))
+        check("marquee selects enclosed shapes", Set(ws.selectedShapeIDs) == holes && holes.count == 2)
+        // Shift-click adds the pocket.
+        let pocketEdge = Vec2(moved.x, moved.y + 1.25.inch)
+        _ = canvas.viewportMouseDown(at: pocketEdge, tolerance: tol, modifiers: .shift)
+        canvas.viewportDragEnded(at: pocketEdge, moved: false, clickCount: 1, modifiers: .shift)
+        check("shift-click extends selection", ws.selectedShapeIDs.count == 3)
+        // Arrow nudge (right, 1/16").
+        let arrow = String(Character(UnicodeScalar(NSRightArrowFunctionKey)!))
+        let before = doc.shape(id: pocket.id)!.position.x
+        if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                    characters: arrow, charactersIgnoringModifiers: arrow, isARepeat: false, keyCode: 124) {
+            _ = canvas.viewportKeyDown(e)
+        }
+        check("right arrow nudges 1/16in", abs(doc.shape(id: pocket.id)!.position.x - before - 0.0625.inch) < 1e-6)
+        // Copy + paste adds three offset copies; delete removes them again.
+        let count = doc.shapes.count
+        canvas.viewportPerform(.copy)
+        canvas.viewportPerform(.paste)
+        check("paste adds copies and selects them", doc.shapes.count == count + 3 && ws.selectedShapeIDs.count == 3)
+        canvas.viewportPerform(.delete)
+        check("delete removes selection", doc.shapes.count == count && ws.selection.isEmpty)
+        canvas.viewportPerform(.selectAll)
+        check("select all", ws.selectedShapeIDs.count == doc.shapes.count)
+        canvas.viewportPerform(.duplicate)
+        check("duplicate", doc.shapes.count == count * 2)
+        // Deleting a shape also detaches it from operations.
+        let opShape = doc.operations[0].shapeIDs[0]
+        ws.selection = [.shape(opShape)]
+        canvas.viewportPerform(.delete)
+        check("delete detaches from toolpaths", !doc.operations.contains { $0.shapeIDs.contains(opShape) })
+        check("context menu builds", canvas.viewportMenu(at: Vec2(12.inch, 5.inch), tolerance: tol)?.items.isEmpty == false)
+    }
+}
