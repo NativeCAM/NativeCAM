@@ -335,6 +335,7 @@ struct AppSettingsView: View {
             .tabItem { Label("General", systemImage: "gearshape") }
 
             Form {
+                MachineLibrarySection(machine: $machine)
                 MachineSection(machine: $machine, units: units)
             }
             .formStyle(.grouped)
@@ -344,6 +345,57 @@ struct AppSettingsView: View {
         .onChange(of: machine) { _, v in AppDefaults.machine = v }
         .onChange(of: units) { _, v in AppDefaults.displayUnits = v }
         .onChange(of: stock) { _, v in AppDefaults.stock = v }
+    }
+}
+
+/// The machine library in Settings: which machine new documents use, setting up more, removing one.
+struct MachineLibrarySection: View {
+    /// The default machine being edited below.
+    @Binding var machine: MachineProfile
+    @State private var library = MachineLibraryFile.library
+    @State private var settingUp = false
+
+    var body: some View {
+        Section {
+            ForEach(library.machines) { m in
+                HStack {
+                    Image(systemName: m.id == library.defaultMachine?.id ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(m.id == library.defaultMachine?.id ? Color.accentColor : .secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(m.name)
+                        Text(m.profile.controllerLabel).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if m.id != library.defaultMachine?.id {
+                        Button("Use for New Documents") { pick(m.id) }.controlSize(.small)
+                    }
+                    if library.machines.count > 1 {
+                        Button(role: .destructive) { remove(m.id) } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless).help("Remove from the library")
+                    }
+                }
+            }
+            Button("Set Up a Machine…") { settingUp = true }
+        } header: {
+            Text("Machines")
+        } footer: {
+            Text("New documents start with the checked machine; the settings below edit it. Each document keeps its own copy.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .sheet(isPresented: $settingUp) {
+            MachineSetupView(offerUseHere: false) { setup, forNew, _ in
+                MachineLibraryFile.add(setup, makeDefault: forNew)
+                reload()
+            }
+        }
+    }
+
+    private func pick(_ id: String) { MachineLibraryFile.setDefault(id); reload() }
+    private func remove(_ id: String) { MachineLibraryFile.remove(id); reload() }
+
+    private func reload() {
+        library = MachineLibraryFile.library
+        machine = AppDefaults.machine
     }
 }
 

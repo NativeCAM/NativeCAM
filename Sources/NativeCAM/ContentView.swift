@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var showInspector = true
     @State private var isDropTargeted = false
     @State private var alert: AlertInfo?
+    @State private var debugSetup: DebugSetup?
     @Environment(ToolLibraryStore.self) private var library
     @Environment(\.openWindow) private var openWindow
 
@@ -72,6 +73,9 @@ struct ContentView: View {
         .onChange(of: workspace.showRapids) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showToolpathsWhileSimulating) { _, _ in workspace.rebuildLines(project) }
         .onReceive(NotificationCenter.default.publisher(for: DebugCapture.command)) { handleDebug($0.userInfo ?? [:]) }
+        .sheet(item: $debugSetup) { d in
+            MachineSetupView(offerUseHere: true, start: (d.selection, d.step)) { _, _, _ in }
+        }
         .alert(item: $alert) { info in
             Alert(title: Text(info.title), message: Text(info.message))
         }
@@ -173,6 +177,12 @@ struct ContentView: View {
         if let path = info["import"] as? String { importFiles([URL(fileURLWithPath: path)]) }
         if let i = info["inspector"] as? String { showInspector = i != "hide" }
         if info["optimize"] != nil { optimizeOrder() }
+        if let setup = info["machinesetup"] as? String {
+            // "sienci-altmill-4x4:summary" opens the setup assistant on that machine at that step.
+            let parts = setup.split(separator: ":").map(String.init)
+            let step = parts.count > 1 ? MachineSetupView.Step.allCases.first { "\($0)" == parts[1] } ?? .machine : .machine
+            debugSetup = DebugSetup(selection: parts.first ?? "generic", step: step)
+        }
     }
 
     // MARK: Drag and drop
@@ -413,6 +423,13 @@ struct ContentView: View {
             alert = AlertInfo(title: "Couldn't save the setup sheet", message: error.localizedDescription)
         }
     }
+}
+
+/// Developer capture state for the machine setup assistant.
+struct DebugSetup: Identifiable {
+    let id = UUID()
+    var selection: String
+    var step: MachineSetupView.Step
 }
 
 struct AlertInfo: Identifiable {

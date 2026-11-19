@@ -209,7 +209,20 @@ Try a controller safely with the acceptance program, which has a square, circles
 swift run -c release nativecam-cli acceptance --controller grbl --sender gSender --units mm
 ```
 
-A project picks its controller in its machine settings (`controller` in the project file for now; a setup flow is coming). Projects for any controller other than Avid's Mach4 profile are saved as format 2, which older NativeCAM builds refuse to open rather than silently writing Mach4 code.
+Pick the controller under **Job Setup ▸ Machine ▸ Controller** (and, for Grbl, the program that sends your files), or let the setup assistant do it. Projects for any controller other than Avid's Mach4 profile are saved as format 2, which older NativeCAM builds refuse to open rather than silently writing Mach4 code.
+
+## Setting up a machine
+
+**Settings ▸ Machine ▸ Set Up a Machine…** (or the **Machine** menu in Job Setup) walks through what forum threads show people getting wrong:
+
+1. **Machine.** Pick the vendor, model and size from the built-in catalogue of hobby and prosumer routers, start from a generic machine, or import your controller's settings.
+2. **Controller.** When a machine can run more than one (an Avid PRO on Mach4 or the newer EX, which runs Centroid CNC12), choose yours. For Grbl, say which program sends the files, since that decides whether a tool change can stop the job.
+3. **Setup.** The G-code units your controller runs in, how tools change, the spindle and the dust collector, and travel for a custom machine. Import `$$` or `Machine.ini` here for real speeds and accelerations.
+4. **Summary.** A plain-language description of what NativeCAM will write ("Grbl can't stop for a tool change, so a job with several tools is saved as one file per tool…"), a preview of the acceptance test program, and a button to save it.
+
+The machine goes into your machine library (`machines.json` beside `tools.json`). New documents start with the default machine; each document keeps its own copy, and Job Setup offers the library's newer settings when a saved machine changes.
+
+Catalogue values come from each maker's published specs, with a source for every number. Makers almost never publish acceleration, so those values are labelled class defaults until you import your controller's settings. Only the developer's own Avid PRO6060 is marked as tested.
 
 ## Feature details
 

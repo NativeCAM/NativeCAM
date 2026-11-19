@@ -48,6 +48,44 @@ enum MachineLibraryFile {
         UserDefaults.standard.set(try? JSONEncoder().encode(profile.unstampedForOlderBuilds), forKey: legacyDefaultsKey)
     }
 
+    // MARK: Library management
+
+    static var library: MachineLibrary { load().library }
+
+    /// Adds a machine (replacing one with the same ID), optionally making it the default for new documents.
+    static func add(_ setup: MachineSetup, makeDefault: Bool) {
+        var (lib, writable) = load()
+        guard writable else { return }
+        if let i = lib.machines.firstIndex(where: { $0.id == setup.id }) {
+            var replaced = setup
+            replaced.revision = lib.machines[i].revision + 1
+            lib.machines[i] = replaced
+        } else {
+            lib.machines.append(setup)
+        }
+        if makeDefault { lib.defaultID = setup.id }
+        save(lib)
+        if makeDefault {
+            UserDefaults.standard.set(try? JSONEncoder().encode(setup.profile.unstampedForOlderBuilds), forKey: legacyDefaultsKey)
+        }
+    }
+
+    static func remove(_ id: String) {
+        var (lib, writable) = load()
+        guard writable, lib.machines.count > 1 else { return }
+        lib.machines.removeAll { $0.id == id }
+        if lib.defaultID == id { lib.defaultID = lib.machines.first?.id }
+        save(lib)
+    }
+
+    static func setDefault(_ id: String) {
+        var (lib, writable) = load()
+        guard writable, let setup = lib.machine(id: id) else { return }
+        lib.defaultID = id
+        save(lib)
+        UserDefaults.standard.set(try? JSONEncoder().encode(setup.profile.unstampedForOlderBuilds), forKey: legacyDefaultsKey)
+    }
+
     private static var legacyDefault: MachineProfile? {
         UserDefaults.standard.data(forKey: legacyDefaultsKey).flatMap { try? JSONDecoder().decode(MachineProfile.self, from: $0) }
     }

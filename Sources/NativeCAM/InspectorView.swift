@@ -80,9 +80,45 @@ struct SetupInspector: View {
                 LengthField(title: "Park Y", mm: $project.stock.homePosition.y, units: units)
                 LengthField(title: "Park Z", mm: $project.stock.homePosition.z, units: units, minimum: 1)
             }
+            SavedMachineSection(machine: $project.machine)
             MachineSection(machine: $project.machine, units: units)
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Use a machine from the library in this document, or set up a new one.
+struct SavedMachineSection: View {
+    @Binding var machine: MachineProfile
+    @State private var settingUp = false
+
+    var body: some View {
+        Section {
+            let library = MachineLibraryFile.library
+            LabeledContent("Machine") {
+                Menu(library.machine(id: machine.libraryID ?? "")?.name ?? machine.displayName) {
+                    ForEach(library.machines) { m in
+                        Button(m.name) { machine = m.snapshot }
+                    }
+                    Divider()
+                    Button("Set Up a New Machine…") { settingUp = true }
+                }
+                .fixedSize()
+            }
+        } footer: {
+            if let id = machine.libraryID, let saved = MachineLibraryFile.library.machine(id: id), saved.revision > (machine.libraryRevision ?? 0) {
+                HStack {
+                    Text("“\(saved.name)” has changed since this document took a copy.").font(.caption).foregroundStyle(.secondary)
+                    Button("Use the New Settings") { machine = saved.snapshot }.controlSize(.small)
+                }
+            }
+        }
+        .sheet(isPresented: $settingUp) {
+            MachineSetupView(offerUseHere: true) { setup, forNew, here in
+                MachineLibraryFile.add(setup, makeDefault: forNew)
+                if here, let saved = MachineLibraryFile.library.machine(id: setup.id) { machine = saved.snapshot }
+            }
+        }
     }
 }
 
@@ -92,6 +128,23 @@ struct MachineSection: View {
 
     var body: some View {
         Section("Machine") {
+            Picker("Controller", selection: Binding<String>(
+                get: { machine.controller?.family.rawValue ?? "" },
+                set: { raw in
+                    machine.controller = raw.isEmpty ? nil : ControllerProfile(family: ControllerFamily(rawValue: raw), sender: machine.controller?.sender)
+                })) {
+                Text("Avid Mach4 profile").tag("")
+                ForEach([ControllerFamily.grbl, .grblHAL, .fluidNC, .carbideMotion], id: \.rawValue) { Text($0.label).tag($0.rawValue) }
+                if let c = machine.controller, Dialect.for(machine) == nil {
+                    Text("\(c.family.label) (no post yet)").tag(c.family.rawValue)
+                }
+            }
+            if let family = machine.controller?.family, family == .grbl || family == .grblHAL || family == .fluidNC {
+                TextField("Sends files with", text: Binding(get: { machine.controller?.sender ?? "" }, set: { s in
+                    machine.controller?.sender = s.trimmingCharacters(in: .whitespaces).isEmpty ? nil : s
+                }), prompt: Text("gSender, CNCjs, UGS…"))
+                .help("gSender and CNCjs can pause on M6, so NativeCAM keeps a job in one file; with anything else it saves a file per tool")
+            }
             Picker("Model", selection: Binding(get: { machine.model }, set: { m in
                 machine.model = m
                 if let area = m.workArea { machine.travel = area }
@@ -114,14 +167,14 @@ struct MachineSection: View {
                 NumberField(title: "Max RPM", value: $machine.maxRPM, decimals: 0, range: 0...60000)
             }
             NumberField(title: "Spin-up dwell", value: $machine.spindleSpinUpDwell, suffix: "s", decimals: 1, range: 0...30)
-                .help("Adds G04 after M03. Leave at 0 if Mach4's spindle delay is configured.")
+                .help("Adds a dwell after the spindle starts. Leave at 0 if the controller already waits for the spindle.")
             Picker("Tool changes", selection: $machine.toolChange) {
                 ForEach(ToolChangeMode.allCases) { Text($0.label).tag($0) }
             }
-            Text(machine.toolChange.detail)
+            Text(machine.isLegacyAvidMach4 ? machine.toolChange.detail : (machine.summary.dropFirst().first ?? machine.toolChange.detail))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Toggle("Dust collector (M7/M9)", isOn: $machine.dustCollection)
+            Toggle("Dust collector (M\(Dialect.for(machine)?.dustOn ?? 7)/M9)", isOn: $machine.dustCollection)
         }
         Section("G-code Output") {
             Picker("Units", selection: $machine.outputUnits) {

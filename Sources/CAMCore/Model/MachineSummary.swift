@@ -1,0 +1,56 @@
+import Foundation
+
+public extension MachineProfile {
+    /// What NativeCAM will write for this machine and what the operator does, in plain words: units, tool changes,
+    /// spindle, dust collector and where the run-time estimate's numbers came from.
+    var summary: [String] {
+        guard let d = Dialect.for(self) else {
+            return ["NativeCAM can't write G-code for \(controllerLabel) yet. You can set the machine up now; export will "
+                + "say so until a post for it is added."]
+        }
+        let u = outputUnits
+        var lines = ["\(d.name) G-code in \(u == .inch ? "inches (G20)" : "millimetres (G21)"), saved as .\(d.fileExtension) files. "
+            + "The controller won't convert units, so make sure it's set up for \(u == .inch ? "inches" : "millimetres")."]
+
+        let post = PostProcessors.post(for: Project(machine: self))
+        if isLegacyAvidMach4 {
+            switch toolChange {
+            case .manualM6: lines.append("Tool changes call T#M6: Avid's M6 macro stops for the change. Re-zero Z with the touch plate, then press Cycle Start.")
+            case .atc: lines.append("Tool changes call T#M6 and G43 H#: the tool changer loads the tool and applies its measured length.")
+            case .manualPause: lines.append("Tool changes stop the spindle and pause with M0: change the bit, re-zero Z, then press Cycle Start.")
+            }
+        } else if let g = post as? GenericGCodePost {
+            if g.usesM6 {
+                lines.append(d.m6 == .macro
+                    ? "Tool changes call T# M6, which \(d.name) handles itself: it stops for the change."
+                    : "Tool changes call T# M6. Make sure \(controller?.sender ?? "the program that sends your files") is set to pause on M6.")
+            } else if g.splitsByTool {
+                lines.append("\(d.name) can't stop for a tool change, so a job with several tools is saved as one file per tool. "
+                    + "Change the bit and re-zero Z before running each.")
+            } else {
+                lines.append("Tool changes stop the spindle and pause with M0: change the bit, re-zero Z, then resume.")
+            }
+        }
+        lines.append(spindle == .vfdSpindle
+            ? "Spindle speed is set by the S word, \(Int(minRPM))–\(Int(maxRPM)) RPM."
+            : "The router is switched with M3 and M5; set its speed dial by hand (the file says which speed).")
+        lines.append(dustCollection
+            ? "Dust collector on with M\(d.dustOn) at the start and after each tool change, off with M9 at the end."
+            : "No dust collector output.")
+
+        func accel(_ mm: Double) -> String { u == .inch ? String(format: "%.0f in/s²", mm / LengthUnit.mmPerInch) : String(format: "%.0f mm/s²", mm) }
+        let source = self.source(of: .accelerationXY)
+        let how: String
+        switch source?.kind {
+        case .controllerSettings?: how = "from the controller's settings"
+        case .measured?: how = "measured"
+        case .vendor?: how = "published by the maker"
+        case .estimated?: how = "estimated" + (source?.note.map { ": \($0)" } ?? "")
+        default: how = accelerationXY == nil ? "NativeCAM's default, a guess" : "entered by hand"
+        }
+        let own = source?.kind == .controllerSettings || source?.kind == .measured
+        lines.append("Run-time estimates use \(accel(axisAcceleration.x)) X/Y acceleration (\(how)) and the controller's "
+            + "\(plannerLookahead)-move look-ahead." + (own ? "" : " Import the controller's settings for better numbers."))
+        return lines
+    }
+}
