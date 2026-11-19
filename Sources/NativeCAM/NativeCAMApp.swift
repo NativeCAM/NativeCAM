@@ -89,8 +89,13 @@ struct AppCommands: Commands {
                 .disabled(actions == nil)
         }
         CommandGroup(after: .saveItem) {
-            Button("Export G-code for Mach4…") { actions?.exportGCode() }
+            Button("Export G-code…") { actions?.exportGCode() }
                 .keyboardShortcut("e", modifiers: .command)
+                .disabled(actions == nil)
+            Button("Export Air Cut…") { actions?.exportAirCut() }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+                .disabled(actions == nil)
+            Button("Export Setup Sheet…") { actions?.exportSetupSheet() }
                 .disabled(actions == nil)
         }
         CommandMenu("Toolpaths") {
@@ -131,6 +136,8 @@ struct WorkspaceActions {
     var importVectors: () -> Void
     var simulateGCodeFile: () -> Void
     var exportGCode: () -> Void
+    var exportAirCut: () -> Void
+    var exportSetupSheet: () -> Void
     var regenerate: () -> Void
     var simulate: () -> Void
     var stopSimulation: () -> Void

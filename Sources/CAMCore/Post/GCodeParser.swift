@@ -10,6 +10,8 @@ public struct GCodeProgram: Sendable {
         public var spindleRPM: Double
         public var start: Vec3
         public var motions: [Motion]
+        /// Source line (1-based) of each motion.
+        public var lines: [Int] = []
     }
 
     public var segments: [Segment]
@@ -55,10 +57,12 @@ public enum GCodeParser {
         case automatic
     }
 
-    public static func parse(_ text: String, dwellUnit: DwellUnit = .automatic) throws -> GCodeProgram {
+    /// `incrementalArcCenters` is the I/J mode before any G90.1/G91.1 (incremental on Mach4, Grbl and LinuxCNC).
+    public static func parse(_ text: String, dwellUnit: DwellUnit = .automatic,
+                             incrementalArcCenters: Bool = true) throws -> GCodeProgram {
         var units: LengthUnit = .inch
         var absolute = true
-        var arcIncremental = true // G91.1 is Mach4's default
+        var arcIncremental = incrementalArcCenters
         var motionMode = 0
         var feed = 0.0
         var rpm = 0.0
@@ -138,6 +142,7 @@ public enum GCodeParser {
                     }
                 }
                 current.motions.append(Motion(kind: .dwell, end: pos, feed: seconds))
+                current.lines.append(lineNo)
                 continue
             }
 
@@ -165,6 +170,7 @@ public enum GCodeParser {
             default:
                 break
             }
+            if current.lines.count < current.motions.count { current.lines.append(lineNo) }
             pos = target
         }
         if !current.motions.isEmpty { segments.append(current) }

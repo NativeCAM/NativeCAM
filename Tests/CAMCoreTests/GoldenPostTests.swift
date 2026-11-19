@@ -69,6 +69,11 @@ struct GoldenPostTests {
     /// that rounds to a point, an arc whose rounded radii disagree (cut as a line), a dwell, a value that rounds
     /// to -0, an empty toolpath, and names that need cleaning for Mach4 comments.
     static func coverage(_ configure: (inout Project) -> Void = { _ in }) -> Data {
+        let (p, toolpaths) = coverageJob(configure)
+        return post(p, toolpaths)
+    }
+
+    static func coverageJob(_ configure: (inout Project) -> Void = { _ in }) -> (Project, [Toolpath]) {
         let lib = ToolLibrary.starter
         let endMill = lib.tool(number: 1)!, vBit = lib.tool(number: 5)!, unused = lib.tool(number: 9)!
         var p = Project(name: "Golden (coverage)", displayUnits: .inch,
@@ -113,8 +118,20 @@ struct GoldenPostTests {
             .feed(Vec3(280, 150, -19.5), 2500),
             .rapid(Vec3(280, 150, 5)),
         ])
-        return post(p, [profile, carve, carve2, empty, cleanup])
+        return (p, [profile, carve, carve2, empty, cleanup])
     }
+
+    static let coverageVariants: [(String, @Sendable (inout Project) -> Void)] = [
+        ("coverage-inch", { _ in }),
+        ("coverage-mm", { $0.machine.outputUnits = .mm }),
+        ("coverage-atc", { $0.machine.toolChange = .atc }),
+        ("coverage-pause", { $0.machine.toolChange = .manualPause }),
+        ("coverage-line-numbers", { $0.machine.lineNumbers = true }),
+        ("coverage-dwell", { $0.machine.spindleSpinUpDwell = 4 }),
+        ("coverage-router", { $0.machine.spindle = .router }),
+        ("coverage-no-dust", { $0.machine.dustCollection = false }),
+        ("coverage-spoilboard-center", { $0.stock.zZero = .machineBed; $0.stock.xyOrigin = .center }),
+    ]
 
     @Test func coverageInch() throws { try Self.check(Self.coverage(), golden: "coverage-inch") }
     @Test func coverageMillimetres() throws { try Self.check(Self.coverage { $0.machine.outputUnits = .mm }, golden: "coverage-mm") }

@@ -54,7 +54,7 @@ Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Window
 - **Simulator.** A Metal-rendered heightmap carved by each bit's actual profile, with play, pause, scrub and speed control, timed like the real job. It also simulates `.tap` files from other CAM programs.
 - **Less time in the air.** Between cuts the tool lifts only as high as the material that's left, stays down across areas it has already cleared, and goes over clamps you mark. Cuts within a toolpath are ordered for short travel, and roughing passes round off corners so the machine keeps moving. **Optimize Run Order** groups toolpaths by tool to save manual tool changes, without ever cutting a part free before the work inside it is done.
 - **Realistic run times.** Estimates account for your machine's acceleration, corner speeds, Mach4's look-ahead and tool-change time, not just distance divided by feed.
-- **Job checks.** Before you post, NativeCAM warns about cuts into the spoilboard or a clamp, depth beyond flute length, toolpaths outside the work area, rapids through material, out-of-range feeds or RPM, chip loads too thin for the material (with a one-click recommended feed), a run order that cuts a part free too early, and two different bits sharing one tool number (which would skip a tool change and cut with the wrong bit).
+- **Job checks.** Before you post, NativeCAM warns about cuts into the spoilboard or a clamp, depth beyond flute length, toolpaths outside the work area, rapids through material, out-of-range feeds or RPM, chip loads too thin for the material (with a one-click recommended feed), a run order that cuts a part free too early, and two different bits sharing one tool number (which would skip a tool change and cut with the wrong bit). On export it also reads the G-code file back: every line is checked against the controller (units, accepted codes, arc radii, dwell format, the spindle on before cutting, a lift to safe Z after each tool change), every cutting move, arc, feed, dwell and tool is compared with the toolpaths it came from, and the whole program, retracts and park included, is measured against the machine's travel.
 - **Feels like a Mac app.** Document windows, real menus and shortcuts, undo, drag-and-drop import, right-click menus, trackpad gestures, and Liquid Glass controls on macOS 26.
 
 ## Getting started
@@ -90,7 +90,7 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 | **4. Create toolpaths** | Select vectors, then use the toolpath button in the toolbar or right-click them. Toolpaths run in sidebar order; drag to reorder, or choose **Toolpaths ▸ Optimize Run Order** for the fewest tool changes (**⌘Z** puts the old order back). |
 | **5. Review checks** | Warnings appear under **Checks** in the sidebar as you edit. |
 | **6. Simulate** | **⌘R** plays the material-removal simulation; **⌘.** stops it. |
-| **7. Export** | **⌘E** saves a `.tap` file. In Mach4, load it, zero X/Y, touch off Z with your plate, and air-cut first. |
+| **7. Export** | **⌘E** checks and saves a `.tap` file. **File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z raised by a height you choose, to run above the material first. **File ▸ Export Setup Sheet…** saves a printable page with the material, zero, tools in loading order, run order and times. In Mach4, load the file, zero X/Y and touch off Z with your plate. |
 
 ### Supported files
 
@@ -118,7 +118,8 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 | Shortcut | Command | | Shortcut | Command |
 |---|---|---|---|---|
 | ⌘I | Import | | ⌘1 / ⌘2 / ⌘3 | Top / Front / Iso view |
-| ⌘E | Export G-code for Mach4 | | ⌘0 | Zoom to fit |
+| ⌘E | Export G-code | | ⌘0 | Zoom to fit |
+| ⌥⌘E | Export air cut | | | |
 | ⌘R | Simulate | | ⌥⌘I | Show or hide inspector |
 | ⌘. | Stop simulation | | ⇧⌘T | Tool library |
 | ⇧⌘R | Recalculate all toolpaths | | ⌘D | Duplicate |
@@ -130,6 +131,7 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 ```bash
 swift run -c release nativecam-cli demo demo.nativecam              # write the demo sign (demo3d: 3D relief, new: empty project)
 swift run -c release nativecam-cli post demo.nativecam -o demo.tap  # generate toolpaths, run checks, write G-code
+swift run -c release nativecam-cli post demo.nativecam --air-cut 1 --sheet demo.html  # air cut 1" up, plus a setup sheet
 swift run -c release nativecam-cli sim demo.nativecam --png out.png # simulate, report, render the result as a heightmap
 swift run -c release nativecam-cli sim other-cam-job.tap            # simulate G-code from any CAM program
 swift run -c release nativecam-cli tools vendor.vtdb -o tools.json  # convert a Fusion 360 or Vectric tool library
@@ -147,7 +149,7 @@ Estimated run time: 0:06:54 (cutting 0:05:30, rapids 0:00:24, tool changes/pause
   Cut out sign: 0:01:48
 ```
 
-`sim` also accepts `--cell <mm>` to set the simulation grid resolution.
+`post` refuses to write a file that fails its checks unless you pass `--force`. `sim` also accepts `--cell <mm>` to set the simulation grid resolution.
 
 ## Avid Mach4 G-code
 
@@ -224,7 +226,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (233 tests in 28 suites, using Swift Testing):
+Run the test suite (247 tests in 29 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

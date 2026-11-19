@@ -112,7 +112,7 @@ struct ContentView: View {
         }
         ToolbarItem(id: "export", placement: .primaryAction) {
             Button { exportGCode() } label: { Label("Export G-code", systemImage: "square.and.arrow.up") }
-                .help("Save a .tap file for Mach4 (⌘E)")
+                .help("Save G-code for the machine (⌘E)")
                 .disabled(workspace.job?.toolpaths.isEmpty ?? true)
         }
         ToolbarItem(id: "tools", placement: .primaryAction) {
@@ -132,6 +132,8 @@ struct ContentView: View {
             importVectors: importVectors,
             simulateGCodeFile: simulateGCodeFile,
             exportGCode: exportGCode,
+            exportAirCut: exportAirCut,
+            exportSetupSheet: exportSetupSheet,
             regenerate: { workspace.regenerate(project, debounce: false) },
             simulate: simulate,
             stopSimulation: { workspace.stopSimulation(project) },
@@ -288,33 +290,103 @@ struct ContentView: View {
         }
     }
 
-    private func exportGCode() {
-        guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
-        guard let post = PostProcessors.post(for: project) else {
-            alert = AlertInfo(title: "Can't export G-code",
-                              message: PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine.")
+    private func exportGCode() { export(airCut: nil) }
+
+    /// Asks how far to raise Z, then exports the job as an air cut.
+    private func exportAirCut() {
+        guard workspace.job?.toolpaths.isEmpty == false else { return }
+        let u = project.displayUnits
+        let ask = NSAlert()
+        ask.messageText = "Export Air Cut"
+        ask.informativeText = "Saves the same program with every Z raised, so the machine traces the job above the material "
+            + "with X and Y unchanged. Zero the machine as usual, and make sure Z can rise this far above your safe height."
+        let field = NSTextField(string: u == .inch ? "1.0" : "25")
+        field.frame = NSRect(x: 0, y: 0, width: 90, height: 22)
+        let label = NSTextField(labelWithString: "\(u.symbol) higher")
+        let row = NSStackView(views: [field, label])
+        row.frame = NSRect(x: 0, y: 0, width: 220, height: 24)
+        ask.accessoryView = row
+        ask.addButton(withTitle: "Continue")
+        ask.addButton(withTitle: "Cancel")
+        ask.window.initialFirstResponder = field
+        guard ask.runModal() == .alertFirstButtonReturn else { return }
+        guard let value = Double(field.stringValue.replacingOccurrences(of: ",", with: ".")), value > 0 else {
+            alert = AlertInfo(title: "Can't export an air cut", message: "Enter a height above zero.")
             return
         }
-        if job.hasErrors {
-            let errors = job.issues.filter { $0.severity == .error }.map { "• \($0.operation.map { "\($0): " } ?? "")\($0.message)" }
-            let confirm = NSAlert()
-            confirm.messageText = "This job has errors"
-            confirm.informativeText = errors.joined(separator: "\n") + "\n\nExport anyway?"
-            confirm.addButton(withTitle: "Cancel")
-            confirm.addButton(withTitle: "Export Anyway")
-            confirm.alertStyle = .critical
-            guard confirm.runModal() == .alertSecondButtonReturn else { return }
+        export(airCut: u.toMM(value))
+    }
+
+    /// Posts the job (raised for an air cut when `airCut` is set), checks the file NativeCAM is about to save, and saves it.
+    private func export(airCut height: Double?) {
+        guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
+        let output: (gcode: String, project: Project, toolpaths: [Toolpath], post: any PostProcessor)
+        if let height {
+            guard let air = AirCut.post(project, toolpaths: job.toolpaths, height: height) else { return noPost() }
+            output = air
+        } else {
+            guard let post = PostProcessors.post(for: project) else { return noPost() }
+            output = (post.post(job.toolpaths), project, job.toolpaths, post)
         }
+        // Problems in the job, then in the file itself: read back against the controller and the toolpaths.
+        let jobErrors = job.issues.filter { $0.severity == .error }.map { "• \($0.operation.map { "\($0): " } ?? "")\($0.message)" }
+        let checks = GCodeCheck.run(output.gcode, toolpaths: output.toolpaths, project: output.project, dialect: output.post.dialect)
+            .filter { $0.severity != .info }
+        let fileErrors = checks.filter { $0.severity == .error }
+        if !jobErrors.isEmpty || !checks.isEmpty {
+            var lines = jobErrors + checks.map { "• G-code: \($0.text)" }
+            if lines.count > 10 { lines = Array(lines.prefix(10)) + ["• …and \(lines.count - 10) more"] }
+            let confirm = NSAlert()
+            let errors = !jobErrors.isEmpty || !fileErrors.isEmpty
+            confirm.messageText = errors ? "This job has errors" : "Check before running this file"
+            confirm.informativeText = lines.joined(separator: "\n") + (errors ? "\n\nExport anyway?" : "")
+            if errors {
+                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Export Anyway")
+                confirm.alertStyle = .critical
+                guard confirm.runModal() == .alertSecondButtonReturn else { return }
+            } else {
+                confirm.addButton(withTitle: "Export")
+                confirm.addButton(withTitle: "Cancel")
+                confirm.alertStyle = .warning
+                guard confirm.runModal() == .alertFirstButtonReturn else { return }
+            }
+        }
+        let post = output.post
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: post.fileExtension, conformingTo: .plainText) ?? .plainText]
-        panel.nameFieldStringValue = (project.name.isEmpty ? "Untitled" : project.name) + "." + post.fileExtension
-        panel.message = "Save G-code for \(post.name)"
+        let base = project.name.isEmpty ? "Untitled" : project.name
+        panel.nameFieldStringValue = base + (height == nil ? "" : " (air cut)") + "." + post.fileExtension
+        panel.message = height == nil ? "Save G-code for \(post.name)" : "Save an air cut for \(post.name)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let gcode = post.post(job.toolpaths)
         do {
-            try gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
+            try output.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
         } catch {
             alert = AlertInfo(title: "Couldn't save G-code", message: error.localizedDescription)
+        }
+    }
+
+    private func noPost() {
+        alert = AlertInfo(title: "Can't export G-code",
+                          message: PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine.")
+    }
+
+    /// Saves a printable setup sheet: material and zero, tools in order, run order with times, clamps, open checks.
+    private func exportSetupSheet() {
+        guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
+        var checks: [GCodeCheck.Issue] = []
+        if let post = PostProcessors.post(for: project) {
+            checks = GCodeCheck.run(post.post(job.toolpaths), toolpaths: job.toolpaths, project: project, dialect: post.dialect)
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.html]
+        panel.nameFieldStringValue = (project.name.isEmpty ? "Untitled" : project.name) + " setup sheet.html"
+        panel.message = "Save a setup sheet to print or keep beside the machine"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try Data(SetupSheet.html(project: project, job: job, checks: checks).utf8).write(to: url)
+        } catch {
+            alert = AlertInfo(title: "Couldn't save the setup sheet", message: error.localizedDescription)
         }
     }
 }

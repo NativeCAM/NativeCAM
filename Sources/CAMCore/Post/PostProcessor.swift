@@ -7,12 +7,15 @@ public protocol PostProcessor: Sendable {
     var name: String { get }
     /// File extension without the dot.
     var fileExtension: String { get }
+    /// The controller dialect the post writes, which `GCodeCheck` reads the file back against.
+    var dialect: Dialect { get }
     func post(_ toolpaths: [Toolpath]) -> String
 }
 
 extension AvidMach4Post: PostProcessor {
     public var name: String { "Avid CNC Mach4" }
     public var fileExtension: String { AvidMach4Post.fileExtension }
+    public var dialect: Dialect { .avidMach4 }
 }
 
 public enum PostProcessors {

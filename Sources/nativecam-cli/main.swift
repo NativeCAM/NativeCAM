@@ -6,7 +6,12 @@ import Foundation
 //   nativecam-cli demo <out.nativecam>                       write the demo sign project
 //   nativecam-cli demo3d <out.nativecam>                     write the 3D relief demo project
 //   nativecam-cli new <out.nativecam>                        write an empty project (default PRO6060 setup)
-//   nativecam-cli post <project.nativecam> [-o out.tap]      generate toolpaths + G-code, print issues
+//   nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]
+//                                                      generate toolpaths + G-code, check the file against the
+//                                                      controller and the toolpaths, print issues. Refuses to write a
+//                                                      file that fails the checks unless --force. --air-cut raises
+//                                                      every Z by height (in the G-code's units); --sheet writes a
+//                                                      printable setup sheet
 //   nativecam-cli sim  <project.nativecam|file.tap> [--png out.png] [--cell mm] [--heights out.bin]
 //                                                      (--heights: little-endian header Int32 cols, Int32 rows,
 //                                                       Float64 cell, origin x, origin y, then Float32 heights)
@@ -61,7 +66,7 @@ case "demo", "demo3d", "new":
     }
 
 case "post":
-    guard args.count >= 2 else { fail("usage: nativecam-cli post <project.nativecam> [-o out.tap]") }
+    guard args.count >= 2 else { fail("usage: nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]") }
     let project = loadProject(args[1])
     let start = Date()
     let job = CAMEngine.generate(project)
@@ -69,11 +74,30 @@ case "post":
     for issue in job.issues {
         print("[\(issue.severity.rawValue)] \(issue.operation.map { "\($0): " } ?? "")\(issue.message)")
     }
-    guard let post = PostProcessors.post(for: project) else {
-        fail(PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine.")
+    let noPost = PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine."
+    let output: (gcode: String, project: Project, toolpaths: [Toolpath], post: any PostProcessor)
+    var stem = (args[1] as NSString).deletingPathExtension
+    if let text = option("--air-cut", in: args) {
+        guard let h = Double(text), h > 0 else { fail("--air-cut needs a height above zero") }
+        guard let air = AirCut.post(project, toolpaths: job.toolpaths, height: project.machine.outputUnits.toMM(h)) else { fail(noPost) }
+        output = air
+        stem += " (air cut)"
+    } else {
+        guard let post = PostProcessors.post(for: project) else { fail(noPost) }
+        output = (post.post(job.toolpaths), project, job.toolpaths, post)
     }
-    let gcode = post.post(job.toolpaths)
-    let out = option("-o", in: args) ?? (args[1] as NSString).deletingPathExtension + "." + post.fileExtension
+    let post = output.post, gcode = output.gcode
+    let checks = GCodeCheck.run(gcode, toolpaths: output.toolpaths, project: output.project, dialect: post.dialect)
+    for issue in checks { print("[\(issue.severity.rawValue)] G-code: \(issue.text)") }
+    if let sheet = option("--sheet", in: args) {
+        let html = SetupSheet.html(project: project, job: job, gcodeFile: nil, checks: checks)
+        do { try html.write(toFile: sheet, atomically: true, encoding: .utf8) } catch { fail("Can't write \(sheet): \(error)") }
+        print("Setup sheet -> \(sheet)")
+    }
+    if checks.contains(where: { $0.severity == .error }) && !args.contains("--force") {
+        fail("The G-code failed its checks, so it wasn't written. Fix the errors above, or pass --force to write it anyway.")
+    }
+    let out = option("-o", in: args) ?? stem + "." + post.fileExtension
     do { try gcode.write(toFile: out, atomically: true, encoding: .ascii) } catch { fail("Can't write \(out): \(error)") }
     let lines = gcode.components(separatedBy: "\r\n").count - 1
     print(String(format: "Generated %d toolpaths in %.2fs, %d lines -> %@", job.toolpaths.count, elapsed, lines, out))
