@@ -1,0 +1,84 @@
+(Golden {coverage})
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M0 pause})
+(Material: MDF intestin {half sheet} X=11.8110 Y=7.8740 Z=0.7480 in)
+(Z zero: Material top   XY zero: Lower left)
+(Program extents: X0.7874 to X11.0236  Y0.7874 to Y5.9055  Z-0.7677 to Z0.0787)
+(Safe Z = 0.5000)
+(Tools used:)
+(  T1 1/4in Upcut End Mill - D0.2500 End Mill)
+(  T5 60deg V-Bit 1/2in - D0.5000 V-Bit)
+(Toolpaths:)
+(  1. Profile {outer} - test - T1)
+(  2. V-carve insignin 60deg - T5)
+(  3. V-carve pass 2 - T5)
+(  4. Clean-up - T1)
+G00 G94 G20 G17 G90 G40 G49 G80
+G91.1
+G64
+(Load T1 1/4in Upcut End Mill and zero Z before starting)
+M07
+S18000 M03
+(Toolpath: Profile {outer} - test  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X0.7874 Y0.7874
+G00 Z0.0787
+G01 Z-0.1181 F29.5
+G01 X4.7244 F98.4
+G03 X5.5118 Y1.5748 I0.0000 J0.7874
+G01 Y5.5118
+G02 X4.7244 Y4.7244 I-0.7874 J0.0000 F78.7
+G01 X0.7874
+G02 X1.1811 Y4.3307 Z-0.1575 I0.0000 J-0.3937 F59.1
+G01 Z-0.1772
+G01 X1.5748 Y4.7256
+G01 Z0.0000 F29.5
+G04 P0.50
+G00 Z0.1969
+G00 Z0.5000
+M05
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+(Change to T5 60deg V-Bit 1/2in, re-zero Z with the touch plate, then Cycle Start)
+M00
+G90 G91.1 G64
+M07
+S24000 M03
+(Toolpath: V-carve insignin 60deg  Tool: T5 60deg V-Bit 1/2in)
+G00 Z0.5000
+G00 X5.9055 Y3.9370
+G00 Z0.0394
+G01 Z-0.0787 F39.4
+G01 X6.2992 Y4.1339 Z-0.0492 F78.7
+G01 X6.6929 Y3.9370 Z-0.0984
+G00 Z0.1969
+S16000 M03
+(Toolpath: V-carve pass 2  Tool: T5 60deg V-Bit 1/2in)
+G00 Z0.5000
+G00 X7.8740 Y3.9370
+G00 Z0.0394
+G01 Z-0.0394 F39.4
+G03 X7.4803 Y4.3307 I-0.3937 J0.0000 F78.7
+G00 Z0.1969
+G00 Z0.5000
+M05
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+(Change to T1 1/4in Upcut End Mill, re-zero Z with the touch plate, then Cycle Start)
+M00
+G90 G91.1 G64
+M07
+S18000 M03
+(Toolpath: Clean-up  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X9.8425 Y5.9055
+G00 Z0.0787
+G01 Z-0.7677 F29.5
+G01 X11.0236 F98.4
+G00 Z0.1969
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+M05
+M09
+M30

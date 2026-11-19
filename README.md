@@ -224,13 +224,15 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Development
 
-Run the test suite (204 tests in 25 suites, using Swift Testing):
+Run the test suite (223 tests in 27 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh
 ```
 
 The script adds the compiler and linker flags Swift Testing needs when only the Command Line Tools are installed, and builds the tests optimized in their own folder (`.build/tests`), because the geometry and simulation run about 100× slower unoptimized. Extra arguments pass through to `swift test`, for example `scripts/test.sh --filter PostTests`. For a debuggable, unoptimized run, use `NATIVECAM_TEST_DEBUG=1 scripts/test.sh`.
+
+**Golden G-code.** `GoldenPostTests` compares the Avid Mach4 output byte for byte (CRLF included) with files in [`Tests/CAMCoreTests/Fixtures/golden/`](Tests/CAMCoreTests/Fixtures/golden/): a hand-written job that reaches every branch of the post under each machine setting, the two demo jobs end to end, and project files saved by an earlier build ([`Fixtures/projects/`](Tests/CAMCoreTests/Fixtures/projects/)), which must keep loading and posting the same bytes. When a test fails, the new output is saved to `.build/golden-actual/`. If the change is intended, accept it with `NATIVECAM_UPDATE_GOLDENS=1 scripts/test.sh --filter GoldenPostTests` and review `git diff Tests/CAMCoreTests/Fixtures` before committing. Saved project files are never regenerated: add a new one when the format changes.
 
 Developer aids for checking UI changes without clicking through the app:
 

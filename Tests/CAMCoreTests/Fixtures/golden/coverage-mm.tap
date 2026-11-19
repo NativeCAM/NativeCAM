@@ -1,0 +1,81 @@
+(Golden {coverage})
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
+(Material: MDF intestin {half sheet} X=300.000 Y=200.000 Z=19.000 mm)
+(Z zero: Material top   XY zero: Lower left)
+(Program extents: X20.000 to X280.000  Y20.000 to Y150.000  Z-19.500 to Z2.000)
+(Safe Z = 12.700)
+(Tools used:)
+(  T1 1/4in Upcut End Mill - D6.350 End Mill)
+(  T5 60deg V-Bit 1/2in - D12.700 V-Bit)
+(Toolpaths:)
+(  1. Profile {outer} - test - T1)
+(  2. V-carve insignin 60deg - T5)
+(  3. V-carve pass 2 - T5)
+(  4. Clean-up - T1)
+G00 G94 G21 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T1 1/4in Upcut End Mill)
+T1M6
+M07
+S18000 M03
+(Toolpath: Profile {outer} - test  Tool: T1 1/4in Upcut End Mill)
+G00 Z12.700
+G00 X20.000 Y20.000
+G00 Z2.000
+G01 Z-3.000 F750
+G01 X120.000 F2500
+G03 X140.000 Y40.000 I0.000 J20.000
+G01 Y140.000
+G02 X120.000 Y120.000 I-20.000 J0.000 F2000
+G01 X20.000
+G02 X30.000 Y110.000 Z-4.000 I0.000 J-10.000 F1500
+G03 X30.001 Y110.001 Z-4.500 I-5.000 J0.000
+G01 X40.000 Y120.030
+G01 Z0.000 F750
+G04 P0.50
+G00 Z5.000
+G00 Z12.700
+M05
+(Change to Tool: T5 60deg V-Bit 1/2in)
+T5M6
+G90 G91.1 G64
+M07
+S24000 M03
+(Toolpath: V-carve insignin 60deg  Tool: T5 60deg V-Bit 1/2in)
+G00 Z12.700
+G00 X150.000 Y100.000
+G00 Z1.000
+G01 Z-2.000 F1000
+G01 X160.000 Y105.000 Z-1.250 F2000
+G01 X170.000 Y100.000 Z-2.500
+G00 Z5.000
+S16000 M03
+(Toolpath: V-carve pass 2  Tool: T5 60deg V-Bit 1/2in)
+G00 Z12.700
+G00 X200.000 Y100.000
+G00 Z1.000
+G01 Z-1.000 F1000
+G03 X190.000 Y110.000 I-10.000 J0.000 F2000
+G00 Z5.000
+G00 Z12.700
+M05
+(Change to Tool: T1 1/4in Upcut End Mill)
+T1M6
+G90 G91.1 G64
+M07
+S18000 M03
+(Toolpath: Clean-up  Tool: T1 1/4in Upcut End Mill)
+G00 Z12.700
+G00 X250.000 Y150.000
+G00 Z2.000
+G01 Z-19.500 F750
+G01 X280.000 F2500
+G00 Z5.000
+G00 Z25.400
+G00 X0.000 Y0.000
+M05
+M09
+M30

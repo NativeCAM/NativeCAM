@@ -13,6 +13,8 @@ import Foundation
 public struct AvidMach4Post: Sendable {
     public var project: Project
     public var date: Date
+    /// Time zone for the header's "Created" line (local time by default; tests pin it).
+    public var timeZone: TimeZone = .current
     public var version = "0.1"
 
     public init(project: Project, date: Date = Date()) {
@@ -36,6 +38,7 @@ public struct AvidMach4Post: Sendable {
         let df = DateFormatter()
         df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "yyyy-MM-dd HH:mm"
+        df.timeZone = timeZone
         w.comment("Created: \(df.string(from: date))")
         w.comment("Machine: \(machine.displayName), \(machine.spindle == .vfdSpindle ? "spindle" : "router"), \(machine.toolChange.label)")
         w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")

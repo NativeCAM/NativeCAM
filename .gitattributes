@@ -1,0 +1,3 @@
+# Golden G-code and saved project fixtures are compared byte for byte: never convert their line endings.
+Tests/CAMCoreTests/Fixtures/golden/** -text
+Tests/CAMCoreTests/Fixtures/projects/** -text

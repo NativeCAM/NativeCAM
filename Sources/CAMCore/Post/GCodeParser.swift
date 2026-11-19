@@ -45,7 +45,17 @@ public enum GCodeParser {
         }
     }
 
-    public static func parse(_ text: String) throws -> GCodeProgram {
+    /// What a `G4 P` value means. Controllers disagree: LinuxCNC and Mach4's manual read seconds, Masso reads
+    /// milliseconds, and Fanuc-style controls read milliseconds unless the value has a decimal point.
+    public enum DwellUnit: Sendable {
+        case seconds
+        case milliseconds
+        /// A value with a decimal point is seconds (right under every reading). A whole number of 100 or more is
+        /// milliseconds, since nobody dwells a router for minutes; smaller whole numbers are seconds.
+        case automatic
+    }
+
+    public static func parse(_ text: String, dwellUnit: DwellUnit = .automatic) throws -> GCodeProgram {
         var units: LengthUnit = .inch
         var absolute = true
         var arcIncremental = true // G91.1 is Mach4's default
@@ -113,7 +123,21 @@ public enum GCodeParser {
 
             if dwellRequested {
                 let p = values["P"] ?? 0
-                current.motions.append(Motion(kind: .dwell, end: pos, feed: p))
+                let seconds: Double
+                switch dwellUnit {
+                case .seconds: seconds = p
+                case .milliseconds: seconds = p / 1000
+                case .automatic:
+                    let written = wordText("P", in: line) ?? ""
+                    if !written.contains("."), p >= 100 {
+                        seconds = p / 1000
+                        warnOnce("Read whole-number dwells of 100 or more (like G04 P\(written)) as milliseconds, "
+                            + "the way Masso and Fanuc-style controls do.")
+                    } else {
+                        seconds = p
+                    }
+                }
+                current.motions.append(Motion(kind: .dwell, end: pos, feed: seconds))
                 continue
             }
 
@@ -157,6 +181,13 @@ public enum GCodeParser {
             if depth == 0 { out.append(ch) }
         }
         return out
+    }
+
+    /// The number written after `letter` on a comment-stripped, uppercased line, as text.
+    static func wordText(_ letter: Character, in line: String) -> String? {
+        guard let at = line.firstIndex(of: letter) else { return nil }
+        let rest = line[line.index(after: at)...].drop { $0 == " " }
+        return String(rest.prefix { $0.isNumber || $0 == "." || $0 == "-" || $0 == "+" })
     }
 
     static func tokenize(_ line: String, lineNo: Int) throws -> [(Character, Double)] {
