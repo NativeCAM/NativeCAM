@@ -17,8 +17,11 @@ enum ProfileGenerator {
         let r = tool.shape.isTapered ? tool.radius(atHeight: cutDepth) : tool.radius
         let offset = r + params.allowance
 
-        struct Contour { var loop: Polyline; var closed: Bool; var nesting: Int }
+        struct Contour { var loop: Polyline; var closed: Bool; var nesting: Int; var reliefs: [CornerRelief.Relief] = [] }
         var contours: [Contour] = []
+        // The drawn regions and the tool-centre regions offset from them (inside and outside cuts).
+        var regions: [Region] = []
+        var offsetRegions: [Region] = []
 
         switch params.side {
         case .on:
@@ -32,9 +35,9 @@ enum ProfileGenerator {
             if !open.isEmpty {
                 warnings.append("\(open.count) open vector(s) can only be cut 'On'; they were skipped. Join them into closed shapes to cut inside/outside.")
             }
-            let regions = Region.build(from: closed, fill: .evenOdd)
+            regions = Region.build(from: closed, fill: .evenOdd)
             let delta = params.side == .outside ? offset : -offset
-            let offsetRegions = regions.flatMap { $0.offset(by: delta, arcTolerance: context.arcTolerance) }
+            offsetRegions = regions.flatMap { $0.offset(by: delta, arcTolerance: context.arcTolerance) }
             if params.side == .inside && offsetRegions.isEmpty && !regions.isEmpty {
                 warnings.append("The tool (\(String(format: "%.3f", tool.diameter)) mm) is too large to fit inside the selected shape(s).")
             }
@@ -45,6 +48,26 @@ enum ProfileGenerator {
             for region in offsetRegions {
                 for loop in region.loops {
                     contours.append(Contour(loop: reverse ? loop.reversed : loop, closed: true, nesting: 0))
+                }
+            }
+        }
+
+        // Climb keeps the finished wall on the tool's right, so the waste is on its left.
+        let wasteOnLeft = params.direction == .climb
+        if let relief = params.cornerRelief {
+            if params.side == .on {
+                warnings.append("Corner reliefs need an inside or outside cut; they were skipped.")
+            } else {
+                let design = CornerRelief.Design(regions.flatMap(\.loops))
+                var blocked = 0
+                for i in contours.indices where contours[i].closed {
+                    let plan = CornerRelief.plan(contours[i].loop, wasteOnLeft: wasteOnLeft, design: design, offset: offset, settings: relief)
+                    contours[i].reliefs = plan.reliefs
+                    blocked += plan.blocked
+                }
+                if blocked > 0 {
+                    warnings.append(blocked == 1 ? "1 corner wasn't relieved: its relief would cut into nearby geometry."
+                        : "\(blocked) corners weren't relieved: their reliefs would cut into nearby geometry.")
                 }
             }
         }
@@ -69,6 +92,8 @@ enum ProfileGenerator {
                 let walker = LoopWalker(c.loop)
                 let n = max(8, Int(walker.length / 2))
                 for k in 0..<n { highest = max(highest, top(walker.point(at: walker.length * Double(k) / Double(n)), r * 0.5)) }
+                // A corner an earlier toolpath didn't reach isn't cleared: its relief would cut a full-depth sliver.
+                for relief in c.reliefs { highest = max(highest, top(relief.tip, r * 0.5)) }
             }
             if highest.isFinite, -highest > depth.startDepth + 0.05, -highest < depth.cutDepth - 0.05 {
                 depth.startDepth = -highest
@@ -111,16 +136,47 @@ enum ProfileGenerator {
         }
 
         let firstXY = ordered.first.map { $0.loop.points[0] }
-        var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: firstXY)
+        let leads = params.side == .on ? nil : params.leads
+        if params.leads != nil && params.side == .on {
+            warnings.append("Leads need an inside or outside cut; they were skipped.")
+        }
+        // With leads the toolpath starts above the first lead (not the first loop's start), so the opening rapid is
+        // dropped; the first loop is still entered as near its own start as a lead fits.
+        var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: leads == nil ? firstXY : nil)
+        var probe = firstXY
         cursor = firstXY ?? .zero
+        let clearance = ToolCentreClearance(regions: offsetRegions, inside: params.side == .inside, stock: context.stock,
+                                            toolRadius: tool.radius, keepOuts: context.keepOuts,
+                                            materialTop: context.materialTop, topLimit: -depth.startDepth)
+        let rampLength: Double? = params.entry.kind == .ramp && params.entry.rampLength > 0 ? params.entry.rampLength : nil
+        var unfitted = 0
         for contour in ordered {
+            let near = probe ?? b.position.xy
+            probe = nil
             if contour.closed {
-                let loop = contour.loop.startingNearest(b.position.xy)
+                if let leads {
+                    let relieved = CornerRelief.insert(contour.reliefs, into: contour.loop)
+                    if let lead = LeadPlanner.fit(contour.loop, relieved: relieved, near: near, settings: leads, wasteOnLeft: wasteOnLeft,
+                                                  clearance: clearance, rampLength: rampLength,
+                                                  tabs: { TabPlan(length: $0.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]) },
+                                                  linkLimit: max(3 * tool.diameter, 10), chordTolerance: context.arcTolerance) {
+                        cutClosedWithLeads(lead, levels: levels, params: paramsAtDepth, tool: tool, builder: &b, warnings: &warnings)
+                        b.retract()
+                        continue
+                    }
+                    unfitted += 1
+                }
+                // Reliefs go in after the start is chosen, so the entry never lands on a relief tip.
+                let loop = CornerRelief.insert(contour.reliefs, into: contour.loop.startingNearest(near))
                 cutClosed(loop, levels: levels, params: paramsAtDepth, tool: tool, builder: &b, warnings: &warnings)
             } else {
                 cutOpen(contour.loop, levels: levels, builder: &b)
             }
             b.retract()
+        }
+        if unfitted > 0 {
+            warnings.append(unfitted == 1 ? "Leads didn't fit on 1 loop; it's entered without one."
+                : "Leads didn't fit on \(unfitted) loops; they're entered without one.")
         }
         if params.tabs.enabled && params.side == .on {
             warnings.append("Tabs are only applied to inside/outside profiles.")
@@ -134,37 +190,12 @@ enum ProfileGenerator {
         let L = walker.length
         guard L > 1e-6 else { return }
 
-        // Tabs: evenly spaced, centred between the loop start and the next tab so entry isn't on a tab.
-        var tabIntervals: [(Double, Double)] = []
-        let tabZ = -params.depth.cutDepth + params.tabs.thickness
-        if params.tabs.enabled, params.side != .on, params.tabs.count > 0, tabZ > levels.last! {
-            let span = params.tabs.width + tool.diameter
-            if span * Double(params.tabs.count) < L * 0.8 {
-                for k in 0..<params.tabs.count {
-                    let c = L * (Double(k) + 0.5) / Double(params.tabs.count)
-                    tabIntervals.append((c - span / 2, c + span / 2))
-                }
-            } else {
-                warnings.append("A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it.")
-            }
+        let tabs = TabPlan(length: L, params: params, tool: tool, lastLevel: levels[levels.count - 1])
+        if tabs.tooShort {
+            warnings.append("A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it.")
         }
-        func inTab(_ s: Double) -> Bool {
-            guard !tabIntervals.isEmpty else { return false }
-            var d = s.truncatingRemainder(dividingBy: L)
-            if d < 0 { d += L }
-            return tabIntervals.contains { d > $0.0 && d < $0.1 }
-        }
-        func tabBreaks(_ s0: Double, _ s1: Double) -> [Double] {
-            guard !tabIntervals.isEmpty else { return [] }
-            var out: [Double] = []
-            var w = (s0 / L).rounded(.down) - 1
-            while w * L <= s1 {
-                for (a, c) in tabIntervals { out.append(w * L + a); out.append(w * L + c) }
-                w += 1
-            }
-            return out
-        }
-        func clampTab(_ s: Double, _ z: Double) -> Double { inTab(s) && z < tabZ ? tabZ : z }
+        func tabBreaks(_ s0: Double, _ s1: Double) -> [Double] { tabs.breaks(s0, s1) }
+        func clampTab(_ s: Double, _ z: Double) -> Double { tabs.clamp(s, z) }
 
         let useRamp = params.entry.kind == .ramp && params.entry.rampLength > 0
         let rampLen = min(params.entry.rampLength, L * 0.98)
@@ -192,6 +223,72 @@ enum ProfileGenerator {
                 s = s0 + L
             }
             zPrev = z
+        }
+    }
+
+    /// A closed loop entered and left on leads. The entry stays in one place on every pass, so each pass's leads cut
+    /// one stepdown deeper:
+    /// - plunge entry: plunge at the lead's start A (in the waste), lead in, a lap past the start by the overlap,
+    ///   lead out, then straight back to A at that depth and down one pass;
+    /// - ramp entry: the ramp runs from A at the previous floor along the lead-in and on along the wall, a full lap at
+    ///   depth follows, then the lead-out and the link back to A at the same depth, so no plunge at all.
+    /// When the link back isn't clear, the tool lifts and drops in at A instead (the link optimiser lowers the lift):
+    /// with a plunge entry it plunges one pass in the waste; with a ramp it drops to the floor already cut at A and the
+    /// next ramp starts from there (steeper, but each point still cuts at most one pass deeper).
+    private static func cutClosedWithLeads(_ lead: FittedLead, levels: [Double], params: ProfileParams, tool: Tool,
+                                           builder b: inout ToolpathBuilder, warnings: inout [String]) {
+        let walker = LoopWalker(lead.loop)
+        let L = walker.length
+        guard L > 1e-6, let deepest = levels.last else { return }
+        let tabs = TabPlan(length: L, params: params, tool: tool, lastLevel: deepest)
+        if tabs.tooShort {
+            warnings.append("A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it.")
+        }
+        let useRamp = params.entry.kind == .ramp && params.entry.rampLength > 0
+        let a = lead.start
+        let leadIn = lead.leadIn
+        var cumulative = [0.0]
+        for (p, q) in zip(leadIn, leadIn.dropFirst()) { cumulative.append(cumulative[cumulative.count - 1] + p.distance(to: q)) }
+        let leadInLength = cumulative[cumulative.count - 1]
+        let rampWall = lead.rampWall
+        let rampTotal = leadInLength + rampWall
+        let lapEnd = L + lead.exit
+        // Ramp: where this pass's ramp starts at A (the floor there).
+        var zPrev = -params.depth.startDepth
+        b.enter(at: Vec3(a, useRamp ? zPrev : levels[0]))
+        for (k, z) in levels.enumerated() {
+            if useRamp {
+                let z0 = zPrev
+                func rampZ(_ u: Double) -> Double { u < rampTotal ? z0 + (z - z0) * u / rampTotal : z }
+                var pts: [Vec3] = []
+                for j in 1..<leadIn.count {
+                    // The ramp's end is its own vertex when it falls on the lead.
+                    if rampTotal > cumulative[j - 1] + 1e-9, rampTotal < cumulative[j] - 1e-9 {
+                        let f = (rampTotal - cumulative[j - 1]) / (cumulative[j] - cumulative[j - 1])
+                        pts.append(Vec3(leadIn[j - 1].lerp(to: leadIn[j], f), z))
+                    }
+                    pts.append(Vec3(leadIn[j], rampZ(cumulative[j])))
+                }
+                b.follow(pts)
+                let breaks = tabs.breaks(0, lapEnd) + (rampWall > 1e-9 ? [rampWall] : [])
+                b.follow(walker.walk(from: 0, to: lapEnd, breaks: breaks) { t in
+                    tabs.clamp(t, t < rampWall ? z0 + (z - z0) * (leadInLength + t) / rampTotal : z)
+                })
+            } else {
+                b.follow(leadIn.dropFirst().map { Vec3($0, z) })
+                b.follow(walker.walk(from: 0, to: lapEnd, breaks: tabs.breaks(0, lapEnd)) { t in tabs.clamp(t, z) })
+            }
+            let exitZ = b.position.z
+            b.follow(lead.leadOut.dropFirst().map { Vec3($0, exitZ) })
+            guard k + 1 < levels.count else { break }
+            let next = levels[k + 1]
+            if lead.linkAtDepth {
+                b.feed(Vec3(a, exitZ))
+                if useRamp { zPrev = z } else { b.feed(Vec3(a, next)) }
+            } else {
+                b.retract()
+                b.enter(at: Vec3(a, useRamp ? zPrev : next))
+            }
         }
     }
 

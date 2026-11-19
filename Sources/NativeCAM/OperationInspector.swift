@@ -54,6 +54,9 @@ struct OperationInspector: View {
             }
             DepthSection(depth: Binding(get: { p.depth }, set: { var q = p; q.depth = $0; set(q) }), tool: op.tool, stock: project.stock, units: units)
             EntrySection(entry: Binding(get: { p.entry }, set: { var q = p; q.entry = $0; set(q) }), units: units)
+            LeadsSection(leads: Binding(get: { p.leads }, set: { var q = p; q.leads = $0; set(q) }), side: p.side, tool: op.tool, units: units)
+            CornersSection(relief: Binding(get: { p.cornerRelief }, set: { var q = p; q.cornerRelief = $0; set(q) }),
+                           available: p.side != .on)
             Section("Tabs") {
                 Toggle("Add tabs", isOn: Binding(get: { p.tabs.enabled }, set: { var q = p; q.tabs.enabled = $0; set(q) }))
                 if p.tabs.enabled {
@@ -82,6 +85,7 @@ struct OperationInspector: View {
             }
             DepthSection(depth: Binding(get: { p.depth }, set: { var q = p; q.depth = $0; set(q) }), tool: op.tool, stock: project.stock, units: units)
             EntrySection(entry: Binding(get: { p.entry }, set: { var q = p; q.entry = $0; set(q) }), units: units)
+            CornersSection(relief: Binding(get: { p.cornerRelief }, set: { var q = p; q.cornerRelief = $0; set(q) }), available: true)
         case let .drill(p):
             let set: (DrillParams) -> Void = { op.kind = .drill($0) }
             Section("Drilling") {
@@ -235,6 +239,119 @@ struct EntrySection: View {
             .pickerStyle(.segmented)
             if entry.kind == .ramp {
                 LengthField(title: "Ramp length", mm: $entry.rampLength, units: units, minimum: 1)
+            }
+        }
+    }
+}
+
+/// Lead-in and lead-out moves for a profile's closed loops.
+struct LeadsSection: View {
+    @Binding var leads: LeadSettings?
+    let side: CutSide
+    let tool: Tool
+    let units: LengthUnit
+
+    enum Choice: String, CaseIterable, Identifiable {
+        case none, arc, line
+        var id: String { rawValue }
+        var label: String { rawValue.capitalized }
+    }
+
+    private func value<T>(_ key: WritableKeyPath<LeadSettings, T>, _ fallback: T) -> Binding<T> {
+        Binding(get: { leads?[keyPath: key] ?? fallback }, set: { leads?[keyPath: key] = $0 })
+    }
+
+    var body: some View {
+        Section("Leads") {
+            if side == .on {
+                Text("Leads need an inside or outside cut.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Picker("Lead", selection: Binding(get: { leads.map { $0.kind == .arc ? Choice.arc : .line } ?? .none }, set: { choice in
+                    switch choice {
+                    case .none: leads = nil
+                    case .arc, .line:
+                        // New leads start at the bit's diameter.
+                        var l = leads ?? LeadSettings(radius: tool.diameter, length: tool.diameter)
+                        l.kind = choice == .arc ? .arc : .line
+                        leads = l
+                    }
+                })) {
+                    ForEach(Choice.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let l = leads {
+                    if l.kind == .arc {
+                        LengthField(title: "Radius", mm: value(\.radius, tool.diameter), units: units, help: "Radius of the arc onto the cut",
+                                    minimum: 0.1)
+                        NumberField(title: "Sweep", value: value(\.sweep, 90), suffix: "°", decimals: 0, range: 15...180)
+                            .help("How far round the arc turns onto the cut")
+                    } else {
+                        LengthField(title: "Length", mm: value(\.length, tool.diameter), units: units, minimum: 0.1)
+                        NumberField(title: "Angle", value: value(\.angle, 45), suffix: "°", decimals: 0, range: 10...90)
+                            .help("Angle between the lead and the cut; 90° comes in square to it")
+                    }
+                    Toggle("Lead out", isOn: value(\.leadOut, true))
+                    LengthField(title: "Overlap", mm: value(\.overlap, 0), units: units,
+                                help: "How far the last lap runs past its start before leading out, to hide the seam", minimum: 0)
+                    Text("Each loop starts and ends with a short move in the waste, so the bit never plunges or stops against the finished edge. Ramps run along the lead.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+/// Dogbone and T-bone relief for inside corners.
+struct CornersSection: View {
+    @Binding var relief: CornerReliefSettings?
+    /// False for "On" profiles, which have no waste side.
+    let available: Bool
+
+    enum Choice: String, CaseIterable, Identifiable {
+        case rounded, dogbone, tBone
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .rounded: "Rounded"
+            case .dogbone: "Dogbone"
+            case .tBone: "T-bone"
+            }
+        }
+    }
+
+    var body: some View {
+        Section("Corners") {
+            if !available {
+                Text("Corner reliefs need an inside or outside cut.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Picker("Inside corners", selection: Binding(get: {
+                    relief.map { $0.style == .dogbone ? Choice.dogbone : .tBone } ?? .rounded
+                }, set: { choice in
+                    switch choice {
+                    case .rounded: relief = nil
+                    case .dogbone, .tBone:
+                        var r = relief ?? CornerReliefSettings()
+                        r.style = choice == .dogbone ? .dogbone : .tBone
+                        relief = r
+                    }
+                })) {
+                    ForEach(Choice.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let r = relief {
+                    if r.style == .tBone {
+                        Picker("T-bone side", selection: Binding(get: { r.tBoneSide }, set: { relief?.tBoneSide = $0 })) {
+                            ForEach(TBoneSide.allCases) { Text($0.label).tag($0) }
+                        }
+                    }
+                    NumberField(title: "Corners up to", value: Binding(get: { r.maxCornerAngle }, set: { relief?.maxCornerAngle = $0 }),
+                                suffix: "°", decimals: 0, range: 10...170)
+                        .help("A square corner is 90°. Flatter corners are left rounded.")
+                    Text("Cuts just past each inside corner the bit can't reach, so square parts fit. A dogbone cuts into the corner; a T-bone cuts into one side only, which is easier to hide and better for slots about as wide as the bit.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

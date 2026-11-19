@@ -41,6 +41,22 @@ enum PocketGenerator {
         // Feed links are allowed only if they stay inside this (slightly grown) safe area.
         let safe = boundary.flatMap { $0.offset(by: 0.01, arcTolerance: context.arcTolerance) }
 
+        // Corner reliefs on the wall rings: the boundary and its islands (region loops have the pocket on their left).
+        var reliefs: [CornerRelief.Relief] = []
+        if let relief = params.cornerRelief {
+            let design = CornerRelief.Design(regions.flatMap(\.loops))
+            var blocked = 0
+            for loop in boundary.flatMap(\.loops) {
+                let plan = CornerRelief.plan(loop, wasteOnLeft: true, design: design, offset: r + params.allowance, settings: relief)
+                reliefs += plan.reliefs
+                blocked += plan.blocked
+            }
+            if blocked > 0 {
+                warnings.append(blocked == 1 ? "1 corner wasn't relieved: its relief would cut into nearby geometry."
+                    : "\(blocked) corners weren't relieved: their reliefs would cut into nearby geometry.")
+            }
+        }
+
         switch params.strategy {
         case .offset:
             let tree = ringTree(boundary, stepover: stepover, toolRadius: r, arcTolerance: context.arcTolerance)
@@ -49,7 +65,8 @@ enum PocketGenerator {
             var zAbove = -params.depth.startDepth
             for z in levels {
                 var first = true
-                cutTree(tree, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
+                cutTree(tree, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, reliefs: reliefs,
+                        first: &first, builder: &b)
                 b.retract()
                 zAbove = z
             }
@@ -63,7 +80,8 @@ enum PocketGenerator {
                 for region in boundary {
                     for loop in region.loops {
                         let oriented = params.direction == .climb ? loop : loop.reversed
-                        cutLoop(oriented, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
+                        cutLoop(oriented, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, reliefs: reliefs,
+                                first: &first, builder: &b)
                     }
                 }
                 b.retract()
@@ -132,8 +150,9 @@ enum PocketGenerator {
         return roots
     }
 
+    /// `reliefs` belong to the wall rings, the top level of the tree; inner rings never get any.
     private static func cutTree(_ nodes: [RingNode], z: Double, zAbove: Double, params: PocketParams, stepover: Double, safe: [Region],
-                                first: inout Bool, builder b: inout ToolpathBuilder) {
+                                reliefs: [CornerRelief.Relief] = [], first: inout Bool, builder b: inout ToolpathBuilder) {
         // Inside-out: finish each branch's inner rings before its enclosing ring.
         let ordered = nearestNeighborOrder(nodes, from: b.position.xy,
                                            start: { $0.region.outer.closestPoint(to: b.position.xy).point },
@@ -145,16 +164,18 @@ enum PocketGenerator {
             for loop in loops {
                 // Region loops: outer CCW / holes CW = climb for inside-out clearing with an M3 spindle.
                 let oriented = params.direction == .climb ? loop : loop.reversed
-                cutLoop(oriented, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
+                cutLoop(oriented, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, reliefs: reliefs,
+                        first: &first, builder: &b)
             }
         }
     }
 
     /// Cuts one closed loop at depth z, linking from the current position when safe.
-    /// `zAbove` is the floor of the previous pass (where a ramp starts).
+    /// `zAbove` is the floor of the previous pass (where a ramp starts). Corner reliefs at the loop's vertices are
+    /// added after its start is chosen, so the entry never lands on a relief tip.
     static func cutLoop(_ loopIn: Polyline, z: Double, zAbove: Double, params: PocketParams, stepover: Double, safe: [Region],
-                        first: inout Bool, builder b: inout ToolpathBuilder) {
-        let loop = loopIn.startingNearest(b.position.xy)
+                        reliefs: [CornerRelief.Relief] = [], first: inout Bool, builder b: inout ToolpathBuilder) {
+        let loop = CornerRelief.insert(reliefs, into: loopIn.startingNearest(b.position.xy))
         guard let startXY = loop.points.first else { return }
         let start = Vec3(startXY, z)
         let atDepth = abs(b.position.z - z) < 1e-6

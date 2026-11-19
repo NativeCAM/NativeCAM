@@ -6,6 +6,7 @@
 - [Supported files](#supported-files)
 - [Keyboard and mouse](#keyboard-and-mouse)
 - [Toolpaths and features](#toolpaths-and-features)
+- [Leads and corners](#leads-and-corners)
 
 ## Workflow
 
@@ -60,8 +61,8 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 | Area | Details |
 |---|---|
 | Stock | Material size and thickness, XY zero at any corner or the centre, Z zero on the material top or the spoilboard, safe and plunge heights, park position. Inches or millimetres. |
-| Profile | Inside, outside or on the line; climb or conventional; multi-pass; ramp entry; tabs; allowance; holes cut before outside profiles |
-| Pocket | Offset or raster clearing, islands, safe feed links between regions. Inner clearing rings get rounded corners (within a set tolerance, 0.25 mm by default); the wall pass stays exact. |
+| Profile | Inside, outside or on the line; climb or conventional; multi-pass; ramp entry; arc or line leads in and out; dogbone or T-bone corners; tabs; allowance; holes cut before outside profiles. See [Leads and corners](#leads-and-corners). |
+| Pocket | Offset or raster clearing, islands, safe feed links between regions, dogbone or T-bone corners. Inner clearing rings get rounded corners (within a set tolerance, 0.25 mm by default); the wall pass stays exact. |
 | Drill | Peck, chip-break and dwell. Canned cycles are expanded into plain moves. |
 | V-carve | Maximal inscribed circles, flat-depth cap, optional flat-area clearing tool, multi-pass |
 | 3D roughing | Layered clearing with an end mill, leaving an allowance for finishing. Layer outlines follow the surface between grid samples instead of stepping cell by cell, so the machine doesn't crawl through stair-step corners. Machine inside the model outline, inside **selected vectors** such as the cut-out outline (chosen automatically when a cut-out surrounds the model, so scrap isn't machined), or across the whole material. |
@@ -73,3 +74,22 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 | Run-time estimate | See [Run-time estimates](machines.md#run-time-estimates). |
 | Tools | Flat, ball, bull nose, V-bit, engraving (tip diameter), surfacing and drill. Flute length, shank, stickout, flute count and direction, feeds and speeds, chip-load calculator checked against chart chip loads for the material type, compression bits whose first pass clears the upcut length, live profile drawing, import from Fusion 360 and Vectric libraries. Saved to `~/Library/Application Support/NativeCAM/tools.json`. |
 | Simulator | A Metal-rendered heightmap carved by the true tool shape (flat, ball, bull nose, V), with through-cuts, a tool marker, play, pause, scrub and speed control, timed like the real job, and detection of rapids through material. It also simulates G-code and ShopBot files from other programs. |
+
+## Leads and corners
+
+**Leads** (Profile ▸ Leads) start and end each closed loop of an inside or outside profile with a short move in the waste, so the bit never plunges or stops against the finished edge.
+
+- **Arc** comes onto the cut on a tangent arc (**Radius** and **Sweep**). **Line** comes in straight at an **Angle** to the cut (90° comes in square).
+- **Lead out** leaves the loop the same way. **Overlap** runs the last lap a little past its start first, to hide the seam.
+- With a plunge entry, the bit plunges at the far end of the lead, in the waste. With a ramp entry, the ramp runs down the lead and on along the wall. Between passes the tool feeds straight back to the lead's start at the depth it just cut, so a ramped cut never plunges.
+- Each loop is entered where it's nearest the tool and a lead fits. Leads stay on the waste side, on the material and clear of clamps. They shrink, down to a quarter of the bit's radius, to fit small holes and tight gaps. A loop with no room for one is entered without a lead, and **Checks** says how many.
+- When a profile starts below the top because an earlier toolpath cleared it (a finishing pass after roughing), leads only go where that toolpath cleared, so they may come out short.
+- Leads only know about the shapes in their own toolpath. Put parts that sit close together in one profile toolpath, or use a smaller lead.
+
+**Corner reliefs** (Profile and Pocket ▸ Corners) cut just past each inside corner the bit can't reach, so square tenons, tabs and finger joints fit.
+
+- **Dogbone** cuts into the corner along its bisector until the bit's edge touches the drawn corner. On a square corner that goes about 0.29 × the bit's radius past each wall.
+- **T-bone** cuts past the corner along one wall, so the notch is only in the other wall. **T-bone side** puts it in the **Longer side** (the default), the **Shorter side**, or the sides along X or Y. T-bones suit slots about as wide as the bit, where dogbones would overlap.
+- **Corners up to** is the widest corner that's relieved, measured across the cut-away area: a square corner is 90°. The default, 120°, includes hexagons. Flatter corners and faceted curves are left alone.
+- Profiles relieve the inside corners on either side of the line: the corners of an inside cut, and the inside corners of an outside cut (finger joints, notches, the holes in a part). Pockets relieve the corners of the wall and the inside corners of islands. Corners rounded at least as much as the bit, and the pinch where an island comes closer to a wall than the bit is wide, are left alone.
+- Allowance is left in the corner too. Very sharp corners get long reliefs that reach well into both walls, so check the preview.

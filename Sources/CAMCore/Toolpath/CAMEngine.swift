@@ -11,6 +11,8 @@ public struct GenerationContext: Sendable {
     /// Highest remaining material within a radius of a point (design Z), from the operations already generated.
     /// Lets generators skip depths earlier toolpaths cleared. nil when no model is available.
     public var materialTop: (@Sendable (Vec2, Double) -> Double)?
+    /// Clamp and fixture zones. Leads keep the tool clear of them.
+    public var keepOuts: [KeepOut] = []
 
     public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005) {
         self.stock = stock
@@ -83,6 +85,7 @@ public enum CAMEngine {
             var opContext = ctx
             let snapshot = model.grid
             opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
+            opContext.keepOuts = keepOuts
             let generated = generate(op, shapes: shapes, context: opContext)
             for var tp in generated {
                 if stock.retract == .minimum {
