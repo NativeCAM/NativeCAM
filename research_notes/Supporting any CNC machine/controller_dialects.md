@@ -437,6 +437,22 @@ Canned cycles are **not available on GRBL 1.1 or FluidNC** (only G80 cancel). Th
 - UCCNC, CNC12, PlanetCNC, RichAuto, NcStudio, ShopBot and Redline canned-cycle support was not confirmed. [UNVERIFIED] UCCNC and CNC12 support G73/G81–G89; RichAuto DSPs generally do not.
 - Masso's G28/G30 parameter semantics (stored position vs fixed) were not read in detail.
 
+### Tapping and boring cycles (G74, G76, G84, G87, G88), read 2026-11-20 for the G-code simulator
+What each controller does with these, as `GCodeParser` expands them (`Dialect.CannedCycles`):
+- **Mach4 Mill** documents all five with Fanuc's meaning [V] ([Mach4 Mill GCode Programming v1.1](https://www.machsupport.com/wp-content/uploads/2014/05/Mill%20GCode%20Programming.pdf), pp. 55–74):
+  - G84/G74: feed to Z, the spindle and Z stop and reverse, feed out to R (figure 84-1), rapid to the initial level under G98. No P or Q words, no peck tapping.
+  - G76: feed to Z, dwell, orient, shift by signed I/J ("X shift distance and direction") or by Q ("Always positive", direction from bits 4 and 5 of parameter 5101, which the manual doesn't explain), rapid out. Without an orienting spindle, the orient script should stop the program for the operator.
+  - G87: orient and shift at the initial level, rapid to R "below the work piece", shift back, start the spindle, feed up to Z, orient and shift, rapid to the initial point; "it is not possible to specify a G99 R point return".
+  - G88: dwell, spindle stop, program paused; the operator jogs out to R by hand (figure 88-1) and Cycle Start continues.
+  - P in cycles is milliseconds unless it has a decimal point (v1.1; v1.0 said seconds).
+- **Fanuc 0i-MF** agrees [V] ([operator's manual B-64604EN-2](https://www.drivesul.com.br/template/imagens/manuais/manuais-fanuc/fanuc-series-0i-model-f/FANUC%20Series%200i%20MODEL%20F%20-%20OPERATOR_S%20MANUAL%20-%20Machining%20Center%20System.pdf), §5.1): G76 shifts back at the retract level; G87 dwells at Z and G99 is "Not used"; G88 enters feed hold, and Cycle Start returns to R or the initial level. Standard G84 also dwells at R. Peck tapping (Q) needs parameters; no NativeCAM controller documents it.
+- **Centroid CNC12** (Mill operator's manual v4.20) documents G74, G76 and G84, not G86–G88 [V]: G84 feeds to Z, reverses, dwells P (seconds), feeds out to R, then rapids. Q on G84 is the thread lead for rigid tapping, not a peck. G76's Q shifts toward the angle in parameter 136 (0 = +Y). Repeats use K, not L. The current v5 manual wasn't read (over 10 MB).
+- **LinuxCNC 2.9** [V] ([G-codes](https://linuxcnc.org/docs/2.9/html/gcode/g-code.html)): G74 and G84 are floating-holder taps (since 2.8.0): feed to Z, reverse, dwell P seconds, then "Move the Z-axis at the current feed rate to clear Z" (all the way to the G98 height). G76 is lathe threading (errors outside G18). G87 and G88 are "accepted, but the behavior is undefined".
+- **grblHAL** README lists only the drilling cycles and lathe G76 [V]; the core parses an experimental G84 (P required, spindle at-speed needed) and rejects G74, G87, G88 with error 20 [source].
+- **Masso** documents none of the five (G73, G80–G83 only) and skips lines it can't run [V] ([supported G-codes](https://docs.masso.com.au/supported-g-codes)).
+- **Buildbotics** lists none of them (G76 marked unsupported); CAMotics, its interpreter, runs G84, G87 and G88 as a plain G81 with a "Not implemented" warning (no spindle reversal) [source], so tapping cycles shouldn't be sent to it.
+- **Haas** (for comparison, not a NativeCAM controller): back boring is G77, not G87, and current mills have no G88; G76/G77 shift by Q in the Setting 27 direction or by I/J.
+
 ---
 
 ## Q5. Spindle and accessories: S, M3/M4/M5, spin-up dwell (G4 seconds vs ms), coolant as dust/vacuum, laser modes

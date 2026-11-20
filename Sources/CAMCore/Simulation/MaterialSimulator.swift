@@ -217,7 +217,9 @@ public struct MaterialSimulator: Sendable {
         let steps = max(1, Int((len / max(grid.cellSize, 0.5)).rounded(.up)))
         for i in 0...steps {
             let p = a.lerp(to: b, Double(i) / Double(steps))
-            if let h = grid.height(at: p.xy), Double(h) > p.z + tolerance {
+            // A column cut through the bottom of the material is empty however low the tip goes (a back-boring bar
+            // passing down through its hole, say).
+            if let h = grid.height(at: p.xy), h > grid.floorZ, Double(h) > p.z + tolerance {
                 rapidCollisions.append(p)
                 return
             }

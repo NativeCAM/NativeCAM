@@ -16,7 +16,8 @@ import Foundation
 //   nativecam-cli sim  <project.nativecam|file.tap> [--png out.png] [--cell mm] [--heights out.bin]
 //                                                      (--heights: little-endian header Int32 cols, Int32 rows,
 //                                                       Float64 cell, origin x, origin y, then Float32 heights)
-//                                                      simulate material removal, print stats
+//                                                      simulate material removal, print stats (a G-code file's
+//                                                      tapping and boring cycles are read as Avid Mach4 runs them)
 //   nativecam-cli acceptance [machine.nativecam] [--controller grbl|grblHAL|fluidNC|carbideMotion] [--sender gSender]
 //                     [--units inch|mm] [--tool-change m6|pause|atc] [-o out]
 //                                                      write the acceptance test program for a controller: run it in
@@ -225,7 +226,8 @@ case "sim":
             fail("Can't read \(path)")
         }
         do {
-            let program = ext == "sbp" ? OpenSBPParser.parse(text) : try GCodeParser.parse(text)
+            let program = ext == "sbp" ? OpenSBPParser.parse(text)
+                : try GCodeParser.parse(text, controller: Dialect.for(project.machine))
             program.warnings.forEach { print("[warning] \($0)") }
             toolpaths = program.toolpaths(tools: ToolLibrary.starter.tools, stock: project.stock,
                                           fallback: ToolLibrary.starter.tools[0])
