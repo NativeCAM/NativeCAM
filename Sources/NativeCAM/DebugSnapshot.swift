@@ -86,11 +86,24 @@ enum DebugSnapshot {
                 write(img, to: out.appendingPathComponent("sim-turning.png"))
             }
         }
-        // 3. Toolpaths (no simulation) from the iso view.
+        // 3. Toolpaths (no simulation) from the iso view, then each toolpath with corner reliefs selected in the top
+        // view, so its corner marks show (corners-op-N.png), with the reason for each one drawn in orange.
         ws.stopSimulation(project)
         if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .iso) {
             write(img, to: out.appendingPathComponent("toolpaths-iso.png"))
         }
+        for (i, op) in project.operations.enumerated() {
+            guard let corners = ws.job?.toolpaths.first(where: { $0.sourceOperationID == op.id && $0.reliefCorners != nil })?.reliefCorners,
+                  !corners.isEmpty else { continue }
+            ws.selection = [.operation(op.id)]
+            ws.rebuildLines(project)
+            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .top) {
+                write(img, to: out.appendingPathComponent("corners-op-\(i).png"))
+            }
+            for corner in corners { if let reason = CanvasController.flagReason(corner) { log("corner \(op.name): \(reason)") } }
+        }
+        ws.selection = []
+        ws.rebuildLines(project)
         // 4. Each inspector at full height, sections below the fold included, and the checks Export runs.
         renderInspectors(project, workspace: ws, out: out, spin: spin)
         exportCheck(project, job: ws.job, log: log)

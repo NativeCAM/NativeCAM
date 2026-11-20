@@ -365,7 +365,9 @@ final class Workspace {
     }
 
     /// Line geometry for the selected toolpath's corner marks: the relief's circle (the bit at its tip, exactly where
-    /// the notch is cut), a cross where a corner is left as cut, an orange cross where the relief is blocked.
+    /// the notch is cut), a cross where a corner is left as cut, an orange cross where the relief is left off because
+    /// it would cut into nearby geometry or another toolpath's part, and an orange circle where it's cut into another
+    /// toolpath's part anyway.
     private func reliefMarkLines(_ project: Project) -> [LineVertex] {
         guard !isSimulating, let marks = selectedReliefCorners(project) else { return [] }
         var v: [LineVertex] = []
@@ -377,7 +379,7 @@ final class Workspace {
         }
         let r = marks.radius
         for corner in marks.corners {
-            let color = corner.blocked ? warning : (corner.isChanged ? changed : standard)
+            let color = corner.isFlagged ? warning : (corner.isChanged ? changed : standard)
             if let tip = corner.tip {
                 let n = 40
                 for k in 0..<n {

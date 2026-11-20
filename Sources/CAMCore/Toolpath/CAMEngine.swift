@@ -16,6 +16,9 @@ public struct GenerationContext: Sendable {
     /// On a rotary blank: how far from the axis the stock reaches at a station along it (design X), once the roundings
     /// that run before this operation have turned it down. nil = the blank as it is (out to a square bar's corners).
     public var rotaryStockRadius: (@Sendable (Double) -> Double)?
+    /// The parts the job's other toolpaths cut (on this face of an indexed rotary job). Leads and corner reliefs keep
+    /// clear of them. nil when none are known (an operation generated on its own).
+    public var protectedRegions: ProtectedRegions?
 
     public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005) {
         self.stock = stock
@@ -84,6 +87,10 @@ public enum CAMEngine {
             return s.polylines(tolerance: 0.1).filter(\.isClosed).map { KeepOut(outline: $0, height: h) }
         }.flatMap { $0 }
         let clearanceZ = max(stock.clearanceHeight, stock.plungeHeight)
+        // Every toolpath's parts, built once for the whole pass (from all of them, so the order doesn't matter), when
+        // any toolpath has leads or corner reliefs to keep clear of them.
+        let parts = ProtectedRegions.needed(project)
+            ? ProtectedRegions(project, flattenTolerance: ctx.flattenTolerance, arcTolerance: ctx.arcTolerance) : nil
         // Wrapped rotary jobs cut each operation once on the unrolled sheet; the posts wrap it around the blank.
         let wrap = stock.rotary.flatMap { $0.isWrapped ? $0.wrapDiameterOrBlank : nil }
         func faceKey(_ angle: Double?) -> Double { angle.map(RotaryIndex.normalized) ?? 0 }
@@ -117,6 +124,7 @@ public enum CAMEngine {
                 opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
                 opContext.keepOuts = keepOuts
                 opContext.rotaryStockRadius = stockRadius
+                opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
                 var generated = generate(op, shapes: shapes, context: opContext)
                 let clearing = generated.map { $0.id != op.id }
                 if let angle {
