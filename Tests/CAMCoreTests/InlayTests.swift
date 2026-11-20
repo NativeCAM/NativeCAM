@@ -330,7 +330,8 @@ struct InlayTests {
         #expect(tightest.gap > -0.12, "plug runs \(-tightest.gap) mm into the pocket at \(tightest.p)")
         let floor = gaps.filter { abs($0.pocketZ + 0.2.inch) < 0.02 && abs($0.plugZ) < 1e-6 }
         #expect(floor.count > 1000)
-        #expect(abs(floor.map(\.gap).reduce(0, +) / Double(floor.count) - 0.5) < 0.05)
+        let meanFloor: Double = floor.map(\.gap).reduce(0, +) / Double(floor.count)
+        #expect(abs(meanFloor - 0.5) < 0.05, "mean floor gap \(meanFloor)")
     }
 
     // MARK: Fit check
@@ -441,8 +442,10 @@ struct InlayTests {
         let inlay = VCarveInlay(role: .plug, pocketDepth: 4, glueGap: 0.3, surfaceClearance: 2, boundaryMargin: 9)
         let j = try json(VCarveParams(inlay: inlay))
         let saved = try #require(j["inlay"] as? [String: Any])
-        #expect(saved["role"] as? String == "plug" && saved["pocketDepth"] as? Double == 4 && saved["glueGap"] as? Double == 0.3
-            && saved["surfaceClearance"] as? Double == 2 && saved["boundaryMargin"] as? Double == 9)
+        #expect(saved["role"] as? String == "plug")
+        #expect(saved["boundary"] as? String == "margin")
+        let numbers: [String: Double] = ["pocketDepth": 4, "glueGap": 0.3, "surfaceClearance": 2, "boundaryMargin": 9]
+        for (key, value) in numbers { #expect(saved[key] as? Double == value, "\(key)") }
         #expect(try JSONDecoder().decode(VCarveParams.self, from: JSONEncoder().encode(VCarveParams(inlay: inlay))).inlay == inlay)
     }
 
