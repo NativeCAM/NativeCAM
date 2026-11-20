@@ -19,9 +19,15 @@ struct OperationInspector: View {
                     .disabled(workspace.selectedShapeIDs.isEmpty)
                     .help("Select shapes in the Design list, then click to assign them to this toolpath")
             }
+            if (project.stock.rotary != nil && op.kind.takesIndexAngles) || op.indexAngles != nil {
+                IndexAnglesSection(angles: $op.indexAngles, blank: project.stock.rotary)
+            }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine)
             parameters
-            if let tp = workspace.job?.toolpaths.first(where: { $0.sourceOperationID == op.id }) {
+            if project.stock.rotary != nil, let job = workspace.job,
+               case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
+                IndexedResultSection(toolpaths: tps, job: job, rapidRate: project.machine.rapidRateForEstimates, units: units)
+            } else if let tp = workspace.job?.toolpaths.first(where: { $0.sourceOperationID == op.id }) {
                 Section("Result") {
                     LabeledContent("Cutting length", value: "\(units.format(tp.cuttingLength, decimals: 1)) \(units.symbol)")
                     LabeledContent("Estimated time", value: formatDuration(workspace.job?.estimatedSeconds(toolpath: tp.id)

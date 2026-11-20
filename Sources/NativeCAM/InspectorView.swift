@@ -43,29 +43,41 @@ struct SetupInspector: View {
                     ForEach(MaterialKind.allCases) { Text($0.label).tag($0) }
                 }
                 .help("Used for chip-load recommendations and warnings")
-                LengthField(title: "Width (X)", mm: $project.stock.width, units: units, minimum: 1)
-                LengthField(title: "Height (Y)", mm: $project.stock.height, units: units, minimum: 1)
-                LengthField(title: "Thickness (Z)", mm: $project.stock.thickness, units: units,
-                            help: "Measure your material with calipers; through-cuts are set relative to this.", minimum: 0.1)
+                RotaryBlankRows(project: $project, units: units)
+                if project.stock.rotary == nil {
+                    LengthField(title: "Width (X)", mm: $project.stock.width, units: units, minimum: 1)
+                    LengthField(title: "Height (Y)", mm: $project.stock.height, units: units, minimum: 1)
+                    LengthField(title: "Thickness (Z)", mm: $project.stock.thickness, units: units,
+                                help: "Measure your material with calipers; through-cuts are set relative to this.", minimum: 0.1)
+                } else {
+                    RotarySheetRows(stock: $project.stock, units: units)
+                }
             }
             Section("Zero") {
-                Picker("XY zero", selection: $project.stock.xyOrigin) {
-                    ForEach(XYOrigin.allCases) { Text($0.label).tag($0) }
+                if project.stock.rotary == nil {
+                    Picker("XY zero", selection: $project.stock.xyOrigin) {
+                        ForEach(XYOrigin.allCases) { Text($0.label).tag($0) }
+                    }
+                    OriginDiagram(origin: project.stock.xyOrigin)
+                        .frame(height: 70)
+                    Picker("Z zero", selection: $project.stock.zZero) {
+                        ForEach(ZZero.allCases) { Text($0.label).tag($0) }
+                    }
+                    Text(project.stock.zZero == .materialTop
+                         ? "Touch off Z on top of the material with the touch plate."
+                         : "Touch off Z on the spoilboard; material thickness must be accurate.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    RotaryZeroRows(stock: $project.stock, machine: project.machine)
                 }
-                OriginDiagram(origin: project.stock.xyOrigin)
-                    .frame(height: 70)
-                Picker("Z zero", selection: $project.stock.zZero) {
-                    ForEach(ZZero.allCases) { Text($0.label).tag($0) }
-                }
-                Text(project.stock.zZero == .materialTop
-                     ? "Touch off Z on top of the material with the touch plate."
-                     : "Touch off Z on the spoilboard; material thickness must be accurate.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             Section("Heights") {
+                // A rotary blank turns at safe Z, so safe Z can't go below what clears its corners.
                 LengthField(title: "Safe Z (clearance)", mm: $project.stock.clearanceHeight, units: units,
-                            help: "Rapids between cuts happen at this height above the material.", minimum: 0.5)
+                            help: project.stock.rotary == nil ? "Rapids between cuts happen at this height above the material."
+                                : "Rapids between cuts, and every turn of the blank, happen at this height above the face.",
+                            minimum: max(0.5, project.stock.minimumRotaryClearance ?? 0))
                 LengthField(title: "Plunge start", mm: $project.stock.plungeHeight, units: units,
                             help: "Rapids stop this far above the material; feeds start here.", minimum: 0.1)
                 Picker("Between cuts", selection: Binding(get: { project.stock.retract }, set: { project.stock.retractMode = $0 })) {
@@ -73,12 +85,24 @@ struct SetupInspector: View {
                 }
                 .help("Minimum lifts only above the material still there, stays down across cleared areas and drops quickly onto floors already cut")
                 if project.stock.retract == .minimum {
-                    LengthField(title: "Safe distance", mm: Binding(get: { project.stock.safeDistance }, set: { project.stock.linkSafeDistance = max(0.5, $0) }),
-                                units: units, help: "Links travel at least this far above remaining material (and tabs). Raise it for bowed sheets.")
+                    LengthField(title: "Safe distance", mm: Binding(get: { project.stock.safeDistance }, set: {
+                        project.stock.linkSafeDistance = max(0.5, $0)
+                        // On a rotary blank the margin over its corners grows with it.
+                        if let least = project.stock.minimumRotaryClearance {
+                            project.stock.clearanceHeight = max(project.stock.clearanceHeight, least)
+                        }
+                    }), units: units, help: "Links travel at least this far above remaining material (and tabs). Raise it for bowed sheets.")
                 }
-                LengthField(title: "Park X", mm: $project.stock.homePosition.x, units: units)
-                LengthField(title: "Park Y", mm: $project.stock.homePosition.y, units: units)
+                if project.stock.rotary == nil {
+                    LengthField(title: "Park X", mm: $project.stock.homePosition.x, units: units)
+                    LengthField(title: "Park Y", mm: $project.stock.homePosition.y, units: units)
+                }
                 LengthField(title: "Park Z", mm: $project.stock.homePosition.z, units: units, minimum: 1)
+                if project.stock.rotary != nil {
+                    Text("Rotary jobs park over the middle of the blank, clear of the chuck and tailstock.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             SavedMachineSection(machine: $project.machine)
             MachineSection(machine: $project.machine, units: units)
@@ -178,6 +202,9 @@ struct MachineSection: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Toggle("Dust collector (M\(Dialect.for(machine)?.dustOn ?? 7)/M9)", isOn: $machine.dustCollection)
+        }
+        Section("Rotary Axis") {
+            RotaryAxisRows(machine: $machine, units: units)
         }
         Section("G-code Output") {
             VectricPostControls(machine: $machine)

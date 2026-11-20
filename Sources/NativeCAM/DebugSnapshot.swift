@@ -84,9 +84,55 @@ enum DebugSnapshot {
         if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .iso) {
             write(img, to: out.appendingPathComponent("toolpaths-iso.png"))
         }
+        // 4. Each inspector at full height, sections below the fold included, and the checks Export runs.
+        renderInspectors(project, workspace: ws, out: out, spin: spin)
+        exportCheck(project, job: ws.job, log: log)
         interactionSelfCheck(project, log: log)
         print("snapshot: wrote PNGs to \(out.path)")
         exit(0)
+    }
+
+    /// Job Setup, each toolpath's inspector and the machine setup assistant's setup step, to inspector-*.png.
+    @MainActor
+    private static func renderInspectors(_ project: Project, workspace ws: Workspace, out: URL, spin: (Double) -> Void) {
+        func render(_ view: some View, size: NSSize, name: String) {
+            let host = NSHostingView(rootView: view.environment(ToolLibraryStore.shared).background(Color(nsColor: .windowBackgroundColor)))
+            // Borderless, so AppKit doesn't shrink the window to fit the screen.
+            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = host
+            if let screen = NSScreen.main { window.setFrameOrigin(screen.visibleFrame.origin) }
+            window.alphaValue = 0
+            window.ignoresMouseEvents = true
+            window.orderFrontRegardless()
+            spin(1.5)
+            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent(name))
+            }
+            window.close()
+        }
+        let tall = NSSize(width: 440, height: 2600)
+        render(SetupInspector(project: .constant(project)), size: tall, name: "inspector-setup.png")
+        for (i, op) in project.operations.enumerated() {
+            render(OperationInspector(op: .constant(op), project: project, workspace: ws), size: tall, name: "inspector-op-\(i).png")
+        }
+        render(MachineSetupView(offerUseHere: false, start: ("generic", .setup), height: 1100) { _, _, _ in },
+               size: NSSize(width: 640, height: 1100), name: "inspector-machine-setup.png")
+    }
+
+    /// Logs the job's issues and the export checks of every file the post writes, as Export would show them.
+    @MainActor
+    private static func exportCheck(_ project: Project, job: JobResult?, log: (String) -> Void) {
+        guard let job, let post = PostProcessors.post(for: project) else { return log("export check: no job or no post") }
+        for issue in job.issues { log("job \(issue.severity.rawValue): \(issue.operation.map { "\($0): " } ?? "")\(issue.message)") }
+        var fileErrors = 0
+        for file in post.files(job.toolpaths) {
+            for issue in GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: project, dialect: post.dialect) where issue.severity != .info {
+                log("G-code \(issue.severity.rawValue): \(issue.text)")
+                if issue.severity == .error { fileErrors += 1 }
+            }
+        }
+        log("export check: \(job.issues.filter { $0.severity == .error }.count) job errors, \(fileErrors) G-code errors")
     }
 
     private static func write(_ image: CGImage, to url: URL) {

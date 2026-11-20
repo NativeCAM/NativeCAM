@@ -11,6 +11,8 @@ struct MachineSetupView: View {
     let offerUseHere: Bool
     /// Developer captures: open on this catalogue ID (or "generic") at this step.
     var start: (selection: String, step: Step)?
+    /// Developer snapshots draw it taller, so a whole step shows without scrolling.
+    var height: CGFloat = 600
     let onFinish: (_ setup: MachineSetup, _ useForNewDocuments: Bool, _ useHere: Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -66,7 +68,7 @@ struct MachineSetupView: View {
             }
             .padding(16)
         }
-        .frame(width: 640, height: 600)
+        .frame(width: 640, height: height)
         .onAppear {
             guard let start else { return }
             selection = start.selection
@@ -260,6 +262,9 @@ struct MachineSetupView: View {
                     NumberField(title: "Max RPM", value: $machine.maxRPM, decimals: 0, range: 0...60000)
                 }
                 Toggle("Dust collector on an output (M\(Dialect.for(machine)?.dustOn ?? 8))", isOn: $machine.dustCollection)
+            }
+            Section("Rotary axis") {
+                RotaryAxisRows(machine: $machine, units: units)
             }
             if machine.model == .custom {
                 Section("Travel") {
