@@ -29,9 +29,9 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 |---|---|---|
 | Vectors | **DXF** | Lines, arcs, circles, polylines with bulges, splines, ellipses, blocks and inserts, `$INSUNITS`. POINT entities become drill marks. Loose segments are chained into closed loops. |
 | | **SVG** | Full path grammar, transforms, viewBox units |
-| | **PDF**, **Illustrator `.ai`** | PDF-compatible `.ai` files. Handles nested groups, page rotation and the crop box. |
+| | **PDF**, **Illustrator `.ai`** | PDF-compatible `.ai` files. Handles nested groups, page rotation and the crop box. Clipping masks trim what they cover, and hidden layers are left out, as a PDF viewer shows them. |
 | 3D models | **STL** (binary/ASCII), **OBJ**, **3MF**, **USDZ/USD**, **PLY** | 3MF includes Bambu and Prusa multi-part files. Choose the up axis, flip, size, carve depth and how far below the surface the top sits. |
-| G-code | **`.tap`**, **`.nc`**, **`.gcode`**, **`.ngc`**, **`.cnc`**, ShopBot **`.sbp`** | Opened for simulation only (**File ▸ Simulate G-code File…**, or drop on the canvas) |
+| G-code | **`.tap`**, **`.nc`**, **`.gcode`**, **`.ngc`**, **`.cnc`**, ShopBot **`.sbp`** | Opened for simulation only (**File ▸ Simulate G-code File…**, or drop on the canvas). Drilling cycles (`G73`, `G81`–`G83`, `G85`, `G86`, `G89`) are expanded into the moves the controller makes. |
 | Machines | Mach4 **`Machine.ini`**, Grbl **`$$`** output, **LinuxCNC** INI, **FluidNC** `config.yaml`, **Fusion 360** `.mch` | Speeds, accelerations, travel and spindle range for a machine. See [Importing controller settings](machines.md#importing-controller-settings). |
 | Posts | Your own **Vectric `.pp`** | Writes G-code for a controller NativeCAM has no post for. See [Using your own Vectric post](controllers.md#using-your-own-vectric-post). |
 | Tool libraries | **Fusion 360** `.tools` / `.json`, **Vectric** `.vtdb`, NativeCAM `.json` | **Tool Library ▸ ⋯ ▸ Import Tools…** lists the bits by the library's folders. Search, filter by type and tick the ones you want. Vendors such as Amana Tool publish their bits in these formats. Values a library leaves out (Vectric files have no cutting or shank lengths) are read from the bit's name where possible, otherwise filled conservatively and marked ⚠ (details in the tool's notes). Tapered ball nose, form, dovetail, roundover and thread bits are listed as not imported. Vectric's older `.tool` files aren't supported. |
@@ -94,6 +94,7 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 - **Corners up to** is the widest corner that's relieved, measured across the cut-away area: a square corner is 90°. The default, 120°, includes hexagons. Flatter corners and faceted curves are left alone.
 - Profiles relieve the inside corners on either side of the line: the corners of an inside cut, and the inside corners of an outside cut (finger joints, notches, the holes in a part). Pockets relieve the corners of the wall and the inside corners of islands. Corners rounded at least as much as the bit, and the pinch where an island comes closer to a wall than the bit is wide, are left alone.
 - Allowance is left in the corner too. Very sharp corners get long reliefs that reach well into both walls, so check the preview.
+- **Corner by corner:** with the toolpath selected, each relieved corner is circled on the canvas, at the bit's position at the end of the relief. Click a circle to step that corner through dogbone, T-bone into one side, T-bone into the other, and no relief. Right-click it to pick one, or **Use Toolpath Setting** to go back. Corners you've changed are drawn in the accent colour, and a relief that would cut into nearby geometry gets an orange cross. The choice belongs to the corner of its shape, so it follows the shape when you move, turn or scale it. **Corners ▸ Reset** clears them all.
 
 ## Rotary jobs
 

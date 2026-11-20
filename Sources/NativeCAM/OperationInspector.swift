@@ -355,6 +355,17 @@ struct CornersSection: View {
                     NumberField(title: "Corners up to", value: Binding(get: { r.maxCornerAngle }, set: { relief?.maxCornerAngle = $0 }),
                                 suffix: "°", decimals: 0, range: 10...170)
                         .help("A square corner is 90°. Flatter corners are left rounded.")
+                    if let n = r.overrides?.count, n > 0 {
+                        HStack {
+                            Text("\(n) corner\(n == 1 ? "" : "s") set on the canvas")
+                            Spacer()
+                            Button("Reset") { relief?.overrides = nil }
+                                .controlSize(.small)
+                                .help("Put every corner back to this toolpath's setting")
+                        }
+                    }
+                    Text("Click a corner's circle on the canvas to change that corner: dogbone, T-bone into either side, or none. Right-click it for the choices.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Text("Cuts just past each inside corner the bit can't reach, so square parts fit. A dogbone cuts into the corner; a T-bone cuts into one side only, which is easier to hide and better for slots about as wide as the bit.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }

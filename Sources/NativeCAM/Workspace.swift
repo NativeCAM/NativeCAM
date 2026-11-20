@@ -283,6 +283,63 @@ final class Workspace {
         return bestInside?.id
     }
 
+    // MARK: Corner relief marks (the selected profile or pocket's corners, changed by clicking them)
+
+    /// The selected toolpath's relief corners and its bit radius, when it has corner reliefs.
+    func selectedReliefCorners(_ project: Project) -> (operation: UUID, corners: [ReliefCorner], radius: Double)? {
+        guard let id = selectedOperationID, let op = project.operations.first(where: { $0.id == id }) else { return nil }
+        switch op.kind {
+        case let .profile(p) where p.cornerRelief != nil && p.side != .on: break
+        case let .pocket(p) where p.cornerRelief != nil: break
+        default: return nil
+        }
+        guard let tp = job?.toolpaths.first(where: { $0.sourceOperationID == id }), let corners = tp.reliefCorners, !corners.isEmpty else {
+            return nil
+        }
+        return (id, corners, tp.tool.radius)
+    }
+
+    /// The selected toolpath's corner under `p`: on its relief circle or at the corner itself.
+    func cornerHit(_ p: Vec2, tolerance: Double, project: Project) -> (operation: UUID, corner: ReliefCorner)? {
+        guard let marks = selectedReliefCorners(project) else { return nil }
+        var best: (ReliefCorner, Double)?
+        for corner in marks.corners {
+            var d = corner.point.distance(to: p)
+            if let tip = corner.tip { d = min(d, max(0, tip.distance(to: p) - marks.radius)) }
+            if d <= tolerance * 1.5, d < (best?.1 ?? .infinity) { best = (corner, d) }
+        }
+        return best.map { (marks.operation, $0.0) }
+    }
+
+    /// Line geometry for the selected toolpath's corner marks: the relief's circle (the bit at its tip, exactly where
+    /// the notch is cut), a cross where a corner is left as cut, an orange cross where the relief is blocked.
+    private func reliefMarkLines(_ project: Project) -> [LineVertex] {
+        guard !isSimulating, let marks = selectedReliefCorners(project) else { return [] }
+        var v: [LineVertex] = []
+        let z: Float = 0.06
+        let changed = Workspace.accent, standard = SIMD4<Float>(0.6, 0.9, 1, 1), warning = SIMD4<Float>(1, 0.6, 0.2, 1)
+        func line(_ a: Vec2, _ b: Vec2, _ c: SIMD4<Float>) {
+            v.append(LineVertex(SIMD3(Float(a.x), Float(a.y), z), c))
+            v.append(LineVertex(SIMD3(Float(b.x), Float(b.y), z), c))
+        }
+        let r = marks.radius
+        for corner in marks.corners {
+            let color = corner.blocked ? warning : (corner.isChanged ? changed : standard)
+            if let tip = corner.tip {
+                let n = 40
+                for k in 0..<n {
+                    line(tip + Vec2.fromAngle(2 * .pi * Double(k) / Double(n), length: r),
+                         tip + Vec2.fromAngle(2 * .pi * Double(k + 1) / Double(n), length: r), color)
+                }
+            } else {
+                let s = max(0.4 * r, 0.5)
+                line(corner.point + Vec2(-s, -s), corner.point + Vec2(s, s), color)
+                line(corner.point + Vec2(-s, s), corner.point + Vec2(s, -s), color)
+            }
+        }
+        return v
+    }
+
     // MARK: Canvas drag preview (committed to the document once, on mouse-up, so it's a single undo step)
 
     private(set) var dragOffset: Vec2?
@@ -341,6 +398,7 @@ final class Workspace {
                 }
             }
         }
+        v += reliefMarkLines(project)
         vectorLines = v
         publishLines()
     }
