@@ -66,6 +66,11 @@ public struct RotaryStock: Hashable, Codable, Sendable {
 
 /// The blank being cut. Design coordinates have (0,0) at the material's lower-left corner;
 /// toolpath Z = 0 is the material's top surface and Z = -thickness is its bottom.
+///
+/// On rotary stock the design sheet is one face of the blank as the spindle sees it: X runs along the rotation axis
+/// (0 to the blank's length), Y across the face (0 to its diameter, with the axis under y = diameter / 2), and Z = 0
+/// is the top of the face, a radius above the axis. Indexed toolpaths cut that sheet with the blank turned to each
+/// of their angles. `setRotary(_:)` keeps width, height and thickness matched to the blank.
 public struct Stock: Hashable, Codable, Sendable {
     /// X size, mm.
     public var width: Double
@@ -83,15 +88,15 @@ public struct Stock: Hashable, Codable, Sendable {
     public var clearanceHeight: Double
     /// Height above the material top where rapids stop and plunge feed begins ("Plunge Z2").
     public var plungeHeight: Double
-    /// Park position at program end, in design coordinates (XY) and height above material (Z).
+    /// Park position at program end, in design coordinates (XY) and height above material (Z). Rotary jobs only use
+    /// its height: see `parkPosition`.
     public var homePosition: Vec3
     /// How the tool travels between cuts (nil = minimum retracts).
     public var retractMode: RetractMode?
     /// Minimum-retract links keep at least this much above remaining material, mm (nil = 0.2 in).
     public var linkSafeDistance: Double?
-    /// Set when the blank turns on a rotary axis (nil = a flat sheet, as in every older file). Nothing machines
-    /// rotary stock yet: toolpaths still treat the blank as the flat width × height × thickness block, and the job
-    /// checks say so.
+    /// Set when the blank turns on a rotary axis (nil = a flat sheet, as in every older file). Set it with
+    /// `setRotary(_:)`, which also sizes the design sheet to one face of the blank.
     public var rotary: RotaryStock?
 
     public var retract: RetractMode { retractMode ?? .minimum }
@@ -119,9 +124,50 @@ public struct Stock: Hashable, Codable, Sendable {
 
     public var bounds: Rect2 { Rect2(x: 0, y: 0, width: width, height: height) }
 
-    /// Design-space point that the machine's X0 Y0 corresponds to.
+    /// Where the tool parks at the end and for a manual tool change: `homePosition`, no lower than safe Z. On rotary
+    /// stock it parks over the middle of the blank, since the chuck's jaws and the tailstock stand above the blank's
+    /// ends and the sheet's corners are right at them.
+    public var parkPosition: Vec3 {
+        let z = max(homePosition.z, clearanceHeight)
+        return rotary == nil ? Vec3(homePosition.xy, z) : Vec3(width / 2, height / 2, z)
+    }
+
+    /// Turns the job into a rotary one on `blank` (or back to a flat sheet with nil). The design sheet becomes one
+    /// face of the blank (width = length, height = diameter, thickness = radius, so a cut to the full thickness
+    /// reaches the axis), and safe Z rises if it wouldn't clear the blank's corners as it turns.
+    public mutating func setRotary(_ blank: RotaryStock?) {
+        rotary = blank
+        guard let blank else { return }
+        width = blank.length
+        height = blank.diameter
+        thickness = blank.radius
+        if let least = minimumRotaryClearance { clearanceHeight = max(clearanceHeight, least) }
+    }
+
+    /// The lowest safe Z for a rotary job, above the face top: the blank turns at safe Z, so the tool has to clear
+    /// its corners (a square bar's reach past its faces) by the link safe distance. Nil on a flat sheet.
+    public var minimumRotaryClearance: Double? {
+        rotary.map { $0.outerRadius - $0.radius + safeDistance }
+    }
+
+    /// True when width, height and thickness describe one face of the rotary blank (always true on a flat sheet).
+    public var matchesRotaryBlank: Bool {
+        guard let r = rotary else { return true }
+        func same(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= 1e-6 * max(1, abs(b)) }
+        return same(width, r.length) && same(height, r.diameter) && same(thickness, r.radius)
+    }
+
+    /// Design-space point that the machine's X0 Y0 corresponds to. On rotary stock Y zero is always the axis
+    /// centreline, and X zero is the left end, the right end or the middle, from `xyOrigin`.
     public var originPoint: Vec2 {
-        switch xyOrigin {
+        if rotary != nil {
+            switch xyOrigin {
+            case .lowerLeft, .upperLeft: return Vec2(0, height / 2)
+            case .lowerRight, .upperRight: return Vec2(width, height / 2)
+            case .center: return Vec2(width / 2, height / 2)
+            }
+        }
+        return switch xyOrigin {
         case .lowerLeft: Vec2(0, 0)
         case .lowerRight: Vec2(width, 0)
         case .upperLeft: Vec2(0, height)
@@ -130,17 +176,19 @@ public struct Stock: Hashable, Codable, Sendable {
         }
     }
 
-    /// Converts a toolpath point (design XY, Z relative to material top) into work coordinates (G54).
+    /// Converts a toolpath point (design XY, Z relative to material top) into work coordinates (G54). Rotary jobs
+    /// zero Z on the rotation axis whatever `zZero` says, so work Z is the toolpath Z plus the blank's radius.
     public func toWork(_ p: Vec3) -> Vec3 {
         let o = originPoint
-        let z = zZero == .materialTop ? p.z : p.z + thickness
+        let z = rotary.map { p.z + $0.radius } ?? (zZero == .materialTop ? p.z : p.z + thickness)
         return Vec3(p.x - o.x, p.y - o.y, z)
     }
 
     /// Inverse of `toWork`.
     public func fromWork(_ p: Vec3) -> Vec3 {
         let o = originPoint
-        let z = zZero == .materialTop ? p.z : p.z - thickness
+        let z = rotary.map { p.z - $0.radius } ?? (zZero == .materialTop ? p.z : p.z - thickness)
         return Vec3(p.x + o.x, p.y + o.y, z)
     }
+
 }

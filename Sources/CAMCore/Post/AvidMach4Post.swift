@@ -41,8 +41,13 @@ public struct AvidMach4Post: Sendable {
         df.timeZone = timeZone
         w.comment("Created: \(df.string(from: date))")
         w.comment("Machine: \(machine.displayName), \(machine.spindle == .vfdSpindle ? "spindle" : "router"), \(machine.toolChange.label)")
-        w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")
-        w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
+        let rotary = RotaryOutput(project)
+        if rotary != nil {
+            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: true) { w.comment(line) }
+        } else {
+            w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")
+            w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
+        }
         if let ext = extents(paths) {
             w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  Y\(num(ext.min.y)) to Y\(num(ext.max.y))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
         }
@@ -65,6 +70,7 @@ public struct AvidMach4Post: Sendable {
         var currentTool: Int?
         var currentRPM: Double?
         var state = ModalState()
+        var turned = false
 
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
@@ -87,12 +93,20 @@ public struct AvidMach4Post: Sendable {
             w.line("G00 X\(num(startWork.x)) Y\(num(startWork.y))")
             state.x = round(startWork.x)
             state.y = round(startWork.y)
+            // Rotary: turn the blank at safe Z, over the start of the cut, whenever the angle isn't known to be right
+            // (always after a tool change, since the macro or the operator may have turned it).
+            if let rotary, let angle = tp.indexAngle, state.a != rotary.value(angle) {
+                w.line("G00 \(rotary.word(angle))")
+                state.a = rotary.value(angle)
+                turned = true
+            }
             emitMotions(tp, writer: &w, state: &state)
         }
 
         // Footer
-        let home = stock.toWork(Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight)))
+        let home = stock.toWork(stock.parkPosition)
         w.line("G00 Z\(num(home.z, isZ: true))")
+        if let rotary, turned { w.line("G00 \(rotary.word(0))") }
         w.line("G00 X\(num(home.x)) Y\(num(home.y))")
         w.line("M05")
         w.line("M09")
@@ -112,16 +126,19 @@ public struct AvidMach4Post: Sendable {
         switch machine.toolChange {
         case .manualM6, .atc:
             w.comment("Change to Tool: T\(tool.number) \(tool.name)")
+            if stock.rotary != nil, machine.toolChange == .manualM6 {
+                w.comment("Rotary job: \(RotaryOutput.rezero(stock, avid: true)), not on the blank")
+            }
             w.line("T\(tool.number)M6")
             if machine.toolChange == .atc { w.line("G43 H\(tool.number)") }
         case .manualPause:
             if first {
-                w.comment("Load T\(tool.number) \(tool.name) and zero Z before starting")
+                w.comment("Load T\(tool.number) \(tool.name) and zero Z\(stock.rotary == nil ? "" : " on the rotation axis") before starting")
             } else {
-                let park = stock.toWork(Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight)))
+                let park = stock.toWork(stock.parkPosition)
                 w.line("G00 Z\(num(park.z, isZ: true))")
                 w.line("G00 X\(num(park.x)) Y\(num(park.y))")
-                w.comment("Change to T\(tool.number) \(tool.name), re-zero Z with the touch plate, then Cycle Start")
+                w.comment("Change to T\(tool.number) \(tool.name), \(stock.rotary == nil ? "re-zero Z with the touch plate" : RotaryOutput.rezero(stock, avid: true)), then Cycle Start")
                 w.line("M00")
             }
         }
@@ -248,6 +265,8 @@ public struct AvidMach4Post: Sendable {
         var y: Double?
         var z: Double?
         var feed: Double?
+        /// The rotary A value last written; nil when it isn't known.
+        var a: Double?
     }
 
     struct Writer {

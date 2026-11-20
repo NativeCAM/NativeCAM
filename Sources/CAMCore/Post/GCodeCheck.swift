@@ -81,6 +81,9 @@ public enum GCodeCheck {
         // From the start, and after each tool change, the tool must rise to safe Z before moving sideways.
         var awaitingLift = true, lifted = false, afterChange = false
         var ended = false
+        // Rotary jobs: the blank may only turn with the tool at safe Z. Z isn't known at the start or after a stop.
+        let rotaryJob = stock.rotary != nil
+        var rotaryZ: Double?
 
         var rows = gcode.components(separatedBy: "\n")
         if rows.last == "" { rows.removeLast() }
@@ -186,6 +189,7 @@ public enum GCodeCheck {
                 case 6:
                     spindleOn = false
                     awaitingLift = true; lifted = false; afterChange = true
+                    rotaryZ = nil
                     switch dialect.m6 {
                     case .macro: break
                     case .rejected:
@@ -203,6 +207,7 @@ public enum GCodeCheck {
                     }
                 case 0, 1:
                     awaitingLift = true; lifted = false; afterChange = true
+                    rotaryZ = nil
                 case 2, 30: ended = true
                 default: break
                 }
@@ -222,6 +227,18 @@ public enum GCodeCheck {
                 default: break
                 }
                 continue
+            }
+
+            if rotaryJob {
+                let target = v["Z"].map { absolute ? u.toMM($0) : (rotaryZ ?? 0) + u.toMM($0) }
+                if v["A"] != nil {
+                    let low = { (z: Double) in z < safeZ - 1e-3 }
+                    if rotaryZ.map(low) ?? true || target.map(low) ?? false {
+                        add(.error, n, "A below safe Z", "Turns the rotary axis below safe Z, or before the tool has lifted to "
+                            + "it, so the blank could swing into the tool.")
+                    }
+                }
+                if let target { rotaryZ = absolute || rotaryZ != nil ? target : nil }
             }
 
             let arcWords = v["I"] != nil || v["J"] != nil || v["K"] != nil || v["R"] != nil
@@ -362,6 +379,8 @@ public enum GCodeCheck {
         var tool: Int
         var rpm: Double
         var toolpath: String
+        /// The A value the post writes for the toolpath's index angle (nil on a flat job).
+        var a: Double?
     }
 
     /// The moves the post writes, in order: the same rule as the post, which leaves out a move whose rounded end
@@ -375,14 +394,16 @@ public enum GCodeCheck {
             return v == 0 ? 0 : v
         }
         let safe = stock.toWork(Vec3(0, 0, stock.clearanceHeight)).z
+        let rotary = RotaryOutput(project)
         var out: [ExpectedMove] = []
         var tool: Int?, speed: Double?
         for tp in toolpaths where !tp.isEmpty {
+            let a = tp.indexAngle.flatMap { angle in rotary?.value(angle) }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             let s = stock.toWork(tp.start)
             if (tool != tp.tool.number || speed != rpm) && machine.spindleSpinUpDwell > 0 {
                 out.append(ExpectedMove(kind: .dwell, end: s, start: s, center: .zero, feed: machine.spindleSpinUpDwell,
-                                        tool: tp.tool.number, rpm: rpm, toolpath: tp.name))
+                                        tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: a))
             }
             tool = tp.tool.number
             speed = rpm
@@ -393,7 +414,7 @@ public enum GCodeCheck {
                 let ex = r(e.x), ey = r(e.y), ez = r(e.z)
                 let move = ExpectedMove(kind: m.kind, end: e, start: stock.toWork(position),
                                         center: m.kind.isArc ? stock.toWork(Vec3(m.center, 0)).xy : .zero,
-                                        feed: m.feed, tool: tp.tool.number, rpm: rpm, toolpath: tp.name)
+                                        feed: m.feed, tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: a)
                 switch m.kind {
                 case .dwell: out.append(move)
                 case .rapid: break
@@ -451,6 +472,11 @@ public enum GCodeCheck {
             }
             if !near(w.motion.end, e.end, tol) {
                 fail(line, "Ends at \(show(w.motion.end)), but “\(e.toolpath)” goes to \(show(e.end)).")
+                break
+            }
+            if let a = e.a, w.motion.a.map({ abs($0 - a) > 5e-4 }) ?? true {
+                let read = w.motion.a.map { "A\(String(format: "%.3f", $0))" } ?? "no A position"
+                fail(line, "Cuts with \(read) where “\(e.toolpath)” is turned to A\(String(format: "%.3f", a)).")
                 break
             }
             if abs(w.motion.feed - e.feed) > feedTol {

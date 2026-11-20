@@ -143,7 +143,7 @@ public struct OpenSBPPost: PostProcessor {
                 } else if currentTool == nil {
                     comment("Load T\(tp.tool.number) \(tp.tool.name) and zero Z before starting")
                 } else {
-                    let park = stock.toWork(Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight)))
+                    let park = stock.toWork(stock.parkPosition)
                     jog(Vec3(units.toMM(state?.x ?? 0), units.toMM(state?.y ?? 0), park.z))
                     jog(park)
                     comment("Change to T\(tp.tool.number) \(tp.tool.name), re-zero Z, then click OK")
@@ -207,7 +207,7 @@ public struct OpenSBPPost: PostProcessor {
             }
         }
 
-        let home = stock.toWork(Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight)))
+        let home = stock.toWork(stock.parkPosition)
         jog(Vec3(units.toMM(state?.x ?? 0), units.toMM(state?.y ?? 0), home.z))
         jog(home)
         line("C7")

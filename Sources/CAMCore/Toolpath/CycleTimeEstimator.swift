@@ -149,7 +149,7 @@ public enum CycleTimeEstimator {
         }
         // Footer: retract and park.
         if let p = position {
-            let park = Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight))
+            let park = stock.parkPosition
             addRapid(p, Vec3(p.xy, max(p.z, park.z)))
             addRapid(Vec3(p.xy, max(p.z, park.z)), park)
         }

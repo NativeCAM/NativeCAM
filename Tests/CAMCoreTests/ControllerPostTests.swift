@@ -28,6 +28,15 @@ struct ControllerPostTests {
         }
     }
 
+    @Test func linuxCNCRotaryRoundBlankGolden() throws {
+        let (p, toolpaths) = GoldenPostTests.rotaryJob(blank: RotaryStock(shape: .cylinder, diameter: 50, length: 300),
+                                                       slotAngles: [0, 180], holeAngles: [0, 60, 120, 180, 240, 300],
+                                                       Self.controller(.linuxCNC, units: .mm))
+        let out = try files(p, toolpaths, golden: "linuxcnc-rotary-round")
+        #expect(out.count == 1 && out.allSatisfy { $0.1.isEmpty }, "\(out.flatMap(\.1).map(\.text))")
+        #expect(out.first?.0.gcode.contains("G0 A300.000") == true)
+    }
+
     @Test func coverageAndAcceptanceGoldensPassEveryCheck() throws {
         for (id, family) in Self.families {
             let (p, toolpaths) = GoldenPostTests.coverageJob(Self.controller(family))

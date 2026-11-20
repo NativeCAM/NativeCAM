@@ -120,7 +120,7 @@ public struct VectricTemplatePost: PostProcessor {
         let toolsUsed = paths.filter { seen.insert($0.tool.number).inserted }.map { "T\($0.tool.number) \($0.tool.name)" }.joined(separator: ", ")
 
         func value(_ label: String, _ c: Context) -> (Double?, String?) {
-            let home = stock.toWork(Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight)))
+            let home = stock.toWork(stock.parkPosition)
             let lo = stock.toWork(Vec3(0, 0, -stock.thickness)), hi = stock.toWork(Vec3(stock.width, stock.height, 0))
             switch label {
             case "X": return (round(c.end.x), nil)

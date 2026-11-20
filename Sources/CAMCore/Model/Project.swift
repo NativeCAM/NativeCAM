@@ -3,13 +3,15 @@ import Foundation
 /// A complete job: material, machine, vectors and operations. Toolpaths are derived, never stored.
 public struct Project: Hashable, Sendable {
     /// Newest file format this build reads. Format 2 adds machines with a controller other than Avid's Mach4
-    /// profile, or with a rotary axis. Format 3 adds rotary stock: builds that read format 2 would drop the blank and
+    /// profile, or with a rotary axis. Format 3 adds rotary stock and index angles: builds that read format 2 would drop the blank and
     /// post the job as a flat sheet, which with Z zeroed on the rotation axis drives the tool into the blank. Flat
     /// projects on Avid's Mach4 profile are still written as format 1 so older builds keep opening them.
     public static let currentFormatVersion = 3
 
     /// The format this project is written as: the oldest one that can hold it.
-    public var formatVersion: Int { max(machine.requiredFormatVersion, stock.requiredFormatVersion) }
+    public var formatVersion: Int {
+        operations.map(\.requiredFormatVersion).reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion), max)
+    }
 
     public var name: String
     public var displayUnits: LengthUnit

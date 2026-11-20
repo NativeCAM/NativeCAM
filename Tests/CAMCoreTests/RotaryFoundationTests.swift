@@ -103,18 +103,17 @@ struct RotaryFoundationTests {
         #expect(!job.issues.contains { $0.message.contains("rotary") })
     }
 
-    @Test func rotarySettingsDontChangeAvidOutput() throws {
+    @Test func aMachineRotaryAxisAloneDoesntChangeAvidOutput() throws {
+        // Rotary stock changes the output by design (see RotaryIndexTests); a rotary axis on a flat job doesn't.
         let p = Project.demoSign()
         let toolpaths = CAMEngine.generate(p).toolpaths
         var rotary = p
         rotary.machine.rotary = RotaryAxis(centerHeight: 100)
-        rotary.stock.rotary = RotaryStock()
         let job = CAMEngine.generate(rotary)
         #expect(job.toolpaths == toolpaths)
         #expect(AvidMach4Post(project: rotary, date: GoldenPostTests.date).post(toolpaths)
             == AvidMach4Post(project: p, date: GoldenPostTests.date).post(toolpaths))
-        // The job says plainly that the blank is cut as a flat block.
-        #expect(job.issues.contains { $0.severity == .warning && $0.message.contains("can't cut rotary stock yet") })
+        #expect(!job.issues.contains { $0.message.lowercased().contains("rotary") })
     }
 
     // MARK: Dialects

@@ -21,7 +21,7 @@ struct OperationInspector: View {
             }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine)
             parameters
-            if let tp = workspace.job?.toolpaths.first(where: { $0.id == op.id }) {
+            if let tp = workspace.job?.toolpaths.first(where: { $0.sourceOperationID == op.id }) {
                 Section("Result") {
                     LabeledContent("Cutting length", value: "\(units.format(tp.cuttingLength, decimals: 1)) \(units.symbol)")
                     LabeledContent("Estimated time", value: formatDuration(workspace.job?.estimatedSeconds(toolpath: tp.id)

@@ -317,8 +317,8 @@ final class Workspace {
         if showToolpaths && (!isSimulating || showToolpathsWhileSimulating) {
             let opIndex = Dictionary(uniqueKeysWithValues: project.operations.enumerated().map { ($1.id, $0) })
             for (i, tp) in toolpaths.enumerated() {
-                var color = colorForOperation(opIndex[tp.id] ?? i)
-                let highlight = selectedOperationID == tp.id
+                var color = colorForOperation(opIndex[tp.sourceOperationID] ?? i)
+                let highlight = selectedOperationID == tp.sourceOperationID
                 if dimmed { color.w = 0.35 } else if !highlight && selectedOperationID != nil { color.w = 0.45 }
                 let rapid = SIMD4<Float>(1, 0.3, 0.3, dimmed ? 0.2 : 0.55)
                 tp.forEachMotion { s, m in

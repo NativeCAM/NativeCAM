@@ -73,6 +73,44 @@ struct GoldenPostTests {
         return post(p, toolpaths)
     }
 
+    /// A hand-built indexed rotary job: a slot along the top of each face with T1, then a radial hole at each angle
+    /// with T2. Built by hand, like the coverage job, so it freezes the post rather than the generators.
+    static func rotaryJob(blank: RotaryStock = RotaryStock(shape: .squareBar, diameter: 2.inch, length: 12.inch),
+                          slotAngles: [Double] = [0, 90, 180, 270], holeAngles: [Double] = [0, 90, 180, 270],
+                          _ configure: (inout Project) -> Void = { _ in }) -> (Project, [Toolpath]) {
+        let lib = ToolLibrary.starter
+        let endMill = lib.tool(number: 1)!, small = lib.tool(number: 2)!
+        var stock = Stock(materialName: "Maple")
+        stock.setRotary(blank)
+        var p = Project(name: "Golden (rotary)", displayUnits: .inch, stock: stock)
+        p.machine.rotary = RotaryAxis(centerHeight: 4.inch)
+        configure(&p)
+        let c = p.stock.height / 2, safe = p.stock.clearanceHeight
+        func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "60D0E000-0000-0000-0001-%012d", n))! }
+        var toolpaths: [Toolpath] = []
+        for (k, angle) in slotAngles.enumerated() {
+            toolpaths.append(Toolpath(id: id(1 + k), name: "Slot @ \(RotaryIndex.label(angle))", tool: endMill, spindleRPM: 18000,
+                                      start: Vec3(100, c, safe), motions: [
+                .rapid(Vec3(100, c, 2)), .feed(Vec3(100, c, -3), 750), .feed(Vec3(160, c, -3), 2000), .rapid(Vec3(160, c, safe)),
+            ], indexAngle: angle, operationID: id(1)))
+        }
+        for (k, angle) in holeAngles.enumerated() {
+            toolpaths.append(Toolpath(id: id(21 + k), name: "Hole @ \(RotaryIndex.label(angle))", tool: small, spindleRPM: 18000,
+                                      start: Vec3(220, c, safe), motions: [
+                .rapid(Vec3(220, c, 2)), .feed(Vec3(220, c, -12), 500), .rapid(Vec3(220, c, safe)),
+            ], indexAngle: angle, operationID: id(21)))
+        }
+        return (p, toolpaths)
+    }
+
+    @Test func rotarySquareBarGolden() throws {
+        let (p, toolpaths) = Self.rotaryJob()
+        let data = Self.post(p, toolpaths)
+        try Self.check(data, golden: "rotary-square-inch")
+        let issues = GCodeCheck.run(String(decoding: data, as: UTF8.self), toolpaths: toolpaths, project: p, dialect: .avidMach4)
+        #expect(issues.filter { $0.severity != .info }.isEmpty, "\(issues.map(\.text))")
+    }
+
     static func coverageJob(_ configure: (inout Project) -> Void = { _ in }) -> (Project, [Toolpath]) {
         let lib = ToolLibrary.starter
         let endMill = lib.tool(number: 1)!, vBit = lib.tool(number: 5)!, unused = lib.tool(number: 9)!

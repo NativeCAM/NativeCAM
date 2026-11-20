@@ -88,10 +88,15 @@ public struct GenericGCodePost: PostProcessor {
         if let part {
             w.comment("File \(part.index) of \(part.count): one file per tool")
         } else {
-            w.comment(usesM6 ? "Tool changes: M6" : "Tool changes: M0 pause, change the bit, re-zero Z, resume")
+            w.comment(usesM6 ? "Tool changes: M6" : "Tool changes: M0 pause, change the bit, re-zero Z\(stock.rotary == nil ? "" : " on the rotation axis"), resume")
         }
-        w.comment("Material: \(stock.materialName) X\(num(stock.width)) Y\(num(stock.height)) Z\(num(stock.thickness)) \(units.symbol)")
-        w.comment("Z zero: \(stock.zZero.label)  XY zero: \(stock.xyOrigin.label)")
+        let rotary = RotaryOutput(project)
+        if rotary != nil {
+            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: false) { w.comment(line) }
+        } else {
+            w.comment("Material: \(stock.materialName) X\(num(stock.width)) Y\(num(stock.height)) Z\(num(stock.thickness)) \(units.symbol)")
+            w.comment("Z zero: \(stock.zZero.label)  XY zero: \(stock.xyOrigin.label)")
+        }
         w.comment("Safe Z \(num(workZ(stock.clearanceHeight)))")
         var seen = Set<Int>()
         for tp in paths where seen.insert(tp.tool.number).inserted {
@@ -106,6 +111,7 @@ public struct GenericGCodePost: PostProcessor {
         var currentTool: Int?
         var currentRPM: Double?
         var state = ModalState()
+        var turned = false
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
             if toolChanged {
@@ -129,11 +135,18 @@ public struct GenericGCodePost: PostProcessor {
             w.line("G0 X\(fmt(round(start.x))) Y\(fmt(round(start.y)))")
             state.x = round(start.x)
             state.y = round(start.y)
+            // Rotary: turn the blank at safe Z, over the start of the cut, whenever the angle isn't known to be right.
+            if let rotary, let angle = tp.indexAngle, state.a != rotary.value(angle) {
+                w.line("G0 \(rotary.word(angle))")
+                state.a = rotary.value(angle)
+                turned = true
+            }
             emitMotions(tp, writer: &w, state: &state)
         }
 
-        let home = stock.toWork(Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight)))
+        let home = stock.toWork(stock.parkPosition)
         w.line("G0 Z\(fmt(round(home.z)))")
+        if let rotary, turned { w.line("G0 \(rotary.word(0))") }
         w.line("G0 X\(fmt(round(home.x))) Y\(fmt(round(home.y)))")
         w.line("M5")
         w.line("M9")
@@ -149,15 +162,16 @@ public struct GenericGCodePost: PostProcessor {
         }
         if usesM6 {
             w.comment("Change to T\(tool.number) \(tool.name)")
+            if stock.rotary != nil { w.comment("Rotary job: \(RotaryOutput.rezero(stock, avid: false)), not on the blank") }
             w.line("T\(tool.number) M6")
             if appliesLengthOffset { w.line("G43 H\(tool.number)") }
         } else if first {
-            w.comment("Load T\(tool.number) \(tool.name) and zero Z before starting")
+            w.comment("Load T\(tool.number) \(tool.name) and zero Z\(stock.rotary == nil ? "" : " on the rotation axis") before starting")
         } else {
-            let park = stock.toWork(Vec3(stock.homePosition.xy, max(stock.homePosition.z, stock.clearanceHeight)))
+            let park = stock.toWork(stock.parkPosition)
             w.line("G0 Z\(fmt(round(park.z)))")
             w.line("G0 X\(fmt(round(park.x))) Y\(fmt(round(park.y)))")
-            w.comment("Change to T\(tool.number) \(tool.name), re-zero Z, then resume")
+            w.comment("Change to T\(tool.number) \(tool.name), \(stock.rotary == nil ? "re-zero Z" : RotaryOutput.rezero(stock, avid: false)), then resume")
             w.line("M0")
         }
         // A tool-change macro or wizard may leave relative moves behind.
@@ -274,6 +288,8 @@ public struct GenericGCodePost: PostProcessor {
         var y: Double?
         var z: Double?
         var feed: Double?
+        /// The rotary A value last written; nil when it isn't known.
+        var a: Double?
     }
 
     struct Writer {

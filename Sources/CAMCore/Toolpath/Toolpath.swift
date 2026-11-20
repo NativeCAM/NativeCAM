@@ -103,8 +103,15 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     public var start: Vec3
     public var motions: [Motion]
     public var warnings: [String]
+    /// On rotary stock, the angle (degrees, right-hand rule about +X) the blank turns to before this toolpath cuts;
+    /// its motions are in that face's frame. nil on a flat job.
+    public var indexAngle: Double?
+    /// The operation this toolpath came from, when it isn't `id` (an operation cut at several angles makes one
+    /// toolpath per angle).
+    public var operationID: UUID?
 
-    public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = []) {
+    public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
+                indexAngle: Double? = nil, operationID: UUID? = nil) {
         self.id = id
         self.name = name
         self.tool = tool
@@ -112,7 +119,12 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
         self.start = start
         self.motions = motions
         self.warnings = warnings
+        self.indexAngle = indexAngle
+        self.operationID = operationID
     }
+
+    /// The operation this toolpath belongs to.
+    public var sourceOperationID: UUID { operationID ?? id }
 
     public var isEmpty: Bool { !motions.contains { $0.kind != .rapid } }
 

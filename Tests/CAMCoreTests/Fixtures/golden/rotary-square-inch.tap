@@ -1,0 +1,104 @@
+(Golden {rotary})
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
+(Material: Maple rotary blank, square bar, 2.0000 across, L=12.0000 in)
+(Z ZERO = CENTRE OF ROTATION {Avid: Rotary tab > Z Axis Touch})
+(Y ZERO = AXIS CENTRELINE   X ZERO = LEFT END OF THE BLANK)
+(Raise the tool clear of the chuck and tailstock before Cycle Start)
+(Program extents: X3.9370 to X8.6614  Y0.0000 to Y0.0000  Z0.5276 to Z1.0787)
+(Safe Z = 1.6142)
+(Tools used:)
+(  T1 1/4in Upcut End Mill - D0.2500 End Mill)
+(  T2 1/8in Upcut End Mill - D0.1250 End Mill)
+(Toolpaths:)
+(  1. Slot @ 0deg - T1)
+(  2. Slot @ 90deg - T1)
+(  3. Slot @ 180deg - T1)
+(  4. Slot @ 270deg - T1)
+(  5. Hole @ 0deg - T2)
+(  6. Hole @ 90deg - T2)
+(  7. Hole @ 180deg - T2)
+(  8. Hole @ 270deg - T2)
+G00 G94 G20 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T1 1/4in Upcut End Mill)
+(Rotary job: re-zero Z on the rotation axis {Avid: Rotary tab > Z Axis Touch}, not on the blank)
+T1M6
+M07
+S18000 M03
+(Toolpath: Slot @ 0deg  Tool: T1 1/4in Upcut End Mill)
+G00 Z1.6142
+G00 X3.9370 Y0.0000
+G00 A0.000
+G00 Z1.0787
+G01 Z0.8819 F29.5
+G01 X6.2992 F78.7
+G00 Z1.6142
+(Toolpath: Slot @ 90deg  Tool: T1 1/4in Upcut End Mill)
+G00 Z1.6142
+G00 X3.9370 Y0.0000
+G00 A90.000
+G00 Z1.0787
+G01 Z0.8819 F29.5
+G01 X6.2992 F78.7
+G00 Z1.6142
+(Toolpath: Slot @ 180deg  Tool: T1 1/4in Upcut End Mill)
+G00 Z1.6142
+G00 X3.9370 Y0.0000
+G00 A180.000
+G00 Z1.0787
+G01 Z0.8819 F29.5
+G01 X6.2992 F78.7
+G00 Z1.6142
+(Toolpath: Slot @ 270deg  Tool: T1 1/4in Upcut End Mill)
+G00 Z1.6142
+G00 X3.9370 Y0.0000
+G00 A270.000
+G00 Z1.0787
+G01 Z0.8819 F29.5
+G01 X6.2992 F78.7
+G00 Z1.6142
+G00 Z1.6142
+M05
+(Change to Tool: T2 1/8in Upcut End Mill)
+(Rotary job: re-zero Z on the rotation axis {Avid: Rotary tab > Z Axis Touch}, not on the blank)
+T2M6
+G90 G91.1 G64
+M07
+S18000 M03
+(Toolpath: Hole @ 0deg  Tool: T2 1/8in Upcut End Mill)
+G00 Z1.6142
+G00 X8.6614 Y0.0000
+G00 A0.000
+G00 Z1.0787
+G01 Z0.5276 F19.7
+G00 Z1.6142
+(Toolpath: Hole @ 90deg  Tool: T2 1/8in Upcut End Mill)
+G00 Z1.6142
+G00 X8.6614 Y0.0000
+G00 A90.000
+G00 Z1.0787
+G01 Z0.5276
+G00 Z1.6142
+(Toolpath: Hole @ 180deg  Tool: T2 1/8in Upcut End Mill)
+G00 Z1.6142
+G00 X8.6614 Y0.0000
+G00 A180.000
+G00 Z1.0787
+G01 Z0.5276
+G00 Z1.6142
+(Toolpath: Hole @ 270deg  Tool: T2 1/8in Upcut End Mill)
+G00 Z1.6142
+G00 X8.6614 Y0.0000
+G00 A270.000
+G00 Z1.0787
+G01 Z0.5276
+G00 Z1.6142
+G00 Z2.0000
+G00 A0.000
+G00 X6.0000 Y0.0000
+M05
+M09
+M30
