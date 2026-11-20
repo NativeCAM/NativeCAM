@@ -489,3 +489,33 @@ enum Rotary3DGenerator {
             + "which of the model's axes lies along the blank, or that it's a closed solid."]
     }
 }
+
+/// The rotary blank with its 3D models on it, for showing before anything is cut: a radial grid like the
+/// simulation's (`RadialGrid`), each ray out to the farthest the models reach along it, or the blank's own surface
+/// where no model is.
+public enum RotaryModelPreview {
+    public static func surface(_ project: Project, maxCells: Int = 400_000) -> RadialGrid? {
+        guard project.stock.rotary != nil else { return nil }
+        let models = project.shapes.filter { $0.modelSpec?.rotary != nil && !$0.isKeepOut }
+        guard !models.isEmpty else { return nil }
+        var triangles: [Double] = []
+        for m in models {
+            m.forEachBlankTriangle { a, b, c in triangles.append(contentsOf: [a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z]) }
+        }
+        guard let probe = RotaryDropCutter(probe: triangles, angleBins: 360) else { return nil }
+        var g = RadialGrid(stock: project.stock, cellSize: nil, maxCells: maxCells)
+        let cols = g.columns, rows = g.rows
+        let out = ParallelResults<Float>(count: cols * rows, initial: .nan)
+        let grid = g
+        RotaryDropCutter.concurrently(cols * rows, chunk: 512) { range in
+            for i in range {
+                let x = grid.originX + Double(i % cols) * grid.cellSize
+                guard x >= probe.minX, x <= probe.maxX, let r = probe.crossings(x: x, angle: grid.angle(row: i / cols)).outer else { continue }
+                out[i] = Float(r)
+            }
+        }
+        let hits = out.array
+        for i in hits.indices where !hits[i].isNaN { g.radii[i] = hits[i] }
+        return g
+    }
+}

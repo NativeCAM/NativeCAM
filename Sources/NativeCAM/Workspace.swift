@@ -56,6 +56,11 @@ final class Workspace {
     // 3D model preview (the models carved into the stock, shown when not simulating)
     private(set) var modelPreview: HeightFieldSnapshot?
     var showModelPreview = true
+    /// On a rotary job: the blank with its models on it, shown when not simulating.
+    private(set) var rotaryModelPreview: RadialSnapshot?
+    /// While the rotary preview is shown: the sheet's Y at A0, its radius and the world Y and Z of the axis, for
+    /// drawing wrapped toolpaths round the blank at A0.
+    private var previewFrame: (centerY: Double, radius: Double, axis: SIMD2<Float>)?
 
     // Scene geometry cache
     private(set) var lines: [LineVertex] = []
@@ -83,12 +88,13 @@ final class Workspace {
         generationTask = Task { [weak self] in
             if debounce { try? await Task.sleep(for: .milliseconds(250)) }
             guard !Task.isCancelled else { return }
-            let (result, preview) = await Task.detached(priority: .userInitiated) {
-                (CAMEngine.generate(project), Workspace.previewSurface(project))
+            let (result, preview, radial) = await Task.detached(priority: .userInitiated) {
+                (CAMEngine.generate(project), Workspace.previewSurface(project), RotaryModelPreview.surface(project))
             }.value
             guard !Task.isCancelled, let self, token == self.generationCounter else { return }
             self.job = result
             self.publishPreview(preview, project: project)
+            self.publishRotaryPreview(radial, project: project)
             self.isGenerating = false
             self.rebuildLines(project)
             if self.session != nil && self.externalProgramName == nil {
@@ -98,9 +104,10 @@ final class Workspace {
         }
     }
 
-    /// Top surface of all models over the stock (nil when the project has no 3D models).
+    /// Top surface of all models over the stock (nil when the project has no 3D models). Models on a rotary blank are
+    /// shown on it instead (`RotaryModelPreview`).
     nonisolated static func previewSurface(_ project: Project) -> SurfaceGrid? {
-        let models = project.shapes.filter { $0.modelSpec != nil }
+        let models = project.shapes.filter { $0.modelSpec != nil && (project.stock.rotary == nil || $0.modelSpec?.rotary == nil) }
         guard !models.isEmpty else { return nil }
         let area = project.stock.bounds
         let cell = ModelRaster.cellSize(for: area, preferred: max(project.stock.width, project.stock.height) / 1200, maxCells: 1_500_000)
@@ -116,6 +123,19 @@ final class Workspace {
         modelPreview = HeightFieldSnapshot(columns: g.columns, rows: g.rows, cellSize: Float(g.cellSize),
                                            origin: SIMD2(Float(g.origin.x), Float(g.origin.y)), heights: heights,
                                            floorZ: floor, version: heightVersion)
+    }
+
+    private func publishRotaryPreview(_ g: RadialGrid?, project: Project) {
+        guard let g, let blank = project.stock.rotary else {
+            rotaryModelPreview = nil
+            previewFrame = nil
+            return
+        }
+        heightVersion += 1
+        rotaryModelPreview = RadialSnapshot(columns: g.columns, rows: g.rows, cellSize: Float(g.cellSize), originX: Float(g.originX),
+                                            radii: g.radii, version: heightVersion)
+        previewFrame = (project.stock.originPoint.y, blank.topRadius, SIMD2(Float(project.stock.height / 2), Float(-blank.topRadius)))
+        rebuildPathLines(project)
     }
 
     func estimatedSeconds(_ project: Project) -> Double { job?.estimatedSeconds ?? 0 }
@@ -265,6 +285,13 @@ final class Workspace {
                                            axis: axis, angle: Float(simAngle), faceAngles: session.faceAngles.map { Float($0) },
                                            radial: radialField)
             // The spoilboard is the rotary's centre height below the axis (a guess until that's measured).
+            let below = project.machine.rotary?.centerHeight ?? blank.outerRadius + 0.5.inch
+            scene.stockSize.z = Float(blank.radius + below)
+        } else if session == nil, showModelPreview, let preview = rotaryModelPreview, let blank = project.stock.rotary, let frame = previewFrame {
+            // The model on the blank, at A0.
+            scene.heightField = nil
+            scene.rotary = RotaryBlankView(square: blank.shape == .squareBar, radius: Float(blank.radius), length: Float(blank.length),
+                                           axis: frame.axis, angle: 0, faceAngles: [], radial: preview)
             let below = project.machine.rotary?.centerHeight ?? blank.outerRadius + 0.5.inch
             scene.stockSize.z = Float(blank.radius + below)
         }
@@ -473,9 +500,13 @@ final class Workspace {
                 let first = v.count
                 // While simulating, a wrapped toolpath is drawn wrapped round the blank (with the blank at A0), so it
                 // turns with it.
-                let wrap = wrapFrame.flatMap { w in tp.wrapDiameter != nil ? w : nil }
+                // Not simulating, with the model shown on the blank, the same at A0.
+                let preview = session == nil && showModelPreview ? previewFrame : nil
+                let frame = wrapFrame ?? preview.map { (centerY: $0.centerY, radius: $0.radius) }
+                let wrap = frame.flatMap { w in tp.wrapDiameter != nil ? w : nil }
+                let axisNow = rotaryAxis ?? preview?.axis
                 func vertex(_ p: Vec3) -> SIMD3<Float> {
-                    guard let w = wrap, let axis = rotaryAxis else { return SIMD3(Float(p.x), Float(p.y), Float(p.z)) }
+                    guard let w = wrap, let axis = axisNow else { return SIMD3(Float(p.x), Float(p.y), Float(p.z)) }
                     let r = w.radius + p.z, a = (p.y - w.centerY) / w.radius
                     return SIMD3(Float(p.x), axis.x + Float(r * sin(a)), axis.y + Float(r * cos(a)))
                 }

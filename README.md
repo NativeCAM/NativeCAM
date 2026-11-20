@@ -52,6 +52,7 @@ Built in SwiftUI and Metal for Apple silicon. No Rosetta, no Electron, no Window
 - **Writes your controller's dialect.** Avid Mach4, the Grbl family, LinuxCNC, Masso, Centroid CNC12, Buildbotics, ShopBot and RichAuto, or any controller through your own Vectric post. [Controllers →](docs/controllers.md)
 - **Checks the file the machine will run.** Every export is checked against the controller and read back move by move against the toolpaths, and you can export an air cut and a printable setup sheet. [Export checks →](docs/controllers.md#export-checks-air-cuts-and-setup-sheets)
 - **2.5D and 3D toolpaths.** Profile, pocket, drill and V-carve with tabs, ramps, leads, dogbones and islands, V-carve inlays (a mirrored plug that seats in its pocket with a glue gap, checked before you cut), rest machining (clear with a big bit, finish corners with a small one), plus 3D relief roughing and drop-cutter finishing from STL, OBJ, 3MF, USDZ or PLY. [Features →](docs/using-nativecam.md#toolpaths-and-features)
+- **Rotary (4th axis).** Cut a blank face by face, wrap designs and spirals around it, turn it round, or finish a 3D model all the way round as it turns (a spiral, rings or passes along it, from an exact rotary drop-cutter), fed in inverse time (`G93`) for Avid's rotary on Mach4, LinuxCNC and grblHAL. [Rotary jobs →](docs/using-nativecam.md#rotary-jobs)
 - **Less time in the air.** Low links over material already cut, short travel between cuts, rounded roughing corners, and **Optimize Run Order** for the fewest tool changes.
 - **Simulator and run times.** A Metal heightmap carved by each bit's true shape, timed with the controller's own planner model, not distance divided by feed.
 - **Feels like a Mac app.** Document windows, real menus and shortcuts, undo, drag-and-drop import, trackpad gestures, and Liquid Glass controls on macOS 26.
@@ -66,7 +67,7 @@ scripts/build-app.sh --open
 
 This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launches it. Drag it to `/Applications` to keep it; leave off `--open` to build without launching.
 
-1. Choose **File ▸ New Demo Sign Project** (2.5D) or **File ▸ New Demo Relief Project (3D)** to open a ready-made job. Both are also saved in [`examples/`](examples/) with their G-code.
+1. Choose **File ▸ New Demo Sign Project** (2.5D), **File ▸ New Demo Relief Project (3D)** or **File ▸ New Demo Rotary Project (3D)** (a chess pawn turned on the rotary) to open a ready-made job. All three are also saved in [`examples/`](examples/) with their G-code.
 2. Press **⌘R** to simulate, and scrub the timeline at the bottom of the window.
 3. Set up your machine under **Settings ▸ Machine ▸ Set Up a Machine…** (new documents start on an Avid PRO6060 with Mach4), then press **⌘E** to export.
 

@@ -484,6 +484,44 @@ struct Rotary3DTests {
         #expect(html.contains("<h2>3D rotary</h2>") && html.contains("its X axis along the blank") && html.contains("all round"))
     }
 
+    /// LinuxCNC and grblHAL take the same inverse-time moves, and their files read back clean.
+    @Test func otherInverseTimeControllersPostItCleanly() throws {
+        for family in [ControllerFamily.linuxCNC, .grblHAL] {
+            var p = Self.smallFinish()
+            p.machine.model = .custom
+            p.machine.controller = ControllerProfile(family: family)
+            p.machine.outputUnits = .mm
+            let job = CAMEngine.generate(p)
+            #expect(!job.issues.contains { $0.severity == .error }, "\(family): \(job.issues.map(\.message))")
+            var post = try #require(PostProcessors.post(for: p, date: GoldenPostTests.date) as? GenericGCodePost)
+            post.timeZone = TimeZone(identifier: "UTC")!
+            let g = post.post(job.toolpaths)
+            #expect(g.contains("G93 G1 A90.000 F"), "\(family)")
+            let issues = GCodeCheck.run(g, toolpaths: job.toolpaths, project: p, dialect: post.dialect)
+            #expect(problems(issues).isEmpty, "\(family): \(problems(issues))")
+        }
+    }
+
+    /// On a wrapped job the finish wraps round the blank at the wrap diameter, and comes out the same.
+    @Test func itFinishesOnAWrappedJobToo() throws {
+        let p = Self.job(mesh: Self.turned(Self.wave, length: 100, samples: 200, segments: 96),
+                         params: RotaryFinishParams(stepoverFraction: 0.3, allowance: 0.25, angleStep: 2)) { p in
+            var b = p.stock.rotary!
+            b.layout = .wrapped
+            b.wrapDiameter = 44
+            p.stock.setRotary(b)
+            p.placeModelsOnBlank()
+        }
+        let job = CAMEngine.generate(p)
+        #expect(!job.hasErrors, "\(messages(job, .error))")
+        let tp = try #require(job.toolpaths.first)
+        #expect(tp.wrapDiameter == 44)
+        var s = SimulationSession(toolpaths: job.toolpaths, stock: p.stock, rapidRate: 5000, cellSize: 0.3)
+        s.runToEnd()
+        let d = deviation(try #require(s.radialGrid), allowance: 0.25)
+        #expect(d.inside < 0.03, "gouge \(d.inside)")
+    }
+
     /// A rotary finish saved by format 7 keeps loading and posting the same bytes.
     static func savedFinish() -> Project {
         var p = smallFinish()

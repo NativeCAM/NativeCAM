@@ -72,6 +72,7 @@ struct ContentView: View {
         .onChange(of: workspace.showVectors) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showToolpaths) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showRapids) { _, _ in workspace.rebuildLines(project) }
+        .onChange(of: workspace.showModelPreview) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showToolpathsWhileSimulating) { _, _ in workspace.rebuildLines(project) }
         .onReceive(NotificationCenter.default.publisher(for: DebugCapture.command)) { handleDebug($0.userInfo ?? [:]) }
         .sheet(item: $debugPost) { d in

@@ -154,7 +154,11 @@ final class CanvasController: ViewportInteractionDelegate {
     private func translate(_ ids: Set<UUID>, by d: Vec2) {
         guard d.length > 1e-9 else { return }
         var proj = p
-        for i in proj.shapes.indices where ids.contains(proj.shapes[i].id) { proj.shapes[i].position += d }
+        for i in proj.shapes.indices where ids.contains(proj.shapes[i].id) {
+            // A model on a rotary blank stays on the axis: it only moves along the blank.
+            let onBlank = proj.stock.rotary != nil && proj.shapes[i].modelSpec?.rotary != nil
+            proj.shapes[i].position += onBlank ? Vec2(d.x, 0) : d
+        }
         project.wrappedValue = proj // one document change = one undo step
     }
 
