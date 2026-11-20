@@ -243,6 +243,10 @@ case "sim":
         for (i, angle) in session.faceAngles.enumerated() {
             print(String(format: "  Face at %@: removed %.1f cm³ below the face", RotaryIndex.label(angle), session.grid(face: i).removedVolume / 1000))
         }
+        if let radial = session.radialGrid {
+            print(String(format: "  Wrapped toolpaths: removed %.1f cm³ all the way round (heights and PNG show the sheet unrolled)",
+                         radial.removedVolume / 1000))
+        }
     }
     if !session.rapidCollisions.isEmpty {
         print("[error] \(session.rapidCollisions.count) rapid move(s) cut through material")

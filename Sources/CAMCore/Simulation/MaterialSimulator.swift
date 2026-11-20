@@ -23,6 +23,16 @@ public struct HeightGrid: Sendable {
         heights = [Float](repeating: 0, count: columns * rows)
     }
 
+    /// A grid with every value given (a radial grid laid flat, say).
+    public init(columns: Int, rows: Int, cellSize: Double, origin: Vec2, floorZ: Float, heights: [Float]) {
+        self.columns = columns
+        self.rows = rows
+        self.cellSize = cellSize
+        self.origin = origin
+        self.floorZ = floorZ
+        self.heights = heights
+    }
+
     @inlinable public func index(_ col: Int, _ row: Int) -> Int { row * columns + col }
 
     public func height(at p: Vec2) -> Float? {
@@ -224,7 +234,10 @@ public struct SimulationTimeline: Sendable {
         public var startTime: Double
         public var duration: Double
         /// On a rotary job, the blank's A angle during this step (degrees, as the post writes it); 0 on a flat job.
+        /// For a move of a wrapped toolpath, the angle it starts at.
         public var angle: Double = 0
+        /// For a move of a wrapped toolpath, the angle it ends at: the blank turns as the tool moves.
+        public var endAngle: Double?
         /// Set on a step that turns the blank from one A angle to the next, with the tool waiting at safe Z over the
         /// next cut; its motion is a dwell there.
         public var turn: Turn?
@@ -249,7 +262,11 @@ public struct SimulationTimeline: Sendable {
     /// `turnSpeed` (degrees per second) makes it a rotary timeline: the blank starts at A0, turns to each
     /// toolpath's index angle before it cuts (with the tool over its start, as the post does), and turns back to
     /// A0 at the end. Turns take at least a quarter of a second.
-    public init(toolpaths: [Toolpath], rapidRate: Double, durations: [[Double]]? = nil, turnSpeed: Double? = nil) {
+    ///
+    /// `wrap` (the sheet's Y at A0 and its radius) is for wrapped toolpaths: the blank turns to the angle of a wrapped
+    /// toolpath's start before it, then with every move as the tool goes across the sheet.
+    public init(toolpaths: [Toolpath], rapidRate: Double, durations: [[Double]]? = nil, turnSpeed: Double? = nil,
+                wrap: (centerY: Double, radius: Double)? = nil) {
         self.toolpaths = toolpaths
         var t = 0.0
         var steps: [Step] = []
@@ -263,13 +280,20 @@ public struct SimulationTimeline: Sendable {
             a = angle
         }
         for (i, tp) in toolpaths.enumerated() {
-            turn(to: tp.indexAngle ?? 0, toolpath: i, at: tp.start)
+            let wrapped = tp.wrapDiameter != nil ? wrap : nil
+            func angle(_ p: Vec3) -> Double { wrapped.map { (p.y - $0.centerY) / $0.radius * 180 / .pi } ?? 0 }
+            turn(to: wrapped == nil ? tp.indexAngle ?? 0 : angle(tp.start), toolpath: i, at: tp.start)
             var k = 0
             tp.forEachMotion { s, m in
                 var d = m.duration(from: s, rapidRate: rapidRate)
                 if let dur = durations, i < dur.count, k < dur[i].count { d = dur[i][k] }
                 k += 1
-                steps.append(Step(toolpathIndex: i, start: s, motion: m, startTime: t, duration: d, angle: a))
+                var step = Step(toolpathIndex: i, start: s, motion: m, startTime: t, duration: d, angle: a)
+                if wrapped != nil, m.kind != .dwell {
+                    a = angle(m.end)
+                    step.endAngle = a
+                }
+                steps.append(step)
                 t += d
             }
         }
@@ -284,8 +308,9 @@ public struct SimulationTimeline: Sendable {
         guard turnsBlank else { return nil }
         guard let i = stepIndex(at: t) else { return 0 }
         let s = steps[i]
-        guard let turn = s.turn else { return s.angle }
         let f = s.duration > 0 ? max(0, min(1, (t - s.startTime) / s.duration)) : 1
+        if let end = s.endAngle { return s.angle + (end - s.angle) * f }
+        guard let turn = s.turn else { return s.angle }
         return turn.from + (turn.to - turn.from) * f
     }
 
@@ -331,17 +356,24 @@ public struct SimulationTimeline: Sendable {
 /// frame: every indexed cut is a top-down cut into the face under the spindle, so each face's height grid is
 /// exact, and the material left is the blank minus what every face removed. The face grids reach down to the far
 /// side of the blank, so holes drilled past the axis show.
+///
+/// Wrapped toolpaths carve a radial grid instead (`radial`): the distance from the axis to the surface all the way
+/// round, which is what a tool pointing at the axis can reach. A job with both keeps both, and the material left is
+/// what all of them leave. A wrapped job has no faces.
 public struct SimulationSession: Sendable {
     public let timeline: SimulationTimeline
-    /// Material after every fully completed move, one simulator per face (`faceAngles`).
+    /// Material after every fully completed move, one simulator per face (`faceAngles`). Empty on a wrapped job.
     public private(set) var faces: [MaterialSimulator]
     /// Each face's index angle, normalized to 0 ≤ angle < 360 (degrees), in the order the job first cuts them.
     /// [0] on a flat job.
     public let faceAngles: [Double]
-    /// The face each toolpath cuts.
+    /// Material the wrapped toolpaths leave, after every fully completed move; nil when the job has none.
+    public private(set) var radial: RadialSimulator?
+    /// The face each toolpath cuts, or -1 for a wrapped toolpath (the radial grid).
     private let faceOfToolpath: [Int]
     /// Committed material plus the partially completed current move (nil when the play head is on a step boundary).
     private var display: (face: Int, simulator: MaterialSimulator)?
+    private var radialDisplay: RadialSimulator?
     public private(set) var time: Double = 0
     /// Steps fully applied to `faces`.
     private var appliedSteps = 0
@@ -354,32 +386,41 @@ public struct SimulationSession: Sendable {
     /// the blank at the nominal pace.
     public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, durations: [[Double]]? = nil,
                 turnSpeed: Double? = nil) {
-        // A wrapped job simulates on its unrolled sheet for now, like a flat job: what's cut away at each angle shows at
-        // that height on the sheet.
-        let faced = stock.rotary.map { !$0.isWrapped } ?? false
-        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations,
-                                      turnSpeed: faced ? turnSpeed.map { $0 / 60 } ?? Self.turnSpeed : nil)
-        guard faced, let blank = stock.rotary else {
+        let wrapped = toolpaths.contains { $0.wrapDiameter != nil }
+        // A program read from a file onto a wrapped job's sheet has no wrapped toolpaths: it's shown flat on the sheet.
+        guard let blank = stock.rotary, !blank.isWrapped || wrapped else {
+            timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations)
             faces = [MaterialSimulator(stock: stock, cellSize: cellSize)]
             faceAngles = [0]
             faceOfToolpath = toolpaths.map { _ in 0 }
             return
         }
+        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations,
+                                      turnSpeed: turnSpeed.map { $0 / 60 } ?? Self.turnSpeed,
+                                      wrap: wrapped ? (stock.originPoint.y, blank.topRadius) : nil)
         var angles: [Double] = []
         var faceOf: [Int] = []
         for tp in toolpaths {
+            guard tp.wrapDiameter == nil else { faceOf.append(-1); continue }
             let a = RotaryIndex.normalized(tp.indexAngle ?? 0)
             if let i = angles.firstIndex(of: a) { faceOf.append(i) } else { faceOf.append(angles.count); angles.append(a) }
         }
-        if angles.isEmpty { angles = [0] }
+        if angles.isEmpty && !wrapped { angles = [0] }
         var faceStock = stock
         faceStock.thickness = blank.radius + blank.outerRadius
         // Share one flat job's cell budget between the faces.
-        let cell = cellSize ?? max(0.2, (max(stock.width * stock.height, 1) * Double(angles.count) / 2_500_000).squareRoot())
+        let cell = cellSize ?? max(0.2, (max(stock.width * stock.height, 1) * Double(max(angles.count, 1)) / 2_500_000).squareRoot())
         faces = angles.map { _ in MaterialSimulator(stock: faceStock, cellSize: cell) }
         faceAngles = angles
         faceOfToolpath = faceOf
+        radial = wrapped ? RadialSimulator(stock: stock, cellSize: cellSize) : nil
     }
+
+    /// The material wrapped toolpaths leave, as it looks at the play head.
+    public var radialGrid: RadialGrid? { radialDisplay?.grid ?? radial?.grid }
+
+    /// True when the toolpath at `index` is wrapped (it carves the radial grid, with the blank turning as it cuts).
+    public func isWrapped(toolpath index: Int) -> Bool { faceOfToolpath[index] < 0 }
 
     /// Material on face `face` as it looks at the play head.
     public func grid(face: Int) -> HeightGrid {
@@ -387,13 +428,24 @@ public struct SimulationSession: Sendable {
         return faces[face].grid
     }
 
-    /// Material as it looks at the play head: on a rotary job, the face being cut.
-    public var grid: HeightGrid { grid(face: toolState.map { faceOfToolpath[$0.toolpathIndex] } ?? 0) }
+    /// Material as it looks at the play head: on a rotary job, the face being cut; on a wrapped job, the radial grid
+    /// laid flat as the unrolled sheet.
+    public var grid: HeightGrid {
+        if let radialGrid, faces.isEmpty || toolState.map({ faceOfToolpath[$0.toolpathIndex] < 0 }) == true {
+            return radialGrid.unrolled
+        }
+        return grid(face: toolState.map { max(0, faceOfToolpath[$0.toolpathIndex]) } ?? 0)
+    }
 
     /// Rapid moves that hit material up to the play head.
     public var rapidCollisions: [Vec3] {
         faces.indices.flatMap { i in display?.face == i ? display!.simulator.rapidCollisions : faces[i].rapidCollisions }
+            + ((radialDisplay ?? radial)?.rapidCollisions ?? [])
     }
+
+    /// The blank's A angle at time `t` (degrees): part way through a turn, or with the tool on a wrapped toolpath.
+    /// nil on a flat job.
+    public func blankAngle(at t: Double) -> Double? { timeline.blankAngle(at: t) }
 
     /// The face the toolpath at `index` cuts.
     public func face(ofToolpath index: Int) -> Int { faceOfToolpath[index] }
@@ -403,23 +455,33 @@ public struct SimulationSession: Sendable {
         let t = max(0, min(timeline.duration, tIn))
         if t < time {
             for i in faces.indices { faces[i].reset() }
+            radial?.reset()
             appliedSteps = 0
         }
         let steps = timeline.steps
         while appliedSteps < steps.count, steps[appliedSteps].startTime + steps[appliedSteps].duration <= t {
             let s = steps[appliedSteps]
-            faces[faceOfToolpath[s.toolpathIndex]].apply(s.motion, from: s.start, tool: timeline.toolpaths[s.toolpathIndex].tool, fraction: 1)
+            let tool = timeline.toolpaths[s.toolpathIndex].tool
+            let face = faceOfToolpath[s.toolpathIndex]
+            if face < 0 { radial?.apply(s.motion, from: s.start, tool: tool, fraction: 1) } else { faces[face].apply(s.motion, from: s.start, tool: tool, fraction: 1) }
             appliedSteps += 1
         }
         display = nil
+        radialDisplay = nil
         if appliedSteps < steps.count {
             let s = steps[appliedSteps]
             let f = s.duration > 0 ? (t - s.startTime) / s.duration : 0
             if f > 0 {
+                let tool = timeline.toolpaths[s.toolpathIndex].tool
                 let face = faceOfToolpath[s.toolpathIndex]
-                var d = faces[face]
-                d.apply(s.motion, from: s.start, tool: timeline.toolpaths[s.toolpathIndex].tool, fraction: f)
-                display = (face, d)
+                if face < 0, var d = radial {
+                    d.apply(s.motion, from: s.start, tool: tool, fraction: f)
+                    radialDisplay = d
+                } else if face >= 0 {
+                    var d = faces[face]
+                    d.apply(s.motion, from: s.start, tool: tool, fraction: f)
+                    display = (face, d)
+                }
             }
         }
         time = t

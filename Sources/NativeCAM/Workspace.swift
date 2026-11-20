@@ -40,6 +40,11 @@ final class Workspace {
     /// Multiple of real time.
     var playbackSpeed: Double = 20
     private(set) var heightField: HeightFieldSnapshot?
+    /// While simulating wrapped toolpaths: what they've cut, all the way round the blank.
+    private(set) var radialField: RadialSnapshot?
+    /// While simulating a job with wrapped toolpaths: the sheet's Y at A0 and its radius, for putting the tool over
+    /// the axis and wrapping the toolpaths round the blank.
+    private var wrapFrame: (centerY: Double, radius: Double)?
     private var heightVersion = 0
     private var playTask: Task<Void, Never>?
     /// While simulating a rotary job: the world Y and Z of the blank's axis, and its A angle at the play head.
@@ -138,8 +143,11 @@ final class Workspace {
         session = s
         simTime = 0
         simAngle = 0
-        // A wrapped job simulates on its unrolled sheet for now, drawn flat.
-        rotaryAxis = project.stock.rotary.flatMap { $0.isWrapped ? nil : SIMD2(Float(project.stock.height / 2), Float(-$0.radius)) }
+        // The blank's axis is under the middle of the sheet, its top (or the wrap diameter) at the sheet's Z = 0. A
+        // program read from a file onto a wrapped job's sheet is drawn flat.
+        let rotary = project.stock.rotary.flatMap { s.radial != nil || !$0.isWrapped ? $0 : nil }
+        rotaryAxis = rotary.map { SIMD2(Float(project.stock.height / 2), Float(-$0.topRadius)) }
+        wrapFrame = s.radial != nil ? rotary.map { (project.stock.originPoint.y, $0.topRadius) } : nil
         turnStarts = s.timeline.steps.filter { $0.turn != nil }.map(\.startTime)
         publishHeights()
         rebuildLines(project)
@@ -151,6 +159,8 @@ final class Workspace {
         session = nil
         externalProgramName = nil
         heightField = nil
+        radialField = nil
+        wrapFrame = nil
         simTime = 0
         simAngle = 0
         rotaryAxis = nil
@@ -163,7 +173,7 @@ final class Workspace {
         session!.seek(to: t)
         simTime = session!.time
         publishHeights()
-        let angle = session!.timeline.blankAngle(at: simTime) ?? 0
+        let angle = session!.blankAngle(at: simTime) ?? 0
         if angle != simAngle {
             simAngle = angle
             if !rotaryPathLines.isEmpty { publishLines() }
@@ -185,18 +195,28 @@ final class Workspace {
         guard let s = session, let state = s.toolState else { return nil }
         let tp = s.timeline.toolpaths[state.toolpathIndex]
         let sil = tp.tool.silhouette().map { SIMD2<Float>(Float($0.x), Float($0.y)) }
-        let p = state.position
+        var p = state.position
+        // On a wrapped toolpath the tool stays over the axis while the blank turns under it.
+        if let wrap = wrapFrame, s.isWrapped(toolpath: state.toolpathIndex) { p.y = wrap.centerY }
         let name = s.timeline.turn(at: s.time)?.turn.map { "Turning the blank to \(RotaryIndex.label($0.to))" } ?? tp.name
         return (ToolMarker(tip: SIMD3(Float(p.x), Float(p.y), Float(p.z)), silhouette: sil), name)
     }
 
     private func publishHeights() {
-        guard let s = session else { heightField = nil; return }
-        let g = s.grid
+        guard let s = session else { heightField = nil; radialField = nil; return }
         heightVersion += 1
+        if rotaryAxis != nil, let rg = s.radialGrid {
+            radialField = RadialSnapshot(columns: rg.columns, rows: rg.rows, cellSize: Float(rg.cellSize), originX: Float(rg.originX),
+                                         radii: rg.radii, version: heightVersion)
+        } else {
+            radialField = nil
+        }
+        // A wrapped job has no faces: the radial grid is all there is.
+        if rotaryAxis != nil && s.faces.isEmpty { heightField = nil; return }
+        let g = rotaryAxis == nil ? s.grid : s.grid(face: 0)
         // A rotary job's faces go one after another, in `faceAngles` order.
         let faces = rotaryAxis == nil ? 1 : s.faces.count
-        let heights = faces == 1 ? g.heights : (0..<faces).flatMap { s.grid(face: $0).heights }
+        let heights = faces == 1 && rotaryAxis == nil ? g.heights : (0..<faces).flatMap { s.grid(face: $0).heights }
         heightField = HeightFieldSnapshot(columns: g.columns, rows: g.rows, cellSize: Float(g.cellSize),
                                           origin: SIMD2(Float(g.origin.x), Float(g.origin.y)),
                                           heights: heights, floorZ: g.floorZ, version: heightVersion, layers: faces)
@@ -240,9 +260,10 @@ final class Workspace {
         scene.heightField = heightField ?? (showModelPreview ? modelPreview : nil)
         scene.tool = simTool?.marker
         scene.showStock = true
-        if let session, heightField != nil, let blank = project.stock.rotary, let axis = rotaryAxis {
+        if let session, heightField != nil || radialField != nil, let blank = project.stock.rotary, let axis = rotaryAxis {
             scene.rotary = RotaryBlankView(square: blank.shape == .squareBar, radius: Float(blank.radius), length: Float(blank.length),
-                                           axis: axis, angle: Float(simAngle), faceAngles: session.faceAngles.map { Float($0) })
+                                           axis: axis, angle: Float(simAngle), faceAngles: session.faceAngles.map { Float($0) },
+                                           radial: radialField)
             // The spoilboard is the rotary's centre height below the axis (a guess until that's measured).
             let below = project.machine.rotary?.centerHeight ?? blank.outerRadius + 0.5.inch
             scene.stockSize.z = Float(blank.radius + below)
@@ -443,20 +464,35 @@ final class Workspace {
                 if dimmed { color.w = 0.35 } else if !highlight && selectedOperationID != nil { color.w = 0.45 }
                 let rapid = SIMD4<Float>(1, 0.3, 0.3, dimmed ? 0.2 : 0.55)
                 let first = v.count
+                // While simulating, a wrapped toolpath is drawn wrapped round the blank (with the blank at A0), so it
+                // turns with it.
+                let wrap = wrapFrame.flatMap { w in tp.wrapDiameter != nil ? w : nil }
+                func vertex(_ p: Vec3) -> SIMD3<Float> {
+                    guard let w = wrap, let axis = rotaryAxis else { return SIMD3(Float(p.x), Float(p.y), Float(p.z)) }
+                    let r = w.radius + p.z, a = (p.y - w.centerY) / w.radius
+                    return SIMD3(Float(p.x), axis.x + Float(r * sin(a)), axis.y + Float(r * cos(a)))
+                }
                 tp.forEachMotion { s, m in
                     guard m.kind != .dwell else { return }
                     if m.kind == .rapid && !showRapids { return }
                     let c = m.kind == .rapid ? rapid : color
                     var p = s
-                    for q in m.samples(from: s, maxStep: 0.5) {
-                        v.append(LineVertex(SIMD3(Float(p.x), Float(p.y), Float(p.z)), c))
-                        v.append(LineVertex(SIMD3(Float(q.x), Float(q.y), Float(q.z)), c))
+                    var points = m.samples(from: s, maxStep: 0.5)
+                    if let w = wrap {
+                        // A line on the sheet is a helix round the blank: draw it in 2° steps.
+                        let n = max(1, Int((abs(m.end.y - s.y) / w.radius / (2 * .pi / 180)).rounded(.up)))
+                        points = (1...n).map { s.lerp(to: m.end, Double($0) / Double(n)) }
+                    }
+                    for q in points {
+                        v.append(LineVertex(vertex(p), c))
+                        v.append(LineVertex(vertex(q), c))
                         p = q
                     }
                 }
                 if rotaryAxis != nil, v.count > first {
-                    // Each toolpath is in its face's frame: keep it apart so it can turn with the blank.
-                    turned.append((tp.indexAngle ?? 0, Array(v[first...])))
+                    // Each toolpath is in its face's frame (a wrapped one in the blank's, at A0): keep it apart so it
+                    // can turn with the blank.
+                    turned.append((wrap == nil ? tp.indexAngle ?? 0 : 0, Array(v[first...])))
                     v.removeSubrange(first...)
                 }
             }

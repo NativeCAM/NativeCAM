@@ -293,6 +293,7 @@ struct RotaryUniforms {
     float4 cutColor;
     float4 deepColor;
     float4 sideColor;
+    float4 radial;    // radial grid: x columns, y rows, z cell size along X (mm), w X of column 0's centre; 0 = none
 };
 
 struct RotaryOut {
@@ -329,6 +330,29 @@ inline bool rotary_removed(float3 b, int skip, constant RotaryUniforms& u, const
         if (q.y > h + u.origin.w) { return true; }
     }
     return false;
+}
+
+// ---------------------------------------------------------------- radial grid (wrapped toolpaths)
+//
+// Wrapped cuts are simulated as the distance from the axis to the surface for each station along the blank
+// (columns) and each material angle round it (rows from the seam at -pi to pi, measured from the top of the blank at
+// A0, +Z, toward +Y). A blank-frame point (x, y, z) is at angle atan2(y, z).
+
+inline float radial_at(texture2d<float, access::read> t, int col, int row, int cols, int rows) {
+    int r = row % rows;
+    if (r < 0) { r += rows; }
+    return t.read(uint2(uint(clamp(col, 0, cols - 1)), uint(r))).r;
+}
+
+// True when the radial grid has cut away the blank-frame point `b`.
+inline bool radial_removed(float3 b, constant RotaryUniforms& u, texture2d<float, access::read> rt) {
+    if (u.radial.x < 0.5) { return false; }
+    int cols = int(u.radial.x), rows = int(u.radial.y);
+    int col = int(round((b.x - u.radial.w) / u.radial.z));
+    if (col < 0 || col >= cols) { return false; }
+    float a = atan2(b.y, b.z);
+    int row = int(floor((a + M_PI_F) / (2.0 * M_PI_F) * float(rows)));
+    return length(b.yz) > radial_at(rt, col, row, cols, rows) + u.origin.w;
 }
 
 inline float rotary_extent(float2 b, constant RotaryUniforms& u) {
@@ -383,7 +407,8 @@ fragment float4 rotary_face_fragment(RotaryOut in [[stage_in]],
                                      constant FrameUniforms& f [[buffer(1)]],
                                      constant RotaryUniforms& u [[buffer(2)]],
                                      constant float* angles [[buffer(3)]],
-                                     texture2d_array<float, access::read> tex [[texture(0)]]) {
+                                     texture2d_array<float, access::read> tex [[texture(0)]],
+                                     texture2d<float, access::read> rtex [[texture(1)]]) {
     float eps = u.origin.w;
     float radius = max(u.origin.z, 1e-3);
     // Cut right through to the far side of the blank: nothing left to draw.
@@ -392,6 +417,7 @@ fragment float4 rotary_face_fragment(RotaryOut in [[stage_in]],
     // round blank).
     if (rotary_extent(in.blank.yz, u) >= radius - eps) { discard_fragment(); }
     if (rotary_removed(in.blank, in.layer, u, angles, tex)) { discard_fragment(); }
+    if (radial_removed(in.blank, u, rtex)) { discard_fragment(); }
 
     float depth = saturate(in.depth / radius);
     float3 base = mix(u.cutColor.rgb, u.deepColor.rgb, depth);
@@ -418,8 +444,10 @@ fragment float4 rotary_blank_fragment(RotaryOut in [[stage_in]],
                                       constant FrameUniforms& f [[buffer(1)]],
                                       constant RotaryUniforms& u [[buffer(2)]],
                                       constant float* angles [[buffer(3)]],
-                                      texture2d_array<float, access::read> tex [[texture(0)]]) {
+                                      texture2d_array<float, access::read> tex [[texture(0)]],
+                                      texture2d<float, access::read> rtex [[texture(1)]]) {
     if (rotary_removed(in.blank, -1, u, angles, tex)) { discard_fragment(); }
+    if (radial_removed(in.blank, u, rtex)) { discard_fragment(); }
     float3 n = normalize(in.normal);
     bool cap = abs(n.x) > 0.5;
     float3 base = cap ? u.sideColor.rgb : u.topColor.rgb;
@@ -429,6 +457,91 @@ fragment float4 rotary_blank_fragment(RotaryOut in [[stage_in]],
         float phase = around * 0.75 + 4.0 * sin(in.blank.x * 0.004 + around * 0.021);
         float grainAA = saturate(1.5 - 2.0 * fwidth(phase));
         base *= 1.0 - 0.06 * pow(abs(sin(phase)), 8.0) * grainAA;
+    }
+    return float4(shade(base, n, in.world, f, 0.05, 24.0), 1.0);
+}
+
+// The radial grid's surface: one strip per pair of neighbouring angles, instanced round the blank (the last strip
+// closes the seam), turned to the blank's angle. It stands in for the blank's own surface where nothing was cut.
+vertex RotaryOut rotary_tube_vertex(uint vid [[vertex_id]],
+                                    uint iid [[instance_id]],
+                                    constant FrameUniforms& f [[buffer(1)]],
+                                    constant RotaryUniforms& u [[buffer(2)]],
+                                    texture2d<float, access::read> rtex [[texture(1)]]) {
+    int cols = int(u.radial.x), rows = int(u.radial.y);
+    float cs = u.radial.z;
+    float da = 2.0 * M_PI_F / float(rows);
+    int col = int(vid >> 1);
+    int row = int(iid) + int(vid & 1u);
+    float r = radial_at(rtex, col, row, cols, rows);
+    float a = -M_PI_F + (float(row) + 0.5) * da;
+    int c0 = max(col - 1, 0), c1 = min(col + 1, cols - 1);
+    float drdx = (radial_at(rtex, c1, row, cols, rows) - radial_at(rtex, c0, row, cols, rows)) / (max(float(c1 - c0), 1.0) * cs);
+    float drda = (radial_at(rtex, col, row + 1, cols, rows) - radial_at(rtex, col, row - 1, cols, rows)) / (2.0 * da);
+    float sa = sin(a), ca = cos(a);
+    float3 b = float3(u.radial.w + float(col) * cs, r * sa, r * ca);
+    // Surface p(x, a) = (x, r sin a, r cos a): the outward normal is d/dx × d/da.
+    float3 px = float3(1.0, drdx * sa, drdx * ca);
+    float3 pa = float3(0.0, drda * sa + r * ca, drda * ca - r * sa);
+    float3 n = cross(px, pa);
+    float ang = u.axis.z;
+    float3 world = float3(b.x, rot2(b.yz, ang) + u.axis.xy);
+    RotaryOut o;
+    o.position = f.viewProj * float4(world, 1.0);
+    o.world = world;
+    o.normal = float3(n.x, rot2(n.yz, ang));
+    o.blank = b;
+    o.depth = 0.0;
+    o.layer = -2;
+    return o;
+}
+
+// The ends of the radial grid: a fan from the axis at each end of the blank.
+vertex RotaryOut rotary_tube_cap_vertex(uint vid [[vertex_id]],
+                                        constant FrameUniforms& f [[buffer(1)]],
+                                        constant RotaryUniforms& u [[buffer(2)]],
+                                        texture2d<float, access::read> rtex [[texture(1)]]) {
+    int cols = int(u.radial.x), rows = int(u.radial.y);
+    int tri = int(vid) / 3, corner = int(vid) % 3;
+    int end = tri / rows, row = tri % rows + (corner == 2 ? 1 : 0);
+    int col = end == 0 ? 0 : cols - 1;
+    float x = u.radial.w + float(col) * u.radial.z;
+    float a = -M_PI_F + (float(row) + 0.5) * 2.0 * M_PI_F / float(rows);
+    float r = corner == 0 ? 0.0 : radial_at(rtex, col, row, cols, rows);
+    float3 b = float3(x, r * sin(a), r * cos(a));
+    float ang = u.axis.z;
+    float3 world = float3(b.x, rot2(b.yz, ang) + u.axis.xy);
+    RotaryOut o;
+    o.position = f.viewProj * float4(world, 1.0);
+    o.world = world;
+    o.normal = float3(end == 0 ? -1.0 : 1.0, 0.0, 0.0);
+    o.blank = b;
+    o.depth = 0.0;
+    o.layer = -3;
+    return o;
+}
+
+fragment float4 rotary_tube_fragment(RotaryOut in [[stage_in]],
+                                     constant FrameUniforms& f [[buffer(1)]],
+                                     constant RotaryUniforms& u [[buffer(2)]],
+                                     constant float* angles [[buffer(3)]],
+                                     texture2d_array<float, access::read> tex [[texture(0)]]) {
+    if (rotary_removed(in.blank, -1, u, angles, tex)) { discard_fragment(); }
+    float3 n = normalize(in.normal);
+    float radius = max(u.origin.z, 1e-3);
+    float extent = rotary_extent(in.blank.yz, u);
+    float3 base;
+    if (in.layer == -3) {
+        base = u.sideColor.rgb;
+    } else if (extent >= radius - u.origin.w) {
+        // Where nothing was cut: the blank's own surface, with its grain.
+        base = u.topColor.rgb;
+        float around = atan2(in.blank.z, in.blank.y) * radius;
+        float phase = around * 0.75 + 4.0 * sin(in.blank.x * 0.004 + around * 0.021);
+        float grainAA = saturate(1.5 - 2.0 * fwidth(phase));
+        base *= 1.0 - 0.06 * pow(abs(sin(phase)), 8.0) * grainAA;
+    } else {
+        base = mix(u.cutColor.rgb, u.deepColor.rgb, saturate((radius - extent) / radius));
     }
     return float4(shade(base, n, in.world, f, 0.05, 24.0), 1.0);
 }

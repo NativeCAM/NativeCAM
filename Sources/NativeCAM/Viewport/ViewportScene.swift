@@ -61,6 +61,22 @@ struct HeightFieldSnapshot {
     var layers: Int = 1
 }
 
+/// A radial grid for the viewport: for each station along the blank (columns) and each angle round it (rows, from
+/// the seam at −180° to +180°, measured from the top of the blank at A0 toward +Y), the distance from the axis to the
+/// surface.
+struct RadialSnapshot {
+    var columns: Int
+    var rows: Int
+    /// Spacing of the columns along X, mm.
+    var cellSize: Float
+    /// X of column 0's centre.
+    var originX: Float
+    /// Row-major (row × columns + column), mm.
+    var radii: [Float]
+    /// Bumped whenever `radii` changes.
+    var version: Int
+}
+
 /// A rotary blank as the simulation draws it. Its faces are the height field's layers, each in its own face's
 /// frame (world coordinates as they are with the blank turned to that face's angle); the blank is drawn turned to
 /// `angle`, with each face's carving turned with it.
@@ -75,6 +91,9 @@ struct RotaryBlankView {
     var angle: Float
     /// Index angle of each height-field layer, degrees.
     var faceAngles: [Float]
+    /// What wrapped toolpaths left, all the way round; nil when the job has none. Drawn as a tube in place of the
+    /// blank's surface.
+    var radial: RadialSnapshot? = nil
 
     /// Axis to the farthest point of the blank (a square bar's corners).
     var outerRadius: Float { square ? radius * Float(2).squareRoot() : radius }

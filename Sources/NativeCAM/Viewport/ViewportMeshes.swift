@@ -58,6 +58,8 @@ struct ViewportRotaryUniforms {
     var cutColor: SIMD4<Float>
     var deepColor: SIMD4<Float>
     var sideColor: SIMD4<Float>
+    /// The radial grid: x columns, y rows, z cell size along X (mm), w X of column 0's centre; all 0 when there's none.
+    var radial: SIMD4<Float> = .zero
 }
 
 struct ViewportBackgroundUniforms {

@@ -62,6 +62,16 @@ final class ViewportRenderer {
     /// True when `heightTexture` is a 2D array (a rotary job's faces).
     private var heightIsArray = false
 
+    // Radial grid (wrapped toolpaths): columns along the blank, rows round it.
+    private var radialTexture: MTLTexture?
+    private var radialVersion: Int?
+    private var radialColumns = 0
+    private var radialRows = 0
+    /// Bound in place of a texture a rotary draw doesn't have (a wrapped job has no faces, an indexed one no radial
+    /// grid): the shaders never read them, since the uniforms say there's nothing there.
+    private lazy var emptyArray: MTLTexture? = emptyTexture(array: true)
+    private lazy var empty2D: MTLTexture? = emptyTexture(array: false)
+
     // Rotary blank surface (in the blank's own frame), keyed by square-ness, radius and length.
     private var blankKey: SIMD3<Float>?
     private var blankBuffer: MTLBuffer?
@@ -116,6 +126,18 @@ final class ViewportRenderer {
             heightVersion = nil
             heightColumns = 0
             heightRows = 0
+        }
+
+        if let rad = new.rotary?.radial {
+            if rad.version != radialVersion || rad.columns != radialColumns || rad.rows != radialRows || radialTexture == nil {
+                uploadRadial(rad)
+                radialVersion = rad.version
+            }
+        } else if radialTexture != nil {
+            radialTexture = nil
+            radialVersion = nil
+            radialColumns = 0
+            radialRows = 0
         }
 
         if let r = new.rotary {
@@ -222,6 +244,41 @@ final class ViewportRenderer {
         heightRows = rows
         heightLayers = layers
         heightIsArray = array
+    }
+
+    /// Uploads the radial grid as a 2D texture: one column per station along the blank, one row per angle.
+    private func uploadRadial(_ r: RadialSnapshot) {
+        guard r.columns >= 2, r.rows >= 3, r.columns <= 16384, r.rows <= 16384, r.radii.count >= r.columns * r.rows,
+              r.cellSize.isFinite, r.cellSize > 0 else {
+            radialTexture = nil
+            return
+        }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: r.columns, height: r.rows, mipmapped: false)
+        desc.usage = .shaderRead
+        desc.storageMode = device.hasUnifiedMemory ? .shared : .managed
+        guard let tex = device.makeTexture(descriptor: desc) else {
+            radialTexture = nil
+            return
+        }
+        tex.label = "viewport radial v\(r.version)"
+        r.radii.withUnsafeBytes { raw in
+            tex.replace(region: MTLRegionMake2D(0, 0, r.columns, r.rows), mipmapLevel: 0, withBytes: raw.baseAddress!,
+                        bytesPerRow: r.columns * MemoryLayout<Float>.stride)
+        }
+        radialTexture = tex
+        radialColumns = r.columns
+        radialRows = r.rows
+    }
+
+    private func emptyTexture(array: Bool) -> MTLTexture? {
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: 1, height: 1, mipmapped: false)
+        if array { desc.textureType = .type2DArray; desc.arrayLength = 1 }
+        desc.usage = .shaderRead
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
+        var zero: Float = 0
+        tex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, slice: 0, withBytes: &zero,
+                    bytesPerRow: MemoryLayout<Float>.stride, bytesPerImage: MemoryLayout<Float>.stride)
+        return tex
     }
 
     private func rebuildTool(_ silhouette: [SIMD2<Float>]) {
@@ -367,18 +424,25 @@ final class ViewportRenderer {
 
         // 3. Carved stock: instanced strip grid + four side walls, or a rotary blank turned to its angle.
         let carved = heightFieldDrawable
-        if carved, heightIsArray, let tex = heightTexture, let hf = scene.heightField, let r = scene.rotary {
-            var angles = r.faceAngles.prefix(heightLayers).map { $0 * .pi / 180 }
-            if angles.count < heightLayers { angles += [Float](repeating: 0, count: heightLayers - angles.count) }
+        let faceTexture = carved && heightIsArray ? heightTexture : nil
+        let radialReady = radialTexture != nil && scene.rotary?.radial != nil
+        if let r = scene.rotary, faceTexture != nil || radialReady, let tex = faceTexture ?? emptyArray, let rtex = radialTexture ?? empty2D {
+            let faces = faceTexture == nil ? 0 : heightLayers
+            var angles = r.faceAngles.prefix(faces).map { $0 * .pi / 180 }
+            if angles.count < max(faces, 1) { angles += [Float](repeating: 0, count: max(faces, 1) - angles.count) }
+            let hf = scene.heightField
             var ru = ViewportRotaryUniforms(
-                dims: SIMD4(Float(heightColumns), Float(heightRows), hf.cellSize, hf.floorZ),
-                origin: SIMD4(hf.origin.x, hf.origin.y, r.radius, 0.002 + 0.001 * r.radius),
+                dims: SIMD4(Float(heightColumns), Float(heightRows), hf?.cellSize ?? 1, hf?.floorZ ?? 0),
+                origin: SIMD4(hf?.origin.x ?? 0, hf?.origin.y ?? 0, r.radius, 0.002 + 0.001 * r.radius),
                 axis: SIMD4(r.axis.x, r.axis.y, r.angle * .pi / 180, r.square ? 1 : 0),
-                counts: SIMD4(Float(heightLayers), r.length, 0, 0),
+                counts: SIMD4(Float(faces), r.length, 0, 0),
                 topColor: SIMD4(0.80, 0.665, 0.475, 1),
                 cutColor: SIMD4(0.73, 0.575, 0.395, 1),
                 deepColor: SIMD4(0.56, 0.425, 0.28, 1),
                 sideColor: SIMD4(0.71, 0.56, 0.385, 1))
+            if radialReady, let rad = r.radial {
+                ru.radial = SIMD4(Float(radialColumns), Float(radialRows), rad.cellSize, rad.originX)
+            }
             enc.setDepthStencilState(p.depthWrite)
             for stage in 0..<2 {
                 angles.withUnsafeBytes { raw in
@@ -390,10 +454,20 @@ final class ViewportRenderer {
             enc.setFragmentBytes(&ru, length: MemoryLayout<ViewportRotaryUniforms>.stride, index: 2)
             enc.setVertexTexture(tex, index: 0)
             enc.setFragmentTexture(tex, index: 0)
-            enc.setRenderPipelineState(p.rotaryFace)
-            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 2 * heightColumns,
-                               instanceCount: (heightRows - 1) * heightLayers)
-            if let blank = blankBuffer, blankVertexCount >= 3 {
+            enc.setVertexTexture(rtex, index: 1)
+            enc.setFragmentTexture(rtex, index: 1)
+            if faces > 0 {
+                enc.setRenderPipelineState(p.rotaryFace)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 2 * heightColumns,
+                                   instanceCount: (heightRows - 1) * faces)
+            }
+            if radialReady {
+                // The radial grid's surface stands in for the blank's.
+                enc.setRenderPipelineState(p.rotaryTube)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 2 * radialColumns, instanceCount: radialRows)
+                enc.setRenderPipelineState(p.rotaryTubeCap)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6 * radialRows)
+            } else if let blank = blankBuffer, blankVertexCount >= 3 {
                 enc.setRenderPipelineState(p.rotaryBlank)
                 enc.setVertexBuffer(blank, offset: 0, index: 0)
                 enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: blankVertexCount)
@@ -436,7 +510,7 @@ final class ViewportRenderer {
         }
 
         // 5. Translucent stock box (back faces, then front faces; no depth writes) and its edges.
-        if !carved, scene.showStock, let faces = stockFaceBuffer, stockFaceCount >= 3 {
+        if !carved, !radialReady, scene.showStock, let faces = stockFaceBuffer, stockFaceCount >= 3 {
             enc.setRenderPipelineState(p.meshBlended)
             enc.setDepthStencilState(p.depthTestNoWrite)
             setMesh(enc, ViewportMeshUniforms(color: SIMD4(0.80, 0.66, 0.46, 0.17), specular: 0.04, shininess: 24))
@@ -552,6 +626,8 @@ private final class Pipelines {
     let walls: MTLRenderPipelineState
     let rotaryFace: MTLRenderPipelineState
     let rotaryBlank: MTLRenderPipelineState
+    let rotaryTube: MTLRenderPipelineState
+    let rotaryTubeCap: MTLRenderPipelineState
     let depthWrite: MTLDepthStencilState
     let depthTestNoWrite: MTLDepthStencilState
     let depthAlways: MTLDepthStencilState
@@ -633,6 +709,8 @@ private final class Pipelines {
         walls = try pipeline("walls", "wall_vertex", "wall_fragment", nil, blended: false)
         rotaryFace = try pipeline("rotary faces", "rotary_face_vertex", "rotary_face_fragment", nil, blended: false)
         rotaryBlank = try pipeline("rotary blank", "rotary_blank_vertex", "rotary_blank_fragment", meshVD, blended: false)
+        rotaryTube = try pipeline("rotary radial", "rotary_tube_vertex", "rotary_tube_fragment", nil, blended: false)
+        rotaryTubeCap = try pipeline("rotary radial ends", "rotary_tube_cap_vertex", "rotary_tube_fragment", nil, blended: false)
 
         func depthState(_ compare: MTLCompareFunction, write: Bool) throws -> MTLDepthStencilState {
             let d = MTLDepthStencilDescriptor()
