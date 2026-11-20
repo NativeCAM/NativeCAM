@@ -82,6 +82,38 @@ public enum CycleTimeEstimator {
             }
         }
 
+        /// A move of a wrapped toolpath, from sheet coordinates: X and the distance from the axis move at their own
+        /// axes' limits, and the turn at no limit NativeCAM knows (Mach4's A rate isn't modelled), except a rapid's,
+        /// which turns at the simulation's nominal pace. A feed is capped exactly as the post caps its inverse time.
+        func wrappedBlock(from a: Vec3, to b: Vec3, feed: Double?, radius: Double, ref: (Int, Int)) -> Block? {
+            let cy = stock.originPoint.y
+            let r0 = radius + a.z, r1 = radius + b.z
+            let d0 = (a.y - cy) / radius * 180 / .pi, d1 = (b.y - cy) / radius * 180 / .pi
+            let length = RotaryWrap.tipLength(x0: a.x, r0: r0, degrees0: d0, x1: b.x, r1: r1, degrees1: d1)
+            guard length > 1e-9 else { return nil }
+            let around = (r0 + r1) / 2 * (d1 - d0) * .pi / 180
+            let d = SIMD3(b.x - a.x, around, b.z - a.z)
+            let u = simd_length(d) > 1e-12 ? simd_normalize(d) : SIMD3(0, 1, 0)
+            var v = Double.infinity
+            if let feed {
+                // The post's inverse time, capped: never faster than its F word allows.
+                v = min(feed / 60, length * RotaryWrap.maxInverseTime / 60)
+            } else if abs(d1 - d0) > 1e-9 {
+                v = length / (abs(d1 - d0) / SimulationSession.turnSpeed)
+            }
+            var aMax = Double.infinity
+            for (k, (axisV, axisA)) in [(0, (rapid.x, acc.x)), (2, (rapid.z, acc.z))] {
+                let c = abs(u[k])
+                guard c > 1e-9 else { continue }
+                v = min(v, axisV / 60 / c)
+                aMax = min(aMax, axisA / c)
+            }
+            if !aMax.isFinite { aMax = min(acc.x, acc.z) }
+            let stop = feed == nil && rapidsStop
+            return Block(length: length, vMax: v, accel: aMax, startDir: u, endDir: u, stopBefore: stop, stopAfter: stop,
+                         isRapid: feed == nil, ref: ref)
+        }
+
         func addPause(_ seconds: Double) {
             guard seconds > 0 else { return }
             blocks.append(Block(length: 0, vMax: 0, accel: 1, startDir: .zero, endDir: .zero, stopBefore: true, stopAfter: true,
@@ -108,6 +140,30 @@ public enum CycleTimeEstimator {
 
             var p = tp.start
             for (mi, m) in tp.motions.enumerated() {
+                // A wrapped move: the tool tip's path round the blank, at the feed the post's inverse time gives it.
+                if let d = tp.wrapDiameter, m.kind == .rapid || m.kind == .feed {
+                    if let blk = wrappedBlock(from: p, to: m.end, feed: m.kind == .feed ? m.feed : nil, radius: d / 2, ref: (ti, mi)) {
+                        blocks.append(blk)
+                        constantVelocity += blk.length / (m.kind == .feed ? max(m.feed / 60, 1e-6) : machine.rapidRateForEstimates / 60)
+                    }
+                    p = m.end
+                    continue
+                }
+                // A move read back in inverse time takes the time its F word gives.
+                if let f = m.inverseTime, f > 0, m.kind != .rapid, m.kind != .dwell {
+                    let length = m.length(from: p)
+                    let seconds = 60 / f
+                    if length > 1e-9, var blk = lineBlock(from: p, to: m.end, feed: length / seconds * 60, ref: (ti, mi)) {
+                        blk.ref = (ti, mi)
+                        blocks.append(blk)
+                    } else {
+                        blocks.append(Block(length: 0, vMax: 0, accel: 1, startDir: .zero, endDir: .zero, stopBefore: true, stopAfter: true,
+                                            fixedSeconds: seconds, isRapid: false, ref: (ti, mi)))
+                    }
+                    constantVelocity += seconds
+                    p = m.end
+                    continue
+                }
                 switch m.kind {
                 case .rapid:
                     if var blk = lineBlock(from: p, to: m.end, feed: nil, ref: (ti, mi)) {
