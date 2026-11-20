@@ -5,8 +5,9 @@ public struct Project: Hashable, Sendable {
     /// Newest file format this build reads. Format 2 adds machines with a controller other than Avid's Mach4
     /// profile, or with a rotary axis. Format 3 adds rotary stock and index angles: builds that read format 2 would drop the blank and
     /// post the job as a flat sheet, which with Z zeroed on the rotation axis drives the tool into the blank. Flat
-    /// projects on Avid's Mach4 profile are still written as format 1 so older builds keep opening them.
-    public static let currentFormatVersion = 3
+    /// projects on Avid's Mach4 profile are still written as format 1 so older builds keep opening them. Format 4 adds
+    /// wrapped rotary jobs: a format-3 build would read the unrolled sheet as one face and cut it indexed.
+    public static let currentFormatVersion = 4
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

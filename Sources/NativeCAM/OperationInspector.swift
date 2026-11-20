@@ -19,7 +19,9 @@ struct OperationInspector: View {
                     .disabled(workspace.selectedShapeIDs.isEmpty)
                     .help("Select shapes in the Design list, then click to assign them to this toolpath")
             }
-            if (project.stock.rotary != nil && op.kind.takesIndexAngles) || op.indexAngles != nil {
+            if let blank = project.stock.rotary, blank.isWrapped, op.indexAngles == nil {
+                WrapNoteSection(blank: blank, units: units)
+            } else if (project.stock.rotary != nil && op.kind.takesIndexAngles) || op.indexAngles != nil {
                 IndexAnglesSection(angles: $op.indexAngles, blank: project.stock.rotary)
             }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine)

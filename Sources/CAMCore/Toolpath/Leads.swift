@@ -23,7 +23,10 @@ struct ToolCentreClearance {
         self.regions = regions
         regionBounds = regions.map { $0.bounds.insetBy(-0.02) }
         self.inside = inside
-        area = stock.bounds.insetBy(-toolRadius)
+        // A wrapped sheet's Y goes round the blank: only its ends along X bound the tool.
+        area = stock.rotary?.isWrapped == true
+            ? Rect2(x: -toolRadius, y: -1e9, width: stock.width + 2 * toolRadius, height: 2e9)
+            : stock.bounds.insetBy(-toolRadius)
         self.keepOuts = keepOuts.filter { $0.outline.isClosed && $0.outline.count >= 3 }
             .map { ($0.outline, $0.outline.bounds.insetBy(-toolRadius - 0.1)) }
         self.toolRadius = toolRadius

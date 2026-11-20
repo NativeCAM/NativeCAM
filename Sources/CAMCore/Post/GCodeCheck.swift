@@ -5,7 +5,7 @@ import Foundation
 /// - `lint`: line by line against the controller's `Dialect` and the machine (units, line length, accepted codes,
 ///   rotary words for an axis the controller or machine doesn't have, arc radii, feed before the first feed move,
 ///   tool numbers, dwell format, spindle on before cutting, a lift to safe Z before the first sideways move after a
-///   tool change, feed and RPM limits, a program end).
+///   tool change, feed and RPM limits, inverse-time (G93) rules, a program end).
 /// - `roundTrip`: reads the file back under the dialect's rules and compares every cutting move, arc, feed, dwell,
 ///   tool and spindle speed with the toolpaths it came from. This catches post bugs a simulation of the toolpaths
 ///   can't, such as doubled coordinates or a dwell in the wrong unit.
@@ -84,6 +84,9 @@ public enum GCodeCheck {
         // Rotary jobs: the blank may only turn with the tool at safe Z. Z isn't known at the start or after a stop.
         let rotaryJob = stock.rotary != nil
         var rotaryZ: Double?
+        // Inverse time (G93): every feed move carries its own F (a time), no arcs, and G94 back on before any stop;
+        // after it, the next feed move must give its feed again.
+        var inverseTime = false, feedStale = false
 
         var rows = gcode.components(separatedBy: "\n")
         if rows.last == "" { rows.removeLast() }
@@ -156,6 +159,10 @@ public enum GCodeCheck {
                 case 91: absolute = false
                 case 90.1: incrementalArcs = false
                 case 91.1: incrementalArcs = true
+                case 93: inverseTime = true
+                case 94:
+                    if inverseTime { feedStale = true }
+                    inverseTime = false
                 default: break
                 }
             }
@@ -173,15 +180,23 @@ public enum GCodeCheck {
             if v["H"] != nil && !gs.contains(43) { add(.error, n, "H", "An H word without G43.") }
             if let f = v["F"] {
                 if f <= 0 { add(.error, n, "F zero", "Feed F\(f) can't move the machine.") }
-                feed = u.toMM(f)
-                if u.toMM(f) > machine.maxFeedRate + 1e-6 {
-                    add(.warning, n, "F max", "Feed F\(f) is above the machine's maximum of \(length(machine.maxFeedRate))/min.")
+                // In G93 F is one over the move's time, not a feed rate.
+                if !inverseTime {
+                    feed = u.toMM(f)
+                    feedStale = false
+                    if u.toMM(f) > machine.maxFeedRate + 1e-6 {
+                        add(.warning, n, "F max", "Feed F\(f) is above the machine's maximum of \(length(machine.maxFeedRate))/min.")
+                    }
                 }
             }
             if let s = v["S"], machine.spindle == .vfdSpindle, s < machine.minRPM - 0.5 || s > machine.maxRPM + 0.5 {
                 add(.warning, n, "S", "Spindle speed S\(Int(s)) is outside the spindle's \(Int(machine.minRPM))–\(Int(machine.maxRPM)) RPM.")
             }
 
+            for m in ms where inverseTime && [0, 1, 2, 6, 30].contains(m) {
+                add(.error, n, "G93 stop", "M\(m) runs in inverse-time mode (G93). Return to G94 first: a tool-change macro, a "
+                    + "resumed program or the next one would read its feeds as times.")
+            }
             for m in ms {
                 switch m {
                 case 3, 4: spindleOn = true
@@ -229,9 +244,28 @@ public enum GCodeCheck {
                 continue
             }
 
+            let movesAny = v["X"] != nil || v["Y"] != nil || v["Z"] != nil || v["A"] != nil
+            if movesAny && motion != 0 {
+                if inverseTime {
+                    if v["F"] == nil {
+                        add(.error, n, "G93 F", "A feed move in inverse-time mode (G93) without an F word: every G93 move needs "
+                            + "its own time.")
+                    }
+                    if motion == 2 || motion == 3 {
+                        add(.error, n, "G93 arc", "An arc in inverse-time mode (G93): controllers disagree on what its F means. "
+                            + "Cut it as lines.")
+                    }
+                } else if feedStale {
+                    add(.error, n, "G94 F", "A feed move after leaving inverse time (G94) without a new F word: the controller "
+                        + "would take the last G93 time as the feed.")
+                    feedStale = false
+                }
+            }
+
             if rotaryJob {
                 let target = v["Z"].map { absolute ? u.toMM($0) : (rotaryZ ?? 0) + u.toMM($0) }
-                if v["A"] != nil {
+                // Only a rapid can swing the blank into the tool: a wrapped cut turns it on purpose, at a feed.
+                if v["A"] != nil && motion == 0 {
                     let low = { (z: Double) in z < safeZ - 1e-3 }
                     if rotaryZ.map(low) ?? true || target.map(low) ?? false {
                         add(.error, n, "A below safe Z", "Turns the rotary axis below safe Z, or before the tool has lifted to "
@@ -257,7 +291,9 @@ public enum GCodeCheck {
             let movesXY = (v["X"] != nil && tx != pos?.x) || (v["Y"] != nil && ty != pos?.y)
 
             if motion != 0 {
-                if feed == nil { add(.error, n, "no feed", "A feed move before any F word sets the feed rate.") }
+                if feed == nil && !(inverseTime && v["F"] != nil) {
+                    add(.error, n, "no feed", "A feed move before any F word sets the feed rate.")
+                }
                 if !spindleOn { add(.error, n, "spindle", "Cuts with the spindle stopped.") }
             }
             if awaitingLift {
@@ -379,8 +415,11 @@ public enum GCodeCheck {
         var tool: Int
         var rpm: Double
         var toolpath: String
-        /// The A value the post writes for the toolpath's index angle (nil on a flat job).
+        /// The A value the post writes for the toolpath's index angle, or for this point of a wrapped toolpath (nil on
+        /// a flat job).
         var a: Double?
+        /// A wrapped move that turns the blank: fed in inverse time, or by the controller's rotary feed rule.
+        var turnsA = false
     }
 
     /// The moves the post writes, in order: the same rule as the post, which leaves out a move whose rounded end
@@ -398,30 +437,41 @@ public enum GCodeCheck {
         var out: [ExpectedMove] = []
         var tool: Int?, speed: Double?
         for tp in toolpaths where !tp.isEmpty {
-            let a = tp.indexAngle.flatMap { angle in rotary?.value(angle) }
+            // A wrapped toolpath keeps the tool over the axis (Y0) and turns its sheet Y into A.
+            let wrap = tp.wrapDiameter.flatMap { d in rotary.map { (d, $0) } }
+            func work(_ p: Vec3) -> Vec3 {
+                let w = stock.toWork(p)
+                return wrap == nil ? w : Vec3(w.x, 0, w.z)
+            }
+            func angle(_ p: Vec3) -> Double? {
+                if let (d, out) = wrap { return out.value(RotaryWrap.angle(y: p.y, centerY: stock.originPoint.y, diameter: d)) }
+                return tp.indexAngle.flatMap { angle in rotary?.value(angle) }
+            }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
-            let s = stock.toWork(tp.start)
+            let s = work(tp.start)
             if (tool != tp.tool.number || speed != rpm) && machine.spindleSpinUpDwell > 0 {
                 out.append(ExpectedMove(kind: .dwell, end: s, start: s, center: .zero, feed: machine.spindleSpinUpDwell,
-                                        tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: a))
+                                        tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: angle(tp.start)))
             }
             tool = tp.tool.number
             speed = rpm
-            var sx = r(s.x), sy = r(s.y), sz = r(safe)
+            var sx = r(s.x), sy = r(s.y), sz = r(safe), sa = angle(tp.start)
             var position = tp.start
             for m in tp.motions {
-                let e = stock.toWork(m.end)
-                let ex = r(e.x), ey = r(e.y), ez = r(e.z)
-                let move = ExpectedMove(kind: m.kind, end: e, start: stock.toWork(position),
+                let e = work(m.end)
+                let ex = r(e.x), ey = r(e.y), ez = r(e.z), ea = angle(m.end)
+                let turns = wrap != nil && ea != sa
+                var move = ExpectedMove(kind: m.kind, end: e, start: work(position),
                                         center: m.kind.isArc ? stock.toWork(Vec3(m.center, 0)).xy : .zero,
-                                        feed: m.feed, tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: a)
+                                        feed: m.feed, tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: ea)
+                move.turnsA = turns
                 switch m.kind {
                 case .dwell: out.append(move)
                 case .rapid: break
                 case .feed, .arcCW, .arcCCW:
-                    if ex != sx || ey != sy || ez != sz { out.append(move) }
+                    if ex != sx || ey != sy || ez != sz || turns { out.append(move) }
                 }
-                if m.kind != .dwell { sx = ex; sy = ey; sz = ez }
+                if m.kind != .dwell { sx = ex; sy = ey; sz = ez; sa = ea }
                 position = m.end
             }
         }
@@ -434,14 +484,16 @@ public enum GCodeCheck {
         let tol = step / 2 + 1e-6
         let feedTol = (dialect.feedPerSecond ? 60 : 1) * units.toMM(pow(10, -Double(dialect.feedDecimals(units)))) / 2 + 1e-6
         let expected = expectedMoves(toolpaths, project: project, dialect: dialect).filter { dialect.comparesDwells || $0.kind != .dwell }
-        var written: [(motion: Motion, start: Vec3, tool: Int, rpm: Double, line: Int)] = []
+        var written: [(motion: Motion, start: Vec3, startA: Double?, tool: Int, rpm: Double, line: Int)] = []
+        var lastA: Double?
         for seg in program.segments {
             var p = seg.start
             for (k, m) in seg.motions.enumerated() {
                 if m.kind != .rapid && (dialect.comparesDwells || m.kind != .dwell) {
-                    written.append((m, p, seg.toolNumber, seg.spindleRPM, k < seg.lines.count ? seg.lines[k] : 0))
+                    written.append((m, p, lastA, seg.toolNumber, seg.spindleRPM, k < seg.lines.count ? seg.lines[k] : 0))
                 }
                 if m.kind != .dwell { p = m.end }
+                lastA = m.a ?? lastA
             }
         }
 
@@ -479,7 +531,14 @@ public enum GCodeCheck {
                 fail(line, "Cuts with \(read) where “\(e.toolpath)” is turned to A\(String(format: "%.3f", a)).")
                 break
             }
-            if abs(w.motion.feed - e.feed) > feedTol {
+            if e.turnsA {
+                if let problem = wrappedFeedProblem(w.motion, start: w.start, startA: w.startA, expected: e, dialect: dialect,
+                                                    units: units, feedTolerance: feedTol) {
+                    fail(line, problem)
+                }
+            } else if w.motion.inverseTime != nil {
+                fail(line, "Is fed in inverse time (G93), but “\(e.toolpath)” doesn't turn the blank here.")
+            } else if abs(w.motion.feed - e.feed) > feedTol {
                 fail(line, "Reads back at \(project.displayUnits.format(w.motion.feed))/min, but “\(e.toolpath)” cuts at "
                     + "\(project.displayUnits.format(e.feed))/min.")
             }
@@ -517,6 +576,35 @@ public enum GCodeCheck {
             }
         }
         return issues
+    }
+
+    /// What's wrong with the feed of a wrapped move that turns the blank, read back from the file; nil when it gives
+    /// the toolpath's feed at the tool tip. The tip's path is worked out from the coordinates as written, the way the
+    /// post does, so only a wrong value (not rounding) shows.
+    static func wrappedFeedProblem(_ m: Motion, start: Vec3, startA: Double?, expected e: ExpectedMove, dialect: Dialect,
+                                   units: LengthUnit, feedTolerance: Double) -> String? {
+        guard let a0 = startA, let a1 = m.a else { return "Turns the blank without a known A position (“\(e.toolpath)”)." }
+        let length = RotaryWrap.tipLength(x0: start.x, r0: start.z, degrees0: a0, x1: m.end.x, r1: m.end.z, degrees1: a1)
+        switch RotaryWrap.feedMode(dialect) {
+        case .inverseTime?:
+            guard let f = m.inverseTime else {
+                return "Turns the blank at an ordinary feed, where “\(e.toolpath)” needs inverse time (G93)."
+            }
+            let want = RotaryWrap.inverseTime(length: length, feed: e.feed)
+            if abs(f - want) > 0.5 * pow(10, -Double(RotaryWrap.inverseTimeDecimals)) + 1e-9 * want {
+                return "Inverse-time F\(String(format: "%.4f", f)) reads back where “\(e.toolpath)” needs F\(String(format: "%.4f", want))."
+            }
+        case let .perMinute(rule)?:
+            let want = units.toMM(RotaryWrap.perMinuteFeed(rule, dx: units.fromMM(m.end.x - start.x), dz: units.fromMM(m.end.z - start.z),
+                                                           da: a1 - a0, length: units.fromMM(length), feed: units.fromMM(e.feed)))
+            if abs(m.feed - want) > feedTolerance {
+                return "Reads back at F\(String(format: "%.1f", units.fromMM(m.feed))) where “\(e.toolpath)” needs "
+                    + "F\(String(format: "%.1f", units.fromMM(want))) to turn the blank at its feed."
+            }
+        case nil:
+            return "\(dialect.name) can't be given the right feed for “\(e.toolpath)”'s wrapped moves."
+        }
+        return nil
     }
 
     // MARK: Work area

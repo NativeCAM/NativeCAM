@@ -43,13 +43,23 @@ public struct AvidMach4Post: Sendable {
         w.comment("Machine: \(machine.displayName), \(machine.spindle == .vfdSpindle ? "spindle" : "router"), \(machine.toolChange.label)")
         let rotary = RotaryOutput(project)
         if rotary != nil {
-            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: true) { w.comment(line) }
+            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: true,
+                                            feeds: RotaryWrap.feedMode(.avidMach4)) { w.comment(line) }
         } else {
             w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")
             w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
         }
         if let ext = extents(paths) {
-            w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  Y\(num(ext.min.y)) to Y\(num(ext.max.y))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
+            if let rotary, let blank = stock.rotary, blank.isWrapped {
+                // Y stays on the axis centreline; the sheet's Y range is a range of A.
+                let ends = [ext.min.y, ext.max.y].map {
+                    rotary.value(RotaryWrap.angle(y: $0, centerY: 0, diameter: blank.wrapDiameterOrBlank))
+                }
+                let a = { (v: Double) in "\(rotary.letter)\(String(format: "%.3f", v))" }
+                w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  \(a(ends.min()!)) to \(a(ends.max()!))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
+            } else {
+                w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  Y\(num(ext.min.y)) to Y\(num(ext.max.y))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
+            }
         }
         w.comment("Safe Z = \(num(workZ(stock.clearanceHeight)))")
         w.comment("Tools used:")
@@ -89,6 +99,15 @@ public struct AvidMach4Post: Sendable {
             let safe = workZ(stock.clearanceHeight)
             w.line("G00 Z\(num(safe, isZ: true))")
             state.z = round(safe)
+            // Wrapped: the tool stays over the axis and the blank turns under it as it cuts.
+            if let rotary, tp.wrapDiameter != nil {
+                let writer = wrappedWriter(rotary)
+                for part in [writer.approach(tp, state: &state), writer.motions(tp, state: &state)] {
+                    for line in part.lines { w.line(line) }
+                    if part.turned { turned = true }
+                }
+                continue
+            }
             let startWork = stock.toWork(tp.start)
             w.line("G00 X\(num(startWork.x)) Y\(num(startWork.y))")
             state.x = round(startWork.x)
@@ -217,6 +236,13 @@ public struct AvidMach4Post: Sendable {
         }
     }
 
+    /// Writes wrapped toolpaths in this post's number formats, fed in G93 inverse time.
+    private func wrappedWriter(_ rotary: RotaryOutput) -> WrappedWriter {
+        WrappedWriter(stock: stock, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
+                      feeds: .inverseTime, rapidWord: "G00", feedWord: "G01",
+                      dwell: { "G04 P\(String(format: "%.2f", $0))" })
+    }
+
     // MARK: Number formatting
 
     private var decimals: Int { units == .inch ? 4 : 3 }
@@ -260,7 +286,7 @@ public struct AvidMach4Post: Sendable {
         return Toolpath.Extents(min: l, max: h)
     }
 
-    struct ModalState {
+    struct ModalState: WrapModalState {
         var x: Double?
         var y: Double?
         var z: Double?
