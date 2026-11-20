@@ -34,15 +34,77 @@ enum CornerRelief {
     /// Vertices closer than this count as one corner (tiny chamfers from imported drawings), mm.
     static let mergeDistance = 0.05
 
-    /// Plans the reliefs for one tool-centre loop. `wasteOnLeft` is the waste side for the loop's direction;
-    /// `offset` is the distance from the drawn wall to the tool centre (tool radius + allowance).
+    /// A relievable corner of a tool-centre loop, with each relief it could get (already checked against the
+    /// drawn geometry).
+    struct Corner {
+        struct Option {
+            /// Where the tool centre goes.
+            var tip: Vec2
+            /// The relief would cut into other drawn geometry.
+            var blocked: Bool
+        }
+        /// The loop vertex C.
+        var vertex: Vec2
+        /// The drawn corner H.
+        var hit: Design.Hit
+        /// Directions of travel along the incoming and outgoing walls.
+        var din: Vec2
+        var dout: Vec2
+        /// Straight runs of the incoming and outgoing walls, and the last-resort tie-break between them.
+        var lengthIn: Double
+        var lengthOut: Double
+        var lowerIsOutgoing: Bool
+        var dogbone: Option
+        /// T-bones with the notch in each wall; nil where the bit already reaches the corner along that wall.
+        var teeIntoIncoming: Option?
+        var teeIntoOutgoing: Option?
+
+        enum Pick: Hashable { case asCut, dogbone, teeIntoIncoming, teeIntoOutgoing }
+
+        /// What the toolpath's settings alone would cut here.
+        func standard(_ s: CornerReliefSettings) -> Pick {
+            switch s.style {
+            case .dogbone: return .dogbone
+            case .tBone:
+                return CornerRelief.notchGoesIntoOutgoingWall(lengthIn: lengthIn, lengthOut: lengthOut, din: din, dout: dout,
+                                                              lowerIsOutgoing: lowerIsOutgoing, side: s.tBoneSide)
+                    ? .teeIntoOutgoing : .teeIntoIncoming
+            }
+        }
+
+        func option(_ pick: Pick) -> Option? {
+            switch pick {
+            case .asCut: nil
+            case .dogbone: dogbone
+            case .teeIntoIncoming: teeIntoIncoming
+            case .teeIntoOutgoing: teeIntoOutgoing
+            }
+        }
+    }
+
+    /// Plans the reliefs for one tool-centre loop from the settings alone (no per-corner choices). `wasteOnLeft` is
+    /// the waste side for the loop's direction; `offset` is the distance from the drawn wall to the tool centre
+    /// (tool radius + allowance).
     static func plan(_ loop: Polyline, wasteOnLeft: Bool, design: Design, offset o: Double,
                      settings: CornerReliefSettings) -> Plan {
+        var plan = Plan()
+        for corner in corners(loop, wasteOnLeft: wasteOnLeft, design: design, offset: o, maxCornerAngle: settings.maxCornerAngle) {
+            guard let option = corner.option(corner.standard(settings)) else { continue }
+            if option.blocked {
+                plan.blocked += 1
+                continue
+            }
+            plan.reliefs.append(Relief(corner: corner.vertex, tip: option.tip))
+        }
+        return plan
+    }
+
+    /// The loop's corners the bit can't reach and that are no wider than `maxCornerAngle` (degrees).
+    static func corners(_ loop: Polyline, wasteOnLeft: Bool, design: Design, offset o: Double, maxCornerAngle: Double) -> [Corner] {
         let pts = loop.points
         let n = pts.count
-        var plan = Plan()
-        guard loop.isClosed, n >= 3, o > 1e-6, !design.loops.isEmpty else { return plan }
-        let maxAngle = min(179, max(1, settings.maxCornerAngle)) * .pi / 180
+        guard loop.isClosed, n >= 3, o > 1e-6, !design.loops.isEmpty else { return [] }
+        let maxAngle = min(179, max(1, maxCornerAngle)) * .pi / 180
         // Half a degree of slack, so a corner exactly at the limit (a hexagon at 120°) counts.
         let minTurn = .pi - maxAngle - 0.5 * .pi / 180
 
@@ -75,6 +137,7 @@ enum CornerRelief {
             candidates.removeLast()
         }
 
+        var out: [Corner] = []
         for cand in candidates {
             let c = pts[cand.i]
             let half = (.pi - cand.turn) / 2
@@ -92,26 +155,141 @@ enum CornerRelief {
             guard design.isWall(near: c - cand.din * delta, of: hit, within: window, searchRadius: o + 0.1),
                   design.isWall(near: c + cand.dout * delta, of: hit, within: window, searchRadius: o + 0.1) else { continue }
 
-            let tip: Vec2
-            switch settings.style {
-            case .dogbone:
-                tip = c + w * depth
-            case .tBone:
-                // The notch goes into one wall: travel along the other wall's tool line until the bit touches H.
-                let notchInOutgoing = notchGoesIntoOutgoingWall(pts, cand.i, din: cand.din, dout: cand.dout,
-                                                                previous: pts[cand.a], next: pts[cand.c], side: settings.tBoneSide)
-                let e = notchInOutgoing ? cand.din : -cand.dout
+            func option(_ tip: Vec2) -> Corner.Option {
+                Corner.Option(tip: tip, blocked: design.blocks(from: c, to: tip, clearance: o - 0.01, except: hit, within: window + 2 * o))
+            }
+            // A T-bone travels along one wall's tool line until the bit touches H, so the notch is in the other wall.
+            func tee(along e: Vec2) -> Corner.Option? {
                 let along = (hit.point - c).dot(e)
-                guard along >= 0.01 else { continue }
-                tip = c + e * along
+                return along >= 0.01 ? option(c + e * along) : nil
             }
-            if design.blocks(from: c, to: tip, clearance: o - 0.01, except: hit, within: window + 2 * o) {
-                plan.blocked += 1
-                continue
-            }
-            plan.reliefs.append(Relief(corner: c, tip: tip))
+            let midIn = (pts[cand.a] + c) * 0.5, midOut = (c + pts[cand.c]) * 0.5
+            out.append(Corner(vertex: c, hit: hit, din: cand.din, dout: cand.dout,
+                              lengthIn: straightRun(pts, from: cand.i, step: -1, direction: cand.din),
+                              lengthOut: straightRun(pts, from: cand.i, step: 1, direction: cand.dout),
+                              lowerIsOutgoing: abs(midOut.y - midIn.y) > 1e-9 ? midOut.y < midIn.y : midOut.x < midIn.x,
+                              dogbone: option(c + w * depth),
+                              teeIntoIncoming: tee(along: -cand.dout), teeIntoOutgoing: tee(along: cand.din)))
         }
-        return plan
+        return out
+    }
+
+    // MARK: Per-corner choices
+
+    /// An operation's shapes with their outlines, to trace a drawn corner back to the shape it's on.
+    struct ShapeIndex {
+        struct Entry {
+            var shape: DesignShape
+            var outlines: [Polyline]
+            var bounds: Rect2
+            /// Design coordinates to the shape's own.
+            var inverse: Transform2D
+        }
+        let entries: [Entry]
+
+        /// How close a drawn corner must be to a shape's outline to belong to it, mm.
+        static let ownerTolerance = 0.05
+
+        init(_ shapes: [DesignShape], tolerance: Double) {
+            entries = shapes.compactMap { shape in
+                guard let inverse = shape.transform.inverted else { return nil }
+                let outlines = shape.polylines(tolerance: tolerance)
+                return Entry(shape: shape, outlines: outlines, bounds: outlines.bounds, inverse: inverse)
+            }
+        }
+
+        /// The shape whose outline passes nearest `p` (ties to the one listed first), and `p` in its coordinates.
+        func owner(of p: Vec2) -> (entry: Entry, local: Vec2)? {
+            var best: (Entry, Double)?
+            for e in entries where e.bounds.contains(p, tolerance: Self.ownerTolerance) {
+                for outline in e.outlines {
+                    let d = outline.closestPoint(to: p).distance
+                    if d <= Self.ownerTolerance, d < (best?.1 ?? .infinity) - 1e-9 { best = (e, d) }
+                }
+            }
+            return best.map { ($0.0, $0.0.inverse.apply(p)) }
+        }
+    }
+
+    struct Choices {
+        var reliefs: [Relief] = []
+        var corners: [ReliefCorner] = []
+        /// Chosen reliefs left off because they'd cut into other drawn geometry.
+        var blocked = 0
+    }
+
+    /// Chooses each corner's relief: its own choice when one matches, otherwise the settings. `matched` collects
+    /// the indices of the overrides that found their corner.
+    static func choose(_ corners: [Corner], settings: CornerReliefSettings, shapes: ShapeIndex, matched: inout Set<Int>) -> Choices {
+        let overrides = settings.overrides ?? []
+        var out = Choices()
+        for corner in corners {
+            let owner = shapes.owner(of: corner.hit.point)
+            // The two walls in a fixed order (by their angle in the shape's own coordinates), so the same wall has
+            // the same number whichever way the loop runs.
+            func localAngle(_ v: Vec2) -> Double {
+                let u = owner.map { $0.entry.inverse.applyLinear(v) } ?? v
+                var a = u.angle * 180 / .pi
+                a = a.truncatingRemainder(dividingBy: 180)
+                if a < 0 { a += 180 }
+                return a >= 180 - 1e-9 ? 0 : a
+            }
+            var walls = [(wall: ReliefCorner.Wall(direction: corner.din, localAngle: localAngle(corner.din)), pick: Corner.Pick.teeIntoIncoming),
+                         (wall: ReliefCorner.Wall(direction: corner.dout, localAngle: localAngle(corner.dout)), pick: Corner.Pick.teeIntoOutgoing)]
+            if walls[1].wall.localAngle < walls[0].wall.localAngle - 1e-9 { walls.swapAt(0, 1) }
+            func relief(_ pick: Corner.Pick) -> ReliefCorner.Relief {
+                switch pick {
+                case .asCut: .asCut
+                case .dogbone: .dogbone
+                case .teeIntoIncoming, .teeIntoOutgoing: .tBone(wall: walls.firstIndex { $0.pick == pick } ?? 0)
+                }
+            }
+
+            let standard = corner.standard(settings)
+            var pick = standard
+            if let owner {
+                let reach = ShapeIndex.ownerTolerance / max(abs(owner.entry.shape.scale), 1e-6)
+                let candidates = overrides.indices.filter { overrides[$0].shapeID == owner.entry.shape.id }
+                if let k = candidates.min(by: { overrides[$0].point.distance(to: owner.local) < overrides[$1].point.distance(to: owner.local) }),
+                   overrides[k].point.distance(to: owner.local) <= reach {
+                    matched.insert(k)
+                    switch overrides[k].choice {
+                    case .asCut: pick = .asCut
+                    case .dogbone: pick = .dogbone
+                    case let .tBone(angle):
+                        func gap(_ a: Double) -> Double {
+                            let d = abs(a - angle).truncatingRemainder(dividingBy: 180)
+                            return min(d, 180 - d)
+                        }
+                        pick = gap(walls[0].wall.localAngle) <= gap(walls[1].wall.localAngle) ? walls[0].pick : walls[1].pick
+                    }
+                }
+            }
+            let option = corner.option(pick)
+            let blocked = option?.blocked ?? false
+            let tip = blocked ? nil : option?.tip
+            if let tip { out.reliefs.append(Relief(corner: corner.vertex, tip: tip)) }
+            if blocked { out.blocked += 1 }
+            out.corners.append(ReliefCorner(point: corner.hit.point, walls: walls.map(\.wall), relief: relief(pick),
+                                            standard: relief(standard), tip: tip, blocked: blocked,
+                                            shapeID: owner?.entry.shape.id, localPoint: owner?.local ?? corner.hit.point))
+        }
+        return out
+    }
+
+    /// Checks messages for corners left off and for choices that no longer find their corner.
+    static func warnings(blocked: Int, unmatched: Int) -> [String] {
+        var out: [String] = []
+        if blocked > 0 {
+            out.append(blocked == 1 ? "1 corner wasn't relieved: its relief would cut into nearby geometry."
+                : "\(blocked) corners weren't relieved: their reliefs would cut into nearby geometry.")
+        }
+        if unmatched > 0 {
+            out.append(unmatched == 1
+                ? "1 corner choice no longer matches a corner (its shape changed or left this toolpath), so it's ignored. Reset it under Corners."
+                : "\(unmatched) corner choices no longer match a corner (their shapes changed or left this toolpath), so they're ignored. Reset them under Corners.")
+        }
+        return out
     }
 
     /// Adds each relief's out-and-back spike at its corner vertex.
@@ -130,14 +308,10 @@ enum CornerRelief {
     }
 
     /// T-bone side: decided from the walls themselves (their length or direction), never from the direction of
-    /// travel, so climb and conventional cut the same notch.
-    static func notchGoesIntoOutgoingWall(_ pts: [Vec2], _ i: Int, din: Vec2, dout: Vec2, previous: Vec2, next: Vec2,
-                                          side: TBoneSide) -> Bool {
-        let lenIn = straightRun(pts, from: i, step: -1, direction: din)
-        let lenOut = straightRun(pts, from: i, step: 1, direction: dout)
-        // Last resort, for walls alike in every way: the wall whose midpoint is lower, then further left.
-        let midIn = (previous + pts[i]) * 0.5, midOut = (pts[i] + next) * 0.5
-        let lowerIsOutgoing = abs(midOut.y - midIn.y) > 1e-9 ? midOut.y < midIn.y : midOut.x < midIn.x
+    /// travel, so climb and conventional cut the same notch. `lowerIsOutgoing` breaks ties between walls alike in
+    /// every way (the wall whose midpoint is lower, then further left).
+    static func notchGoesIntoOutgoingWall(lengthIn lenIn: Double, lengthOut lenOut: Double, din: Vec2, dout: Vec2,
+                                          lowerIsOutgoing: Bool, side: TBoneSide) -> Bool {
         func alongX() -> Bool {
             let ax = abs(dout.x) - abs(din.x)
             return abs(ax) > 1e-9 ? ax > 0 : lowerIsOutgoing
@@ -272,5 +446,71 @@ enum CornerRelief {
         if segmentsIntersect(a, b, c, d) { return 0 }
         return min(distancePointSegment(a, c, d), distancePointSegment(b, c, d),
                    distancePointSegment(c, a, b), distancePointSegment(d, a, b))
+    }
+}
+
+/// An inside corner a toolpath relieves (or was told not to), for showing and changing it on the canvas.
+public struct ReliefCorner: Hashable, Codable, Sendable {
+    public enum Relief: Hashable, Codable, Sendable {
+        /// Left as the bit cuts it.
+        case asCut
+        case dogbone
+        /// A T-bone with its notch in `walls[wall]`.
+        case tBone(wall: Int)
+    }
+
+    public struct Wall: Hashable, Codable, Sendable {
+        /// Unit direction of the wall, design coordinates.
+        public var direction: Vec2
+        /// The wall's direction in its shape's own coordinates, degrees in [0, 180).
+        public var localAngle: Double
+    }
+
+    /// The drawn corner, design XY.
+    public var point: Vec2
+    /// Its two walls, in a fixed order.
+    public var walls: [Wall]
+    /// The relief this corner gets.
+    public var relief: Relief
+    /// The relief the toolpath's settings alone would give it.
+    public var standard: Relief
+    /// Where the bit's centre goes for the relief; nil when nothing is cut here.
+    public var tip: Vec2?
+    /// The chosen relief would cut into other geometry, so it's left off.
+    public var blocked: Bool
+    /// The shape the corner is on, and the corner in that shape's own coordinates.
+    public var shapeID: UUID?
+    public var localPoint: Vec2
+
+    /// The corner has its own choice.
+    public var isChanged: Bool { relief != standard }
+
+    /// The relief after this one when stepping through them: dogbone, T-bone into each wall, none.
+    public var nextRelief: Relief {
+        let order: [Relief] = [.dogbone, .tBone(wall: 0), .tBone(wall: 1), .asCut]
+        let i = order.firstIndex(of: relief) ?? -1
+        return order[(i + 1) % order.count]
+    }
+}
+
+public extension CornerReliefSettings {
+    /// These settings with `corner` given `relief`; nil, or the relief the settings already give it, puts the corner
+    /// back to following the settings.
+    func setting(_ relief: ReliefCorner.Relief?, for corner: ReliefCorner) -> CornerReliefSettings {
+        var s = self
+        var list = (overrides ?? []).filter {
+            !($0.shapeID == corner.shapeID && $0.point.distance(to: corner.localPoint) <= CornerRelief.ShapeIndex.ownerTolerance)
+        }
+        if let relief, relief != corner.standard, let id = corner.shapeID {
+            let choice: CornerOverride.Choice
+            switch relief {
+            case .asCut: choice = .asCut
+            case .dogbone: choice = .dogbone
+            case let .tBone(wall): choice = .tBone(wallAngle: corner.walls[min(max(wall, 0), corner.walls.count - 1)].localAngle)
+            }
+            list.append(CornerOverride(shapeID: id, point: corner.localPoint, choice: choice))
+        }
+        s.overrides = list.isEmpty ? nil : list
+        return s
     }
 }

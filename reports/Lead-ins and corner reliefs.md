@@ -279,3 +279,16 @@ Leads are the larger and riskier half.
 - **Arc fitting kept out-and-back moves.** `ArcFitter` treated a move that returns to its own start (corner → relief tip → corner) as collinear and dropped it. With arcs on, every relief vanished from the posted file. Such a move now merges only if its detour is within tolerance. No existing golden file changed.
 - **Tabs refactor.** Tab placement moved into a shared `TabPlan`, used by both the old and new loop cutters with the same arithmetic. The existing goldens confirm the output is unchanged.
 - **Tests:** 28 new tests across 3 new suites (328 tests in 39 suites in all, after merging the format-3 change from main), plus the `features-leads-reliefs.tap` golden.
+
+## Per-corner choices (follow-up)
+
+With a profile or pocket selected, the canvas circles each relieved corner where the bit's centre ends up. Clicking a circle steps that corner through dogbone, T-bone into one wall, T-bone into the other, and no relief. Right-clicking lists the four choices plus **Use Toolpath Setting**.
+
+**Storage.** Choices go in `CornerReliefSettings.overrides`, an optional field with no format bump.
+- Each choice is keyed by its shape and the drawn corner in that shape's own coordinates, so it follows the shape when it's moved, turned or scaled.
+- A T-bone choice stores its wall as an angle in the shape's coordinates, modulo 180°. That doesn't depend on the direction of travel, so climb and conventional agree.
+- A choice that no longer finds its corner (the shape changed, or left the toolpath) is ignored, and Checks says so.
+
+**Engine.** `CornerRelief.corners(...)` finds and checks each corner and all three of its possible reliefs. `choose(...)` then applies a matching choice or the settings, and records a `ReliefCorner` for each corner on `Toolpath.reliefCorners`; posts never read that field. `plan(...)` still gives today's output, and every golden file is unchanged.
+
+**Naming.** The "no relief" case is called `asCut`, not `none`. A `.none` passed where an optional is expected silently means `nil`.
