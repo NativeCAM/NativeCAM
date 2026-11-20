@@ -62,7 +62,7 @@ struct RotaryWrapTests {
         var s = Stock(clearanceHeight: 1)
         s.setRotary(Self.dowel)
         #expect(s.width == 300 && abs(s.height - .pi * 50) < 1e-9 && s.thickness == 25 && s.matchesRotaryBlank)
-        #expect(s.requiredFormatVersion == 4)
+        #expect(s.requiredFormatVersion == 5)
         // The middle of the sheet is the top of the blank over the axis.
         #expect(s.toWork(Vec3(0, Self.middle, -1)) == Vec3(0, 0, 24))
         // Wrapping at a finished diameter below the blank's: Z zero there, and safe Z clears the blank itself.
@@ -79,11 +79,11 @@ struct RotaryWrapTests {
         #expect(s.height == 50 && s.thickness == 25 && s.requiredFormatVersion == 3)
     }
 
-    @Test func wrappedProjectsAreFormatFourAndRoundTrip() throws {
+    @Test func wrappedProjectsAreFormatFiveAndRoundTrip() throws {
         var p = Self.job()
         p.stock.rotary?.wrapDiameter = 48
         p.stock.setRotary(p.stock.rotary)
-        #expect(p.formatVersion == 4)
+        #expect(p.formatVersion == 5)
         let back = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(p))
         #expect(back.stock.rotary == p.stock.rotary && back.stock == p.stock)
     }
@@ -316,6 +316,7 @@ struct RotaryWrapTests {
             p.operations[0].kind = .pocket(PocketParams(depth: DepthSettings(cutDepth: 1)))
         }
         has("no inverse-time feed (G93)", .error, ControllerPostTests.controller(.centroid, units: .mm))
+        has("can't be done by hand") { $0.machine.rotary?.turnsByHand = true }
         has("narrower around the blank", .warning) { p in
             p.operations[0].kind = .profile(ProfileParams(side: .on, depth: DepthSettings(cutDepth: 4)))
         }

@@ -6,12 +6,14 @@ public struct Project: Hashable, Sendable {
     /// profile, or with a rotary axis. Format 3 adds rotary stock and index angles: builds that read format 2 would drop the blank and
     /// post the job as a flat sheet, which with Z zeroed on the rotation axis drives the tool into the blank. Flat
     /// projects on Avid's Mach4 profile are still written as format 1 so older builds keep opening them. Format 4 adds
-    /// wrapped rotary jobs: a format-3 build would read the unrolled sheet as one face and cut it indexed.
-    public static let currentFormatVersion = 4
+    /// a rotary axis turned by hand, where builds that read format 3 would write A moves the machine can't make. Format 5
+    /// adds wrapped rotary jobs: a format-4 build would read the unrolled sheet as one face and cut it indexed.
+    public static let currentFormatVersion = 5
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
-        operations.map(\.requiredFormatVersion).reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion), max)
+        let byHand = stock.rotary != nil && machine.rotary?.turnsByHand == true ? 4 : 1
+        return operations.map(\.requiredFormatVersion).reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion, byHand), max)
     }
 
     public var name: String

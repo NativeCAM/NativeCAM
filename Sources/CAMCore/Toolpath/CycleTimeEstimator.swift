@@ -9,7 +9,7 @@ public struct CycleTimeEstimate: Sendable, Hashable {
     public var feedSeconds: Double
     /// Time in rapid (G0) moves.
     public var rapidSeconds: Double
-    /// Dwells, tool changes and spin-up.
+    /// Dwells, tool changes, spin-up and turns of a rotary blank.
     public var overheadSeconds: Double
     /// Seconds for each toolpath's own motions (same order as the toolpaths).
     public var toolpathSeconds: [Double]
@@ -26,6 +26,8 @@ public struct CycleTimeEstimate: Sendable, Hashable {
 /// - Corners use a junction-deviation speed (as in Grbl): v² = a·δ·sin(θ/2) / (1 − sin(θ/2)).
 /// - Dwells, tool changes and spindle changes stop the machine. Rapids (G0) stop too on Mach4, which runs them in
 ///   exact stop; Grbl blends them like feeds.
+/// - On a rotary job each turn of the blank stops the machine for as long as the axis takes to turn at its turn
+///   speed, or for the time allowed for a turn by hand, where the spindle also stops and spins up again.
 /// - The planner can only see `lookahead` moves ahead, so it must be able to stop within them.
 /// Equations follow Grbl's planner and Klipper's trapezoid moves (reimplemented, no code copied).
 public enum CycleTimeEstimator {
@@ -56,6 +58,11 @@ public enum CycleTimeEstimator {
         var currentRPM: Double?
         var constantVelocity = 0.0
         let clearance = max(stock.clearanceHeight, stock.plungeHeight)
+        // Rotary: where the blank is (A as the post writes it, from A0) and, turned by hand, the angle last asked for.
+        let rotary = RotaryOutput(project)
+        let axis = machine.rotary ?? RotaryAxis()
+        var blankAt = 0.0
+        var dial: Double?
 
         func lineBlock(from a: Vec3, to b: Vec3, feed: Double?, ref: (Int, Int)?) -> Block? {
             let d = SIMD3(b.x - a.x, b.y - a.y, b.z - a.z)
@@ -97,6 +104,14 @@ public enum CycleTimeEstimator {
                 currentTool = tp.tool.number
                 currentRPM = nil
             }
+            let turnTo = tp.indexAngle.flatMap { rotary?.position($0) }
+            if let rotary, rotary.manual, let to = turnTo, to != dial {
+                // The program stops with the spindle off while the blank is turned by hand.
+                addPause(axis.turnSeconds(from: blankAt, to: to))
+                dial = to
+                blankAt = to
+                currentRPM = nil
+            }
             if currentRPM != tp.spindleRPM {
                 addPause(machine.spindleSpinUpDwell)
                 // An S word breaks constant velocity even without a dwell.
@@ -105,6 +120,10 @@ public enum CycleTimeEstimator {
             }
             if let p = position { addRapid(p, Vec3(tp.start.xy, max(p.z, tp.start.z))) }
             position = tp.start
+            if let to = turnTo, to != blankAt {
+                addPause(axis.turnSeconds(from: blankAt, to: to))
+                blankAt = to
+            }
 
             var p = tp.start
             for (mi, m) in tp.motions.enumerated() {
@@ -147,10 +166,11 @@ public enum CycleTimeEstimator {
             }
             position = p
         }
-        // Footer: retract and park.
+        // Footer: retract, turn a driven axis back to A0, and park.
         if let p = position {
             let park = stock.parkPosition
             addRapid(p, Vec3(p.xy, max(p.z, park.z)))
+            if rotary?.manual == false { addPause(axis.turnSeconds(from: blankAt, to: 0)) }
             addRapid(Vec3(p.xy, max(p.z, park.z)), park)
         }
 

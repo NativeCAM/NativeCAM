@@ -133,13 +133,14 @@ struct RotaryIndexTests {
         has("runs along X") { $0.machine.rotary?.alignment = .y }
         has("driven by A words") { $0.machine.rotary?.letter = .b }
         has("Grbl has no A axis") { $0.machine.controller = ControllerProfile(family: .grbl) }
+        has("turn on Turn by hand") { $0.machine.controller = ControllerProfile(family: .fluidNC) }
         has("clear its corners") { $0.stock.clearanceHeight = 0.5.inch }
         has("keep-out") { p in p.shapes[0].keepOutHeight = 10 }
         has("same face twice") { $0.operations[0].indexAngles = [0, 360] }
         has("only be cut at multiples of 90°") { $0.operations[1].indexAngles = [0, 60, 120] }
         has("past an end of the blank") { $0.shapes[1].position = Vec2(0.02.inch, 1.inch) }
-        has("V-carving isn't supported") { p in
-            p.operations.append(CAMOperation(kind: .vcarve(VCarveParams()), shapeIDs: [p.shapes[0].id], tool: Self.lib.tool(number: 5)!))
+        has("3D toolpaths aren't supported") { p in
+            p.operations.append(CAMOperation(kind: .rough3D(Rough3DParams()), shapeIDs: [p.shapes[0].id], tool: Self.lib.tool(number: 1)!))
         }
         // Index angles need rotary stock.
         var flat = Project.demoSign()
@@ -164,6 +165,70 @@ struct RotaryIndexTests {
         #expect(warnings.contains { $0.contains("top line of the round blank") })
         // The square bar's faces are flat, so nothing to say there.
         #expect(!CAMEngine.generate(Self.leg()).issues.contains { $0.message.contains("top line") })
+    }
+
+    // MARK: V-carve
+
+    static let carveID = UUID(uuidString: "0A0A0000-0000-0000-0000-000000000004")!
+
+    /// The leg with a V-carved panel on every face, its flat floor cleared first with the 1/8" end mill.
+    static func carvedLeg(_ configure: (inout Project) -> Void = { _ in }) -> Project {
+        leg { p in
+            let panel = DesignShape(kind: .rectangle(width: 1.5.inch, height: 0.6.inch, cornerRadius: 0), position: Vec2(3.inch, 1.inch))
+            p.shapes.append(panel)
+            p.operations.append(CAMOperation(id: carveID, name: "Panel",
+                                             kind: .vcarve(VCarveParams(flatDepth: 0.1.inch, clearanceTool: lib.tool(number: 2)!)),
+                                             shapeIDs: [panel.id], tool: lib.tool(number: 5)!, indexAngles: [0, 90, 180, 270]))
+            configure(&p)
+        }
+    }
+
+    @Test func vCarveCutsAtEachAngleWithItsClearingFirst() throws {
+        let p = Self.carvedLeg()
+        let job = CAMEngine.generate(p)
+        #expect(!job.hasErrors, "\(job.issues.filter { $0.severity == .error }.map(\.message))")
+        let carve = job.toolpaths.filter { $0.sourceOperationID == Self.carveID }
+        #expect(carve.map(\.name) == ["Panel – flat clearing @ 0°", "Panel – flat clearing @ 90°", "Panel – flat clearing @ 180°",
+                                      "Panel – flat clearing @ 270°", "Panel @ 0°", "Panel @ 90°", "Panel @ 180°", "Panel @ 270°"])
+        // The clearing at every face, then the V-bit at every face: one tool change, not one per face.
+        #expect(carve.map(\.tool.number) == [2, 2, 2, 2, 5, 5, 5, 5])
+        #expect(carve.map(\.indexAngle) == [0, 90, 180, 270, 0, 90, 180, 270])
+        // The first angle keeps the generator's IDs (the operation's own, and its salt-1 ID for the clearing); later
+        // angles derive theirs by role, so neither can take the other's.
+        #expect(carve[4].id == Self.carveID && carve[0].id == VCarveGenerator.deterministicID(Self.carveID, salt: 1))
+        #expect(carve[5].id == RotaryIndex.toolpathID(operation: Self.carveID, role: 0, position: 1))
+        #expect(carve[1].id == RotaryIndex.toolpathID(operation: Self.carveID, role: 1, position: 1))
+        let ids = job.toolpaths.map(\.id)
+        #expect(Set(ids).count == ids.count)
+        #expect(CAMEngine.generate(p).toolpaths.map(\.id) == ids)
+        // Without the clearing, the V-bit's toolpaths keep their IDs.
+        let bare = CAMEngine.generate(Self.carvedLeg { $0.operations[2].kind = .vcarve(VCarveParams()) }).toolpaths
+            .filter { $0.sourceOperationID == Self.carveID }
+        #expect(bare.map(\.id) == carve.suffix(4).map(\.id))
+        // Every face is carved the same in its own frame.
+        #expect(carve[5].motions == carve[4].motions && carve[7].motions == carve[4].motions)
+        #expect(carve[1].motions == carve[0].motions)
+        // It posts and reads back clean.
+        let (g, tps) = avid(p)
+        #expect(g.contains("(Toolpath: Panel @ 90deg  Tool: T5"))
+        let issues = GCodeCheck.run(g, toolpaths: tps, project: p, dialect: .avidMach4)
+        #expect(problems(issues).isEmpty, "\(problems(issues))")
+    }
+
+    @Test func aRoundBlankWarnsWhereAVCarveComesOutNarrower() {
+        func warnings(height: Double) -> [JobIssue] {
+            let p = Self.carvedLeg { p in
+                p.stock.setRotary(RotaryStock(shape: .cylinder, diameter: 2.inch, length: 12.inch))
+                p.operations.removeFirst(2)
+                p.operations[0].kind = .vcarve(VCarveParams())
+                p.shapes[2].kind = .rectangle(width: 1.5.inch, height: height, cornerRadius: 0)
+            }
+            return CAMEngine.generate(p).issues.filter { $0.severity == .warning && $0.message.contains("top line") }
+        }
+        let wide = warnings(height: 1.2.inch)
+        #expect(wide.count == 1 && wide[0].message.contains("narrower than drawn"), "\(wide.map(\.message))")
+        // A thin line of lettering only reaches as far as the V is wide, not the bit's full diameter.
+        #expect(warnings(height: 0.1.inch).isEmpty)
     }
 
     // MARK: Posts

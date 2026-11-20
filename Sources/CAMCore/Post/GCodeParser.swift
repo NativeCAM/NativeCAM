@@ -17,9 +17,19 @@ public struct GCodeProgram: Sendable {
         public var lines: [Int] = []
     }
 
+    /// A program stop (M0 or M1), with the comment that tells the operator what to do: the one on its line, or else
+    /// on the line just before it.
+    public struct Pause: Sendable, Hashable {
+        /// Source line (1-based).
+        public var line: Int
+        public var message: String?
+    }
+
     public var segments: [Segment]
     public var warnings: [String]
     public var units: LengthUnit
+    /// Every M0 and M1 in the program, in order.
+    public var pauses: [Pause] = []
 
     /// Converts the program into toolpaths using `tools` (matched by number) for geometry.
     /// `stock` maps work coordinates back into design space for the simulator.
@@ -93,12 +103,24 @@ public enum GCodeParser {
             current = GCodeProgram.Segment(toolNumber: tool, spindleRPM: rpm, start: pos, motions: [])
         }
 
+        var pauses: [GCodeProgram.Pause] = []
+        // The comment on the last line that held nothing else, for a stop on the next line.
+        var lastComment: String?
+
         var lineNo = 0
         for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: { $0.isNewline }) {
             lineNo += 1
             let line = stripComments(String(rawLine)).uppercased()
-            if line.trimmingCharacters(in: .whitespaces).isEmpty || line.hasPrefix("%") { continue }
+            let comment = commentText(String(rawLine))
+            if line.trimmingCharacters(in: .whitespaces).isEmpty || line.hasPrefix("%") {
+                if comment != nil { lastComment = comment }
+                continue
+            }
             let words = try tokenize(line, lineNo: lineNo)
+            if words.allSatisfy({ $0.0 == "N" || $0.0 == "O" }) {
+                if comment != nil { lastComment = comment }
+                continue
+            }
 
             var gCodes: [Double] = []
             var mCodes: [Int] = []
@@ -111,6 +133,10 @@ public enum GCodeParser {
                 default: values[letter] = value
                 }
             }
+            if mCodes.contains(0) || mCodes.contains(1) {
+                pauses.append(GCodeProgram.Pause(line: lineNo, message: comment ?? lastComment))
+            }
+            lastComment = nil
             var dwellRequested = false
             for g in gCodes {
                 switch g {
@@ -287,7 +313,7 @@ public enum GCodeParser {
             pos = target
         }
         if !current.motions.isEmpty { segments.append(current) }
-        return GCodeProgram(segments: segments, warnings: warnings, units: units)
+        return GCodeProgram(segments: segments, warnings: warnings, units: units, pauses: pauses)
     }
 
     /// Motion modes for the drilling cycles the parser expands, and the one it reads but doesn't simulate.
@@ -304,6 +330,21 @@ public enum GCodeParser {
             if depth == 0 { out.append(ch) }
         }
         return out
+    }
+
+    /// The text of a line's comments (inside parentheses, or after a semicolon), joined; nil when it has none.
+    static func commentText(_ s: String) -> String? {
+        var parts: [String] = []
+        var current = ""
+        var depth = 0
+        for (i, ch) in s.enumerated() {
+            if ch == ";" && depth == 0 { parts.append(String(s.dropFirst(i + 1))); break }
+            if ch == "(" { depth += 1; if depth == 1 { continue } }
+            if ch == ")" { depth = max(0, depth - 1); if depth == 0 { parts.append(current); current = ""; continue } }
+            if depth > 0 { current.append(ch) }
+        }
+        let text = parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+        return text.isEmpty ? nil : text
     }
 
     /// The number written after `letter` on a comment-stripped, uppercased line, as text.
