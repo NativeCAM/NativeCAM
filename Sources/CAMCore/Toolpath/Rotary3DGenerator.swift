@@ -121,7 +121,6 @@ enum Rotary3DGenerator {
                 + "to keep the toolpath to a size the machine can load.")
         }
         let perTurn = max(36, Int((2 * Double.pi / step).rounded(.up)))
-        let dTheta = 2 * Double.pi / Double(perTurn)
 
         // How deep the model goes below the stock, from a coarse look all the way round: it decides the layers.
         let stations = max(2, min(400, Int((length / max(spacing, 1)).rounded(.up)) + 1))
