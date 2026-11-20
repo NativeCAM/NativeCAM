@@ -7,6 +7,7 @@
 - [Keyboard and mouse](#keyboard-and-mouse)
 - [Toolpaths and features](#toolpaths-and-features)
 - [Leads and corners](#leads-and-corners)
+- [Rotary jobs](#rotary-jobs)
 
 ## Workflow
 
@@ -60,7 +61,7 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 
 | Area | Details |
 |---|---|
-| Stock | Material size and thickness, XY zero at any corner or the centre, Z zero on the material top or the spoilboard, safe and plunge heights, park position. Inches or millimetres. |
+| Stock | Material size and thickness, XY zero at any corner or the centre, Z zero on the material top or the spoilboard, safe and plunge heights, park position. Inches or millimetres. Or a round or square [rotary blank](#rotary-jobs). |
 | Profile | Inside, outside or on the line; climb or conventional; multi-pass; ramp entry; arc or line leads in and out; dogbone or T-bone corners; tabs; allowance; holes cut before outside profiles. See [Leads and corners](#leads-and-corners). |
 | Pocket | Offset or raster clearing, islands, safe feed links between regions, dogbone or T-bone corners. Inner clearing rings get rounded corners (within a set tolerance, 0.25 mm by default); the wall pass stays exact. |
 | Drill | Peck, chip-break and dwell. Canned cycles are expanded into plain moves. |
@@ -94,3 +95,14 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 - Profiles relieve the inside corners on either side of the line: the corners of an inside cut, and the inside corners of an outside cut (finger joints, notches, the holes in a part). Pockets relieve the corners of the wall and the inside corners of islands. Corners rounded at least as much as the bit, and the pinch where an island comes closer to a wall than the bit is wide, are left alone.
 - Allowance is left in the corner too. Very sharp corners get long reliefs that reach well into both walls, so check the preview.
 - **Corner by corner:** with the toolpath selected, each relieved corner is circled on the canvas, at the bit's position at the end of the relief. Click a circle to step that corner through dogbone, T-bone into one side, T-bone into the other, and no relief. Right-click it to pick one, or **Use Toolpath Setting** to go back. Corners you've changed are drawn in the accent colour, and a relief that would cut into nearby geometry gets an orange cross. The choice belongs to the corner of its shape, so it follows the shape when you move, turn or scale it. **Corners ▸ Reset** clears them all.
+
+## Rotary jobs
+
+NativeCAM cuts indexed (3+1) rotary work: the blank turns to a fixed angle, the router cuts the face on top, then the blank turns to the next angle. Wrapped and continuous rotary toolpaths aren't supported yet.
+
+1. **Machine.** Turn on **Rotary axis** under **Material & Machine ▸ Rotary Axis**, or in the setup step of **Set Up a Machine…**. NativeCAM drives an A axis along X so far. Measure the **Centre height** (the chuck centre above the spoilboard) so the job can be checked against the Z travel. To check **Reversed**, jog A positive: the top of the blank should roll toward −Y.
+2. **Blank.** Turn on **Material ▸ Rotary blank**, then set the shape (round or square bar), the diameter or the size across the faces, and the length. The design sheet becomes one face of the blank: as wide as the blank is long, as high as its diameter, with the axis under its middle and the thickness down to the axis. Width, height and thickness follow the blank, and safe Z rises to clear a square bar's corners as it turns.
+3. **Zero.** Z zero is on the rotation axis and Y zero on its centreline (on Avid, Rotary tab ▸ Z Axis Touch and Y Axis Touch). X zero is the left end, the middle or the right end of the blank. On a square bar, A zero must put a face square to the spindle. Rotary jobs park over the middle of the blank.
+4. **Index angles.** Profile, pocket and drill toolpaths list the angles the blank turns to, in cutting order, under **Index Angles**, and cut the same shapes at each. **Spread evenly** fills in n faces 360°/n apart. A square bar only takes quarter turns (0°, 90°, 180° and 270°). The blank turns with the tool at safe Z.
+
+**Checks** lists anything the job can't cut. The simulation shows every face on one flat sheet for now.
