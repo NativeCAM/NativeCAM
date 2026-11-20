@@ -208,6 +208,27 @@ final class Workspace {
 
     var simDuration: Double { session?.timeline.duration ?? 0 }
 
+    /// While simulating a tiled job: how many tiles it has (nil otherwise).
+    var tileCount: Int? {
+        guard let s = session, externalProgramName == nil, s.timeline.toolpaths.contains(where: { $0.tile != nil }) else { return nil }
+        return (s.timeline.toolpaths.compactMap(\.tile).max() ?? 0) + 1
+    }
+
+    /// When each tile starts in the simulation, to step through them.
+    var tileStartTimes: [Double] {
+        guard let s = session, let count = tileCount else { return [] }
+        return (0..<count).map { k in
+            s.timeline.steps.first { s.timeline.toolpaths[$0.toolpathIndex].tile == k }?.startTime ?? s.timeline.duration
+        }
+    }
+
+    /// Shows the simulation at the start of a tile (`count` shows the end, every tile cut).
+    func seek(toTile index: Int) {
+        let starts = tileStartTimes
+        isPlaying = false
+        seek(to: index < starts.count ? starts[index] : simDuration)
+    }
+
     var rapidCollisionCount: Int { session?.rapidCollisions.count ?? 0 }
 
     /// Tool tip position, silhouette and the toolpath being cut right now.
@@ -218,7 +239,8 @@ final class Workspace {
         var p = state.position
         // On a wrapped toolpath the tool stays over the axis while the blank turns under it.
         if let wrap = wrapFrame, s.isWrapped(toolpath: state.toolpathIndex) { p.y = wrap.centerY }
-        let name = s.timeline.turn(at: s.time)?.turn.map { "Turning the blank to \(RotaryIndex.label($0.to))" } ?? tp.name
+        var name = s.timeline.turn(at: s.time)?.turn.map { "Turning the blank to \(RotaryIndex.label($0.to))" } ?? tp.name
+        if let tile = tp.tile, let count = tileCount { name = "Tile \(tile + 1) of \(count) · " + name }
         return (ToolMarker(tip: SIMD3(Float(p.x), Float(p.y), Float(p.z)), silhouette: sil), name)
     }
 
@@ -455,8 +477,62 @@ final class Workspace {
         }
         v += reliefMarkLines(project)
         v += wrapGuideLines(project)
+        v += tileLines(project)
         vectorLines = v
         publishLines()
+    }
+
+    /// On a tiled job: the tile lines in yellow, the overlap either side of each hatched in red (Vectric's colours), and
+    /// the registration holes: open circles where they're drilled, the spoilboard pair in front of the material too.
+    private func tileLines(_ project: Project) -> [LineVertex] {
+        guard showVectors, rotaryAxis == nil, let layout = TileLayout(project) else { return [] }
+        let s = project.stock, o = layout.overlap
+        let alpha: Float = isSimulating ? 0.35 : 0.9
+        let seam = SIMD4<Float>(1, 0.82, 0.15, alpha), band = SIMD4<Float>(1, 0.3, 0.25, alpha * 0.7)
+        var v: [LineVertex] = []
+        let z: Float = 0.045
+        func line(_ a: Vec2, _ b: Vec2, _ c: SIMD4<Float>) {
+            v.append(LineVertex(SIMD3(Float(a.x), Float(a.y), z), c))
+            v.append(LineVertex(SIMD3(Float(b.x), Float(b.y), z), c))
+        }
+        // A band from `lo` to `hi` across the material: its edges and 45° hatching.
+        func hatch(_ r: Rect2) {
+            line(r.min, Vec2(r.max.x, r.min.y), band)
+            line(Vec2(r.min.x, r.max.y), r.max, band)
+            line(r.min, Vec2(r.min.x, r.max.y), band)
+            line(Vec2(r.max.x, r.min.y), r.max, band)
+            let gap = max(r.width, r.height) / max(1, (max(r.width, r.height) / max(2 * o, 1)).rounded(.down))
+            var t = 0.0
+            let span = r.width + r.height
+            while t <= span {
+                // Diagonal x - y = c, clipped to the band.
+                let c = r.min.x - r.max.y + t
+                let a = Vec2(max(r.min.x, r.min.y + c), max(r.min.x, r.min.y + c) - c)
+                let b = Vec2(min(r.max.x, r.max.y + c), min(r.max.x, r.max.y + c) - c)
+                if a.x <= b.x { line(a, b, band) }
+                t += gap
+            }
+        }
+        for x in layout.seamsX {
+            hatch(Rect2(min: Vec2(x - o, 0), max: Vec2(x + o, s.height)))
+            line(Vec2(x, 0), Vec2(x, s.height), seam)
+        }
+        for y in layout.seamsY {
+            hatch(Rect2(min: Vec2(0, y - o), max: Vec2(s.width, y + o)))
+            line(Vec2(0, y), Vec2(s.width, y), seam)
+        }
+        if let reg = layout.registration {
+            let hole = SIMD4<Float>(1, 0.55, 0.2, alpha)
+            let points = reg.materialHoles(layout.tiles, stock: s).map(\.point) + reg.spoilboard.map { $0 + layout.tiles[0].offset }
+            for c in points {
+                let n = 32
+                for k in 0..<n {
+                    line(c + Vec2.fromAngle(2 * .pi * Double(k) / Double(n), length: reg.radius),
+                         c + Vec2.fromAngle(2 * .pi * Double(k + 1) / Double(n), length: reg.radius), hole)
+                }
+            }
+        }
+        return v
     }
 
     /// On a wrapped job, dashed guides on the unrolled sheet: the top of the blank at A0 across the middle, and the

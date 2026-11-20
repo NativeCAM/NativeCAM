@@ -11,14 +11,17 @@ public struct Project: Hashable, Sendable {
     /// adds a V-carve's start depth and inlay plugs, which a format-5 build would carve from the surface as an ordinary
     /// V-carve of the design. Format 7 adds 3D rotary finishing and models placed on a rotary blank, which a format-6
     /// build can't read or would lay flat on the sheet. Format 8 adds chamfer, fluting and prism toolpaths, which a
-    /// format-7 build can't read.
-    public static let currentFormatVersion = 8
+    /// format-7 build can't read. Format 9 adds tiling: a format-8 build would ignore it and post the whole job as one
+    /// file, bigger than the machine's travel. Settings for tiling that's off (or leaves the job in one tile) don't raise it.
+    public static let currentFormatVersion = 9
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
         let byHand = stock.rotary != nil && machine.rotary?.turnsByHand == true ? 4 : 1
         let parts = operations.map(\.requiredFormatVersion) + shapes.map(\.kind.requiredFormatVersion)
-        return parts.reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion, byHand), max)
+        // Only tiling that splits the job: one tile is the same file a format-8 build writes.
+        let tiled = tiling?.enabled == true && TileLayout(self) != nil ? 9 : 1
+        return parts.reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion, byHand, tiled), max)
     }
 
     /// Keeps every spiral climbing exactly once around the blank per pitch: on a wrapped job, a spiral's turn is the
@@ -61,10 +64,12 @@ public struct Project: Hashable, Sendable {
     public var shapes: [DesignShape]
     public var operations: [CAMOperation]
     public var notes: String
+    /// Cutting the job in tiles bigger than the machine's travel; nil (off) in every older file.
+    public var tiling: TilingSettings?
 
     public init(name: String = "Untitled", displayUnits: LengthUnit = .inch, stock: Stock = Stock(),
                 machine: MachineProfile = .avidPRO6060, shapes: [DesignShape] = [], operations: [CAMOperation] = [],
-                notes: String = "") {
+                notes: String = "", tiling: TilingSettings? = nil) {
         self.name = name
         self.displayUnits = displayUnits
         self.stock = stock
@@ -72,6 +77,7 @@ public struct Project: Hashable, Sendable {
         self.shapes = shapes
         self.operations = operations
         self.notes = notes
+        self.tiling = tiling
     }
 
     public func shape(id: UUID) -> DesignShape? { shapes.first { $0.id == id } }
@@ -109,7 +115,7 @@ public struct Project: Hashable, Sendable {
 
 extension Project: Codable {
     private enum CodingKeys: String, CodingKey {
-        case formatVersion, name, displayUnits, stock, machine, shapes, operations, notes
+        case formatVersion, name, displayUnits, stock, machine, shapes, operations, notes, tiling
     }
 
     public init(from decoder: Decoder) throws {
@@ -126,6 +132,7 @@ extension Project: Codable {
         shapes = try c.decode([DesignShape].self, forKey: .shapes)
         operations = try c.decode([CAMOperation].self, forKey: .operations)
         notes = try c.decode(String.self, forKey: .notes)
+        tiling = try c.decodeIfPresent(TilingSettings.self, forKey: .tiling)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -138,5 +145,6 @@ extension Project: Codable {
         try c.encode(shapes, forKey: .shapes)
         try c.encode(operations, forKey: .operations)
         try c.encode(notes, forKey: .notes)
+        try c.encodeIfPresent(tiling, forKey: .tiling)
     }
 }

@@ -79,6 +79,14 @@ enum DebugSnapshot {
                 write(img, to: out.appendingPathComponent("sim-\(preset.rawValue).png"))
             }
         }
+        // A tiled job just as its second tile starts, the first one cut in place.
+        if let count = ws.tileCount, count > 1 {
+            ws.seek(toTile: 1)
+            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .top) {
+                write(img, to: out.appendingPathComponent("sim-tile-2.png"))
+            }
+            ws.jumpToEnd()
+        }
         // A rotary job half way through its first turn of the blank.
         if let turn = ws.session?.timeline.steps.first(where: { $0.turn != nil }) {
             ws.seek(to: turn.startTime + turn.duration / 2)
@@ -91,6 +99,13 @@ enum DebugSnapshot {
         ws.stopSimulation(project)
         if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .iso) {
             write(img, to: out.appendingPathComponent("toolpaths-iso.png"))
+        }
+        // A tiled job from above, with its tile lines, overlaps and registration holes, and its setup sheet.
+        if let job = ws.job, job.tiling != nil {
+            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .top) {
+                write(img, to: out.appendingPathComponent("tiles-top.png"))
+            }
+            try? Data(SetupSheet.html(project: project, job: job).utf8).write(to: out.appendingPathComponent("setup-sheet.html"))
         }
         for (i, op) in project.operations.enumerated() {
             guard let corners = ws.job?.toolpaths.first(where: { $0.sourceOperationID == op.id && $0.reliefCorners != nil })?.reliefCorners,
@@ -143,12 +158,14 @@ enum DebugSnapshot {
     /// Logs the job's issues and the export checks of every file the post writes, as Export would show them.
     @MainActor
     private static func exportCheck(_ project: Project, job: JobResult?, log: (String) -> Void) {
-        guard let job, let post = PostProcessors.post(for: project) else { return log("export check: no job or no post") }
+        guard let job, let output = JobExport.files(project, job: job) else { return log("export check: no job or no post") }
         for issue in job.issues { log("job \(issue.severity.rawValue): \(issue.operation.map { "\($0): " } ?? "")\(issue.message)") }
         var fileErrors = 0
-        for file in post.files(job.toolpaths) {
-            for issue in GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: project, dialect: post.dialect) where issue.severity != .info {
-                log("G-code \(issue.severity.rawValue): \(issue.text)")
+        for file in output.files {
+            if output.files.count > 1 { log("file\(file.suffix ?? ""): \(file.toolpaths.count) toolpaths") }
+            for issue in GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: file.project, dialect: output.post.dialect)
+            where issue.severity != .info {
+                log("G-code\(file.suffix ?? "") \(issue.severity.rawValue): \(issue.text)")
                 if issue.severity == .error { fileErrors += 1 }
             }
         }

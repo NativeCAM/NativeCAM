@@ -84,24 +84,24 @@ case "post":
         print("[\(issue.severity.rawValue)] \(issue.operation.map { "\($0): " } ?? "")\(issue.message)")
     }
     let noPost = PostProcessors.unavailableReason(for: project.machine) ?? "No post processor for this machine."
-    let output: (files: [PostedFile], project: Project, post: any PostProcessor)
+    var airCut: Double?
     if let text = option("--air-cut", in: args) {
         guard let h = Double(text), h > 0 else { fail("--air-cut needs a height above zero") }
-        guard let air = AirCut.files(project, toolpaths: job.toolpaths, height: project.machine.outputUnits.toMM(h)) else { fail(noPost) }
-        output = air
-    } else {
-        guard let post = PostProcessors.post(for: project) else { fail(noPost) }
-        output = (post.files(job.toolpaths), project, post)
+        airCut = project.machine.outputUnits.toMM(h)
     }
+    // One file, one per tool where the controller can't stop for a change, and on a tiled job that for each tile.
+    guard let output = JobExport.files(project, job: job, airCut: airCut) else { fail(noPost) }
     let post = output.post
     var checks: [GCodeCheck.Issue] = []
     for file in output.files {
-        let found = GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: output.project, dialect: post.dialect)
+        let found = GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: file.project, dialect: post.dialect)
         for issue in found { print("[\(issue.severity.rawValue)] G-code\(output.files.count > 1 ? file.suffix ?? "" : ""): \(issue.text)") }
         checks += found
     }
+    let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? (args[1] as NSString).deletingPathExtension
     if let sheet = option("--sheet", in: args) {
-        let html = SetupSheet.html(project: project, job: job, gcodeFile: nil, checks: checks)
+        let html = SetupSheet.html(project: project, job: job, gcodeFile: (stem as NSString).lastPathComponent + "." + post.fileExtension,
+                                   checks: checks)
         do { try html.write(toFile: sheet, atomically: true, encoding: .utf8) } catch { fail("Can't write \(sheet): \(error)") }
         print("Setup sheet -> \(sheet)")
     }
@@ -119,7 +119,6 @@ case "post":
         }
         print("Writing it anyway (--force): \(reason).")
     }
-    let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? (args[1] as NSString).deletingPathExtension
     var outputs: [String] = []
     for file in output.files {
         let path = stem + (file.suffix ?? "") + "." + post.fileExtension

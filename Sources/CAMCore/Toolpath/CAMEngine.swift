@@ -50,6 +50,8 @@ public struct JobResult: Sendable {
     public var estimate: CycleTimeEstimate?
     /// A run order with fewer tool changes, when one exists (see `OperationScheduler`).
     public var reorder: OperationScheduler.Result?
+    /// On a tiled job, each tile's toolpaths; `toolpaths` is then all of them, tile after tile, in job coordinates.
+    public var tiling: TiledJob?
 
     public var hasErrors: Bool { issues.contains { $0.severity == .error } }
 
@@ -87,6 +89,11 @@ public enum CAMEngine {
             return s.polylines(tolerance: 0.1).filter(\.isClosed).map { KeepOut(outline: $0, height: h) }
         }.flatMap { $0 }
         let clearanceZ = max(stock.clearanceHeight, stock.plungeHeight)
+        // A tiled job: generated as one, then split into tiles (see `TileSplitter`). Near the tile lines its tiles cut in
+        // a different order from the job as a whole, so generators are told the material there is still uncut.
+        let layout = TileLayout(project)
+        var sources: [TileSplitter.Source] = []
+        let seamReach = layout.map { $0.overlap + 2 * TileLayout.largestToolRadius(project) + 1 }
         // Every toolpath's parts, built once for the whole pass (from all of them, so the order doesn't matter), when
         // any toolpath has leads or corner reliefs to keep clear of them.
         let parts = ProtectedRegions.needed(project)
@@ -121,7 +128,13 @@ public enum CAMEngine {
                 if models[face] == nil { models[face] = newModel() }
                 var opContext = ctx
                 let snapshot = models[face]!.grid
-                opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
+                if let layout, let reach = seamReach {
+                    opContext.materialTop = { p, r in
+                        layout.distanceToSeam(p) <= reach + r ? 0 : Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r))
+                    }
+                } else {
+                    opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
+                }
                 opContext.keepOuts = keepOuts
                 opContext.rotaryStockRadius = stockRadius
                 opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
@@ -148,6 +161,7 @@ public enum CAMEngine {
                 for (position, angle) in g.angles.enumerated() where index < g.perAngle[position].count {
                     guard g.perAngle[position][index].clearing == clearing else { continue }
                     var tp = g.perAngle[position][index].tp
+                    if layout != nil { sources.append(TileSplitter.Source(toolpath: tp, operation: op)) }
                     let face = faceKey(angle)
                     var model = models.removeValue(forKey: face) ?? newModel()
                     defer { models[face] = model }
@@ -162,6 +176,14 @@ public enum CAMEngine {
                         tp = LinkOptimizer.optimize(tp, model: &model, settings: settings)
                     } else {
                         tp.forEachMotion { s, m in model.apply(m, from: s, tool: tp.tool) }
+                    }
+                    if layout != nil {
+                        // Checked and kept tile by tile instead.
+                        issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
+                        if tp.cuttingExtents == nil, !tp.motions.isEmpty || tp.warnings.isEmpty {
+                            issues.append(JobIssue(.warning, "Toolpath is empty.", operation: tp.name))
+                        }
+                        continue
                     }
                     issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
                     if let wrap {
@@ -188,13 +210,24 @@ public enum CAMEngine {
             }
             for g in generated { emit(g, clearing: false) }
         }
+        issues.append(contentsOf: tilingIssues(project, layout: layout))
+        var tiled: TiledJob?
+        if let layout {
+            let result = TileSplitter.run(sources, project: project, layout: layout, keepOuts: keepOuts, clearanceZ: clearanceZ,
+                                          newModel: newModel)
+            toolpaths = result.toolpaths
+            issues.append(contentsOf: result.issues)
+            tiled = result.job
+        }
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: inlayIssues(project, toolpaths: toolpaths))
         issues.append(contentsOf: chamferIssues(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
         issues.append(contentsOf: RotaryIndex.issues(project, toolpaths: toolpaths))
-        if let post = PostProcessors.post(for: project), !(post is AvidMach4Post) {
+        if let tiled {
+            issues.append(contentsOf: tiledFileIssues(project, tiled: tiled))
+        } else if let post = PostProcessors.post(for: project), !(post is AvidMach4Post) {
             let files = post.files(toolpaths).count
             if files > 1 {
                 let hint = post is GenericGCodePost
@@ -233,7 +266,33 @@ public enum CAMEngine {
                     + "(about \(time) of \(what)). Use Toolpaths ▸ Optimize Run Order."))
             }
         }
-        return JobResult(toolpaths: toolpaths, issues: issues, estimate: estimate, reorder: reorder)
+        return JobResult(toolpaths: toolpaths, issues: issues, estimate: estimate, reorder: reorder, tiling: tiled)
+    }
+
+    /// Tiling that's on but can't apply: a rotary job, or material that fits in one tile.
+    static func tilingIssues(_ project: Project, layout: TileLayout?) -> [JobIssue] {
+        guard let t = project.tiling, t.enabled, layout == nil else { return [] }
+        if project.stock.rotary != nil {
+            return [JobIssue(.error, "Rotary jobs can't be tiled: the blank turns between the chuck and tailstock and can't move "
+                + "through the machine. Turn off tiling in Job Setup.")]
+        }
+        return [JobIssue(.info, "The material fits in one tile, so tiling makes no difference: the job is saved as one file.")]
+    }
+
+    /// What a tiled export saves: a file per tile (and per tool where the controller can't stop for a change).
+    static func tiledFileIssues(_ project: Project, tiled: TiledJob) -> [JobIssue] {
+        let layout = tiled.layout, u = project.displayUnits
+        func len(_ mm: Double) -> String { u.format(mm, decimals: u == .inch ? 3 : 1) }
+        let pitch = layout.mode == .feedThroughX ? layout.pitch.x : layout.pitch.y
+        let how: String
+        switch layout.mode {
+        case .feedThroughY: how = "moving the material \(len(pitch)) \(u.symbol) along Y between them"
+        case .feedThroughX: how = "moving the material \(len(pitch)) \(u.symbol) along X between them"
+        case .grid: how = "\(layout.columns) across and \(layout.rows) up, \(len(layout.pitch.x)) × \(len(layout.pitch.y)) \(u.symbol) each"
+        }
+        let files = JobExport.files(project, job: JobResult(toolpaths: [], issues: [], tiling: tiled))?.files.count ?? layout.count
+        let perTool = files > layout.count ? ", one per tool in each tile," : ""
+        return [JobIssue(.info, "Cut in \(layout.count) tiles, \(how). Export saves \(files) files\(perTool) and a setup sheet with a page for each tile.")]
     }
 
     /// For each operation on a rotary blank, how far the stock reaches from the axis along the blank once the enabled
@@ -503,7 +562,7 @@ public enum CAMEngine {
     }
 
     /// Safety and sanity checks: material thickness, tool reach, machine travel, spindle range, rapids into stock.
-    public static func validate(_ tp: Toolpath, operation op: CAMOperation, project: Project) -> [JobIssue] {
+    public static func validate(_ tp: Toolpath, operation op: CAMOperation, project: Project, checkTravel: Bool = true) -> [JobIssue] {
         var issues: [JobIssue] = []
         let stock = project.stock
         let machine = project.machine
@@ -557,7 +616,7 @@ public enum CAMEngine {
         // toolpath doesn't move Y.
         let lo = stock.toWork(Vec3(ext.min.x, ext.min.y, ext.min.z))
         let hi = stock.toWork(Vec3(ext.max.x, ext.max.y, ext.max.z))
-        if hi.x - lo.x > machine.travel.x || (!wrapped && hi.y - lo.y > machine.travel.y) {
+        if checkTravel, hi.x - lo.x > machine.travel.x || (!wrapped && hi.y - lo.y > machine.travel.y) {
             issues.append(JobIssue(.error, "Toolpath is larger than the \(machine.displayName) work area.", operation: tp.name))
         }
         if let blank = stock.rotary {

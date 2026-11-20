@@ -10,6 +10,7 @@
 - [Rest machining](#rest-machining)
 - [V-carve inlays](#v-carve-inlays)
 - [Chamfers, flutes and prisms](#chamfers-flutes-and-prisms)
+- [Jobs bigger than the bed](#jobs-bigger-than-the-bed)
 - [Rotary jobs](#rotary-jobs)
 
 ## Workflow
@@ -149,6 +150,27 @@ Three toolpaths that follow the vectors with a shaped bit, in **Add Toolpath** w
 **Prism.** Select closed shapes (lettering, a star, a diamond) and add **Prism** with a V-bit. With **Full prism** on, the depth is just enough for the slopes to meet in a ridge at the widest part; turn it off to set a shallower depth and leave flat tops. The bit's tip runs round the outline, so its far side cuts past it too: clear round the prism with a pocket, or cut it out with a profile, as you would in Vectric.
 
 The setup sheet lists each chamfer's width, depth and side, each fluting toolpath's depth and ramps, and each prism's depth.
+
+## Jobs bigger than the bed
+
+When the material is longer or wider than the machine reaches, NativeCAM cuts it in tiles: one file per tile, run one after another as the material moves. The settings follow Vectric's Toolpath Tiling Manager, so its tutorials carry over, and NativeCAM adds registration holes for dowels and a setup sheet page for each tile.
+
+1. **Turn it on.** In **Job Setup ▸ Tiling**, turn on **Cut in tiles** and choose how the material moves:
+   - **Feed-through in Y** (or **in X**), for a machine open at the front and back (or the sides): the board slides through one **tile length** at a time. Each tile is the board's full width, which has to fit the other axis's travel.
+   - **Individual tiles**: tiles across and up, for separate boards, or a board moved both ways.
+
+   **Tile length** (width and height for individual tiles) is how far the material moves between tiles. Automatic is the machine's travel less the overlap, the largest bit and a 1 in margin, rounded down to a whole inch (10 mm in millimetres). **Overlap** is how far each tile reaches past its tile lines; automatic is the largest bit's radius plus 1/8 in. **Short tile** puts the remainder tile last or first.
+2. **Check the canvas.** Tile lines are yellow, with the overlap either side of each hatched in red. **Checks** says how many tiles and files the export makes, and flags a tile that reaches past the machine's travel or a board too wide to feed through.
+3. **Registration holes** (feed-through only). Turn on **Registration holes** and NativeCAM drills dowel holes so each move lands exactly one tile on. Tile 1 drills two holes into the spoilboard just in front of the board, and two through the board exactly one tile length further on. Slide the board one tile and those holes sit over the spoilboard holes: drop a dowel through each, clamp, tap the dowels flush (or pull them), and run the next file. Each tile but the last drills the pair for the next.
+   - **Dowel diameter** is the hole size, **In from the edges** how far the pair is in from each side of the board, and **Into the spoilboard** how deep they go below it.
+   - **Bit**: automatic picks the job's largest straight bit that fits the hole, so there's usually no extra tool change. A bit the hole's size plunges in pecks; a smaller one bores the hole in rings, so no core is left standing in the spoilboard. The holes are drilled first in each tile.
+   - Keep the holes in waste: **Checks** gives an error when one lands on the design, where a toolpath cuts, on a part or under a clamp, or too near the board's edge.
+4. **Export.** **Export G-code** saves a file per tile, `Sign - tile 1 of 3.tap` and so on (and a file per tool in each tile when the controller can't stop for a tool change), with `Sign setup sheet.html` beside them. The setup sheet has a page for each tile: the file to run, how far to move the material and which way, where the dowels go and what the tile drills (in work coordinates), its share of the material, and a picture of it.
+5. **Run it.** Each file is in its tile's own coordinates, so set the XY zero once, at the tile's corner (tile 1's is the material's corner unless the short tile comes first; the setup sheet says where), and keep it for every tile. Re-zero Z only if the board isn't flat.
+
+**How cuts are split.** Each cut belongs to the tile whose share of the material it's in. A cut that crosses a tile line runs on into the overlap before it breaks, so it never breaks on the seam itself. Where a cut breaks, the tool lifts and the tile that cuts the rest comes back down onto the same point: straight down at the plunge rate, or ramping along the cut when the toolpath ramps in (and always for a surfacing bit). A toolpath that relies on another having cut first (a rest-machined pocket's larger bit, a V-carve's flat clearing, a 3D rough before its finish) runs on further at the tile lines, by both bits' radii, so the later bit never meets material the earlier one leaves for the next tile; Checks says if the overlap is too narrow for that. 3D and V-carve paths split the same way. The moves between cuts are worked out again from the material as the tiles really leave it.
+
+**⌘R** simulates the tiles one after another with the material in place, so the finished part is the whole job. **Tiles** in the simulation bar jumps to the start of any tile. Rotary jobs can't be tiled.
 
 ## Rotary jobs
 
