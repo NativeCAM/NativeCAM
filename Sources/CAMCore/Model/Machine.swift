@@ -131,12 +131,44 @@ public struct RotaryAxis: Hashable, Codable, Sendable {
     /// Height of the rotation axis (the chuck centre) above the spoilboard, mm; nil until it's measured. Avid
     /// doesn't publish it.
     public var centerHeight: Double?
+    /// True when nothing drives the axis: the operator turns the blank by hand, or with a hand-cranked indexer, when
+    /// the program stops for it. Posts write a pause (M0) in place of each A move. nil (off) in every older file.
+    public var manualIndexing: Bool?
+    /// How fast the axis turns on a rapid (G0) move, degrees per minute; nil until it's set. Run-time estimates and
+    /// the simulation use it for each turn (Mach4: Configure ▸ Control ▸ Motors ▸ the A motor's velocity).
+    public var turnSpeed: Double?
 
-    public init(letter: Letter = .a, alignment: Alignment = .x, reversed: Bool = false, centerHeight: Double? = nil) {
+    public init(letter: Letter = .a, alignment: Alignment = .x, reversed: Bool = false, centerHeight: Double? = nil,
+                manualIndexing: Bool? = nil, turnSpeed: Double? = nil) {
         self.letter = letter
         self.alignment = alignment
         self.reversed = reversed
         self.centerHeight = centerHeight
+        self.manualIndexing = manualIndexing
+        self.turnSpeed = turnSpeed
+    }
+
+    /// `manualIndexing` as a plain switch. Off is stored as nil, so files saved before it existed keep their bytes.
+    public var turnsByHand: Bool {
+        get { manualIndexing == true }
+        set { manualIndexing = newValue ? true : nil }
+    }
+
+    /// The axis's own turn speed for the simulation, degrees per minute: nil when it isn't set, or when the blank is
+    /// turned by hand.
+    public var drivenTurnSpeed: Double? { turnsByHand ? nil : turnSpeed }
+
+    /// Turn speed when none is set, degrees per minute (90° a second): a guess, for estimates only.
+    public static let nominalTurnSpeed = 5400.0
+
+    /// Time allowed for each turn by hand in run-time estimates: stop, unlock, turn, lock and press Cycle Start.
+    public static let manualTurnSeconds = 30.0
+
+    /// Seconds to turn from one A value to another (degrees, as the post writes them, so 270 back to 0 is 270°).
+    public func turnSeconds(from a: Double, to b: Double) -> Double {
+        guard a != b else { return 0 }
+        if turnsByHand { return Self.manualTurnSeconds }
+        return abs(b - a) / max(turnSpeed ?? Self.nominalTurnSpeed, 1) * 60
     }
 }
 

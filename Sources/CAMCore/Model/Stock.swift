@@ -140,11 +140,11 @@ public struct Stock: Hashable, Codable, Sendable {
     public var safeDistance: Double { linkSafeDistance ?? 0.2.inch }
 
     /// The project file format this stock needs. Rotary stock is format 3: every build that reads format 2 would
-    /// drop it and post the job as a flat sheet. A wrapped layout is format 4: a format-3 build would read the
-    /// unrolled sheet as one face and cut it indexed.
+    /// drop it and post the job as a flat sheet. A wrapped layout is format 5: an older build would read the unrolled
+    /// sheet as one face and cut it indexed.
     public var requiredFormatVersion: Int {
         guard let rotary else { return 1 }
-        return rotary.isWrapped ? 4 : 3
+        return rotary.isWrapped ? 5 : 3
     }
 
     public init(width: Double = 24.inch, height: Double = 18.inch, thickness: Double = 0.75.inch,

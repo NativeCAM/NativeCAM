@@ -198,7 +198,8 @@ struct RoundingTests {
         has("isn't one. Set up rotary stock") { $0.stock.setRotary(nil) }
         has("index angles don't apply") { $0.operations[0].indexAngles = [0, 90] }
         has("no inverse-time feed (G93)", ControllerPostTests.controller(.centroid, units: .mm))
+        has("can't be done by hand") { $0.machine.rotary?.turnsByHand = true }
         has("nothing to cut") { $0.operations[0].kind = .rounding(RoundingParams(finishedDiameter: 80)) }
-        #expect(Self.job().formatVersion == 4)
+        #expect(Self.job().formatVersion == 5)
     }
 }

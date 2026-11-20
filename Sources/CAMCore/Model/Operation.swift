@@ -470,9 +470,9 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     public var rotaryAngles: [Double] { indexAngles ?? [0] }
 
     /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
-    /// drop them and cut every face's shapes at one angle. Rounding is format 4 (older builds can't read it).
+    /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it).
     public var requiredFormatVersion: Int {
-        if case .rounding = kind { return 4 }
+        if case .rounding = kind { return 5 }
         return indexAngles == nil ? 1 : 3
     }
 }

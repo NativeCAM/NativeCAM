@@ -67,12 +67,14 @@ public enum RotaryIndex {
                     + "one face, \(fmt(blank.length)) long × \(fmt(blank.diameter)) across, \(fmt(blank.radius)) to the axis. "
                     + "Set the blank again to resize it."))
         }
-        // The machine has to be able to turn the blank, and the post has to be able to say so.
+        // The machine has to be able to turn the blank, and the post has to be able to say so: with A moves, or
+        // with a stop (M0) for each turn when the blank is turned by hand.
+        let manual = machine.rotary?.turnsByHand ?? false
         if let axis = machine.rotary {
             if axis.alignment != .x {
                 issues.append(JobIssue(.error, "NativeCAM can only cut rotary stock on a rotary axis that runs along X so far."))
             }
-            if axis.letter.rawValue != String(letter) {
+            if !manual, axis.letter.rawValue != String(letter) {
                 issues.append(JobIssue(.error, "NativeCAM can only turn a rotary axis driven by A words so far; this machine's "
                     + "is \(axis.letter.rawValue)."))
             }
@@ -83,8 +85,20 @@ public enum RotaryIndex {
             issues.append(JobIssue(.error, "An imported Vectric post can't turn the rotary axis. Use NativeCAM's own post for "
                 + "rotary jobs."))
         } else if let dialect = Dialect.for(machine) {
-            if dialect.language != .gcode || !dialect.rotaryAxes.contains(letter) {
-                issues.append(JobIssue(.error, "\(dialect.name) has no A axis NativeCAM can write rotary moves for."))
+            if manual {
+                if dialect.language != .gcode {
+                    issues.append(JobIssue(.error, "NativeCAM can't write the stops for turning the blank by hand in "
+                        + "\(dialect.name) files yet."))
+                } else if !dialect.writesComments {
+                    issues.append(JobIssue(.error, "\(dialect.name) files carry no comments, so a stop can't say which angle to "
+                        + "turn the blank to."))
+                } else if dialect.allowedM?.contains(0) == false {
+                    issues.append(JobIssue(.error, "\(dialect.name) can't stop the program (M0) for you to turn the blank."))
+                }
+            } else if dialect.language != .gcode || !dialect.rotaryAxes.contains(letter) {
+                issues.append(JobIssue(.error, "\(dialect.name) has no A axis NativeCAM can write rotary moves for."
+                    + (dialect.language == .gcode ? " If you turn the blank by hand or with an indexer, turn on Turn by hand "
+                        + "under Rotary Axis." : "")))
             }
         }
         // Every turn happens at safe Z, which has to clear the blank's corners.
@@ -99,13 +113,12 @@ public enum RotaryIndex {
 
         if blank.isWrapped {
             issues += wrappedIssues(project, toolpaths: toolpaths)
-            return issues + centreHeightIssues(machine)
+            return issues + closingNotes(machine, manual: false)
         }
 
         issues += roundingIssues(project)
         for op in ops {
             switch op.kind {
-            case .vcarve: issues.append(JobIssue(.error, "V-carving isn't supported on rotary stock yet.", operation: op.name))
             case .rough3D, .finish3D:
                 issues.append(JobIssue(.error, "3D toolpaths aren't supported on rotary stock yet.", operation: op.name))
             case .rounding: continue
@@ -125,30 +138,50 @@ public enum RotaryIndex {
             }
         }
 
-        // On a round blank only the top line of a face is at Z = 0; the surface falls away to either side.
+        // On a round blank only the top line of a face is at Z = 0; the surface falls away to either side. Each
+        // operation is reported once, for the farthest any of its toolpaths reaches (a V-carve's flat clearing and
+        // its V-bit, say; every angle cuts the same).
         if blank.shape == .cylinder {
-            var reported = Set<UUID>()
+            var order: [UUID] = []
+            var reach: [UUID: (dy: Double, name: String, carve: Bool)] = [:]
             for tp in toolpaths {
                 let opID = tp.sourceOperationID
-                guard !reported.contains(opID), let e = tp.cuttingExtents else { continue }
-                reported.insert(opID)
-                let dy = max(abs(e.min.y - stock.height / 2), abs(e.max.y - stock.height / 2)) + tp.tool.radius
+                guard let dy = reachFromTopLine(tp, centre: stock.height / 2) else { continue }
+                if let r = reach[opID] {
+                    reach[opID]?.dy = max(r.dy, dy)
+                } else {
+                    order.append(opID)
+                    let carve = project.operations.first { $0.id == opID }.map { if case .vcarve = $0.kind { true } else { false } } ?? false
+                    reach[opID] = (dy, tp.name, carve)
+                }
+            }
+            for opID in order {
+                guard let (dy, name, carve) = reach[opID] else { continue }
                 let r = blank.radius
                 let sag = dy >= r ? r : r - (r * r - dy * dy).squareRoot()
                 if sag > 0.1 {
                     issues.append(JobIssue(.warning, "Reaches \(fmt(dy)) from the top line of the round blank, where its surface is "
-                        + "\(fmt(sag)) lower, so cuts there are that much shallower than set.", operation: tp.name))
+                        + "\(fmt(sag)) lower, so cuts there are that much shallower than set"
+                        + (carve ? ", and the carve is narrower than drawn." : "."), operation: name))
                 }
             }
         }
 
-        return issues + centreHeightIssues(machine)
+        return issues + closingNotes(machine, manual: manual)
     }
 
-    static func centreHeightIssues(_ machine: MachineProfile) -> [JobIssue] {
-        guard machine.rotary != nil, machine.rotary?.centerHeight == nil else { return [] }
-        return [JobIssue(.info, "Measure the rotary's centre height above the spoilboard so NativeCAM can check that the "
-            + "job fits under the Z travel.")]
+    /// The notes every rotary job ends with: how a blank turned by hand is asked for, and the centre height.
+    static func closingNotes(_ machine: MachineProfile, manual: Bool) -> [JobIssue] {
+        var issues: [JobIssue] = []
+        if manual {
+            issues.append(JobIssue(.info, "The blank is turned by hand: the program stops with the spindle off before each new "
+                + "angle and says which angle to turn it to."))
+        }
+        if machine.rotary != nil, machine.rotary?.centerHeight == nil {
+            issues.append(JobIssue(.info, "Measure the rotary's centre height above the spoilboard so NativeCAM can check that the "
+                + "job fits under the Z travel."))
+        }
+        return issues
     }
 
     /// Wrapped jobs: what the blank, the controller and each operation need for designs wrapped around the blank.
@@ -178,7 +211,7 @@ public enum RotaryIndex {
                 + "first."))
         }
         if let problem = wrappedFeedIssue(project.machine) {
-            issues.append(JobIssue(.error, problem + " Use faces (indexed) for this controller."))
+            issues.append(JobIssue(.error, problem + " Lay the design out on faces for this machine."))
         }
         for op in project.operations where op.enabled && op.kind.needsShapes {
             if op.indexAngles != nil {
@@ -221,6 +254,10 @@ public enum RotaryIndex {
 
     /// Why the machine's controller can't be given the right feed for moves that turn the blank; nil when it can.
     static func wrappedFeedIssue(_ machine: MachineProfile) -> String? {
+        if machine.rotary?.turnsByHand == true {
+            return "Cuts that turn the blank need a rotary axis the controller drives: the blank turns while the tool cuts, "
+                + "which can't be done by hand. Turn off Turn by hand."
+        }
         guard machine.customPost == nil, let dialect = Dialect.for(machine), dialect.rotaryAxes.contains(letter),
               RotaryWrap.feedMode(dialect) == nil else { return nil }
         return "\(dialect.name) has no inverse-time feed (G93), and what F means there when the rotary axis turns isn't "
@@ -244,6 +281,25 @@ public enum RotaryIndex {
 
     /// Depth, as a fraction of the wrap radius, past which a wrapped cut is warned about (research §5.3).
     static let distortionWarning = 0.1
+
+    /// How far across the face (from its top line, in Y) the cutter reaches into the surface. A V-bit is only as
+    /// wide as it is deep, so it's measured at each point of the cut rather than at the bit's full diameter.
+    static func reachFromTopLine(_ tp: Toolpath, centre: Double) -> Double? {
+        let tool = tp.tool
+        guard tool.shape.isTapered else {
+            guard let e = tp.cuttingExtents else { return nil }
+            return max(abs(e.min.y - centre), abs(e.max.y - centre)) + tool.radius
+        }
+        var far: Double?
+        tp.forEachMotion { s, m in
+            guard m.kind != .rapid, m.kind != .dwell else { return }
+            for p in [s, m.end] where p.z < 0 {
+                let r = min(tool.radius, tool.tipDiameter / 2 + -p.z * tool.halfAngleTangent)
+                far = max(far ?? 0, abs(p.y - centre) + r)
+            }
+        }
+        return far
+    }
 }
 
 /// What a post writes for an indexed rotary job: the A word for each toolpath's angle and the setup notes in the
@@ -251,11 +307,15 @@ public enum RotaryIndex {
 struct RotaryOutput {
     var letter: String
     var reversed: Bool
+    /// Nothing drives the axis: the post stops the program (M0) with the spindle off and asks for each turn, in
+    /// place of an A move.
+    var manual: Bool
 
     init?(_ project: Project) {
         guard project.stock.rotary != nil else { return nil }
         letter = project.machine.rotary?.letter.rawValue ?? String(RotaryIndex.letter)
         reversed = project.machine.rotary?.reversed ?? false
+        manual = project.machine.rotary?.turnsByHand ?? false
     }
 
     /// The A value for a toolpath turned to `angle` (degrees, right-hand rule), rounded as written: flipped when the
@@ -297,6 +357,24 @@ struct RotaryOutput {
             + (avid ? " (Avid: Rotary tab > Zero A)" : "") + " before the next job"
     }
 
+    /// Where the blank has to be for a toolpath turned to `angle`: the A value, or on a blank turned by hand the
+    /// reading on the indexer's dial, 0 ≤ reading < 360.
+    func position(_ angle: Double) -> Double { manual ? RotaryIndex.normalized(value(angle)) : value(angle) }
+
+    /// The comment before the stop that asks for a turn by hand. `resume` is how the controller carries on.
+    func turnMessage(_ angle: Double, resume: String) -> String {
+        "Turn the blank to \(RotaryIndex.label(position(angle))), then \(resume)"
+    }
+
+    /// The dial reading a stop's message asks for, when it's one of `turnMessage`'s (as written in a comment, with
+    /// ° spelled "deg").
+    static func manualTurn(in message: String) -> Double? {
+        let text = message.uppercased()
+        guard let lead = text.range(of: "TURN THE BLANK TO ") else { return nil }
+        let number = text[lead.upperBound...].prefix { $0.isNumber || $0 == "." || $0 == "-" }
+        return Double(number)
+    }
+
     /// Where X zero is on the blank.
     static func xZero(_ stock: Stock) -> String {
         switch stock.xyOrigin {
@@ -308,7 +386,7 @@ struct RotaryOutput {
 
     /// Header comments for the blank and the zeros, in place of the flat job's material and zero lines. A wrapped
     /// job also says how the sheet wraps and how its rotary moves are fed (`feeds`).
-    static func header(_ stock: Stock, units: LengthUnit, num: (Double) -> String, avid: Bool,
+    static func header(_ stock: Stock, units: LengthUnit, num: (Double) -> String, avid: Bool, axis: RotaryAxis? = nil,
                        feeds: RotaryWrap.FeedMode? = nil, turnsWhileCutting: Bool = false) -> [String] {
         guard let blank = stock.rotary else { return [] }
         let shape = blank.shape == .cylinder ? "round, D=\(num(blank.diameter))" : "square bar, \(num(blank.diameter)) across"
@@ -328,7 +406,23 @@ struct RotaryOutput {
             }
         }
         lines.append("Raise the tool clear of the chuck and tailstock before Cycle Start")
+        if let axis, axis.turnsByHand {
+            lines += [
+                "TURN THE BLANK BY HAND AT EACH STOP (M0)",
+                "Angles count up as the top of the blank rolls toward \(axis.reversed ? "+Y" : "-Y")",
+            ]
+        }
         return lines
+    }
+
+    /// The setup sheet's line for how the blank turns.
+    static func setupNote(_ machine: MachineProfile) -> String {
+        guard let axis = machine.rotary, axis.turnsByHand else {
+            return "Turns on \(machine.rotary?.letter.rawValue ?? String(RotaryIndex.letter)) between faces, with the tool at safe Z."
+        }
+        return "Turned by hand. The program stops with the spindle off and the tool at safe Z before each new angle, and "
+            + "says which angle to turn the blank to. Angles count up as the top of the blank rolls toward "
+            + "\(axis.reversed ? "+Y" : "−Y"). Start with the blank at 0°."
     }
 
     /// The re-zero instruction after a tool change.

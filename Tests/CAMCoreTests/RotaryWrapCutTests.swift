@@ -130,9 +130,9 @@ struct RotaryWrapCutTests {
         }
     }
 
-    @Test func spiralsAreFormatFourAndFollowTheSheet() throws {
+    @Test func spiralsAreFormatFiveAndFollowTheSheet() throws {
         var p = Self.ropeTwist()
-        #expect(p.formatVersion == 4)
+        #expect(p.formatVersion == 5)
         let back = try JSONDecoder().decode(Project.self, from: JSONEncoder().encode(p))
         #expect(back.shapes == p.shapes)
         // The lines are straight on the sheet, three starts a third of the way round apart, four turns high.
