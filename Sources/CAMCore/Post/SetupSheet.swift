@@ -144,6 +144,31 @@ public enum SetupSheet {
         }
         h += "</table>\n"
 
+        // V-carve inlays: which side each toolpath cuts and the depths that make the two fit.
+        let cut = Set(job.toolpaths.filter { !$0.isEmpty }.map(\.sourceOperationID))
+        let inlays = project.operations.compactMap { op -> (CAMOperation, VCarveParams, VCarveInlay)? in
+            guard case let .vcarve(p) = op.kind, let inlay = p.inlay, cut.contains(op.id) else { return nil }
+            return (op, p, inlay)
+        }
+        if !inlays.isEmpty {
+            h += "<h2>Inlay</h2>\n<ul>\n"
+            for (op, p, inlay) in inlays {
+                let bit = "\(Int(op.tool.includedAngle.rounded()))° T\(op.tool.number)"
+                switch inlay.role {
+                case .pocket:
+                    let flat = p.flatDepth.map { " to a flat depth of \(len($0))" } ?? " to full V depth"
+                    let start = p.startDepth > 1e-9 ? " from a start depth of \(len(p.startDepth))" : ""
+                    h += "<li>\(esc(op.name)): <b>pocket</b> (female), V-carved\(start)\(flat) with the \(bit). Cut the plug with the same bit.</li>\n"
+                case .plug:
+                    h += "<li>\(esc(op.name)): <b>plug</b> (male), mirrored, with the \(bit): pocket depth \(len(inlay.pocketDepth)), "
+                        + "glue gap \(len(inlay.glueGap)), surface clearance \(len(inlay.surfaceClearance)), so carved from "
+                        + "\(len(inlay.plugStartDepth)) down to \(len(inlay.plugCutDepth)). Cut it from its own board and saw it free "
+                        + "inside the carved band, then glue it into the pocket face down and plane or sand it flush.</li>\n"
+                }
+            }
+            h += "</ul>\n"
+        }
+
         let clamps = project.shapes.filter(\.isKeepOut)
         if !clamps.isEmpty {
             h += "<h2>Clamps and keep-out areas</h2>\n<ul>\n"

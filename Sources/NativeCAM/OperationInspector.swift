@@ -163,10 +163,25 @@ struct OperationInspector: View {
             }
         case let .vcarve(p):
             let set: (VCarveParams) -> Void = { op.kind = .vcarve($0) }
+            InlaySection(params: p, op: $op, project: project, units: units, set: set)
             Section("V-carve") {
-                Toggle("Flat bottom", isOn: Binding(get: { p.flatDepth != nil }, set: { var q = p; q.flatDepth = $0 ? 0.125.inch : nil; set(q) }))
-                if let flat = p.flatDepth {
-                    LengthField(title: "Flat depth", mm: Binding(get: { flat }, set: { var q = p; q.flatDepth = max(0.01, $0); set(q) }), units: units)
+                if !p.isPlug {
+                    LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }),
+                                units: units,
+                                help: "Depth the carve is calculated from: 0 on the material top, or an existing pocket's depth to carve inside it",
+                                minimum: 0)
+                    if p.inlay?.role != .pocket || p.flatDepth == nil {
+                        Toggle("Flat bottom", isOn: Binding(get: { p.flatDepth != nil }, set: { var q = p; q.flatDepth = $0 ? 0.125.inch : nil; set(q) }))
+                    }
+                }
+                if let flat = p.carveFlatDepth {
+                    if let f = p.flatDepth, !p.isPlug {
+                        LengthField(title: "Flat depth", mm: Binding(get: { f }, set: { var q = p; q.flatDepth = max(0.01, $0); set(q) }), units: units,
+                                    help: "Measured down from the start depth, as in Vectric VCarve")
+                        if p.startDepth > 1e-9 {
+                            LabeledContent("Deepest cut", value: "\(units.format(p.startDepth + flat)) \(units.symbol)")
+                        }
+                    }
                     Picker("Clear flat area with", selection: Binding(get: { p.clearanceTool?.id }, set: { id in
                         var q = p
                         q.clearanceTool = id.flatMap { library.tool(id: $0) }
@@ -217,6 +232,125 @@ struct OperationInspector: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+/// A V-carve's inlay role: none, the pocket (female) or the plug (male), with the plug's settings (Vectric's pocket
+/// depth, glue gap and surface clearance) and the depths they give.
+struct InlaySection: View {
+    let params: VCarveParams
+    @Binding var op: CAMOperation
+    let project: Project
+    let units: LengthUnit
+    let set: (VCarveParams) -> Void
+
+    enum Choice: String, CaseIterable, Identifiable {
+        case none, pocket, plug
+        var id: String { rawValue }
+        var label: String { rawValue.capitalized }
+    }
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+
+    /// The pocket this plug goes into, and its flat depth.
+    private var pocket: (op: CAMOperation, flat: Double?)? {
+        guard let p = project.inlayPocket(for: op), case let .vcarve(q) = p.kind else { return nil }
+        return (p, q.flatDepth)
+    }
+
+    private func choose(_ choice: Choice) {
+        var q = params
+        switch choice {
+        case .none:
+            q.inlay = nil
+        case .pocket:
+            q.inlay = VCarveInlay(role: .pocket)
+            q.flatDepth = q.flatDepth ?? VCarveInlay.defaultPocketDepth
+        case .plug:
+            var inlay = params.inlay ?? VCarveInlay(role: .plug)
+            inlay.role = .plug
+            // Start from settings that seat in this project's pocket, cut with its bit.
+            if let pocket {
+                if let flat = pocket.flat { inlay.pocketDepth = flat }
+                if !pocket.op.tool.isSameBit(as: op.tool) { op.tool = pocket.op.tool }
+                if case let .vcarve(pq) = pocket.op.kind, q.clearanceTool == nil { q.clearanceTool = pq.clearanceTool }
+            }
+            q.inlay = inlay
+        }
+        set(q)
+    }
+
+    private func value(_ key: WritableKeyPath<VCarveInlay, Double>, minimum: Double) -> Binding<Double> {
+        Binding(get: { params.inlay?[keyPath: key] ?? 0 }, set: { v in
+            var q = params
+            q.inlay?[keyPath: key] = max(minimum, v)
+            set(q)
+        })
+    }
+
+    var body: some View {
+        Section("Inlay") {
+            Picker("Inlay", selection: Binding(get: {
+                switch params.inlay?.role {
+                case .pocket: Choice.pocket
+                case .plug: Choice.plug
+                case nil: Choice.none
+                }
+            }, set: choose)) {
+                ForEach(Choice.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if let inlay = params.inlay {
+                switch inlay.role {
+                case .pocket:
+                    Text("The pocket for a V-carve inlay: an ordinary V-carve to its flat depth. Make the plug with a second V-carve set to Plug, using the same V-bit and this flat depth as its pocket depth.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                case .plug:
+                    plugSettings(inlay)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func plugSettings(_ inlay: VCarveInlay) -> some View {
+        LengthField(title: "Pocket depth", mm: value(\.pocketDepth, minimum: 0.01), units: units,
+                    help: "The flat depth of the V-carve pocket this plug goes into")
+        if let pocket, let flat = pocket.flat, abs(flat - inlay.pocketDepth) > 0.005 {
+            HStack(alignment: .firstTextBaseline) {
+                Label("“\(pocket.op.name)” is \(len(flat)) deep", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange).font(.caption)
+                Spacer(minLength: 4)
+                Button("Match") { var q = params; q.inlay?.pocketDepth = flat; set(q) }
+                    .controlSize(.small)
+                    .help("Set the pocket depth to that pocket's flat depth")
+            }
+        }
+        LengthField(title: "Glue gap", mm: value(\.glueGap, minimum: 0), units: units,
+                    help: "The gap left between the plug's face and the pocket's floor, for glue")
+        LengthField(title: "Surface clearance", mm: value(\.surfaceClearance, minimum: 0.01), units: units,
+                    help: "How far the plug board stays above the pocket board when the walls meet: room to clamp it in, and the waste you saw or plane off")
+        Picker("Boundary", selection: Binding(get: { inlay.boundary }, set: { b in var q = params; q.inlay?.boundary = b; set(q) })) {
+            ForEach(VCarveInlay.Boundary.allCases) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .help("Where the carving round the design stops: a margin round it, or a closed vector selected round it with the design")
+        if inlay.boundary == .vector {
+            if let boundary = project.plugBoundary(for: op) {
+                LabeledContent("Boundary vector", value: boundary.name)
+            } else {
+                Label("Select a closed vector round the design with it; until then the margin is used.", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        if inlay.boundary == .margin || project.plugBoundary(for: op) == nil {
+            LengthField(title: "Boundary margin", mm: value(\.boundaryMargin, minimum: 0.1), units: units,
+                        help: "How far past the design the plug is carved")
+        }
+        LabeledContent("Start depth", value: len(inlay.plugStartDepth))
+        LabeledContent("Cut depth", value: len(inlay.plugCutDepth))
+        Text("Carves around the design, mirrored left to right, so the design stands proud. Turned over, it goes into the pocket until the walls meet, with the glue gap under its face: start depth = pocket depth − glue gap. Cut it from its own board with the same V-bit as the pocket, saw it free inside the carved band, glue it in and plane it flush.")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 }
 

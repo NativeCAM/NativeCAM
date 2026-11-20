@@ -173,6 +173,7 @@ public enum CAMEngine {
             for g in generated { emit(g, clearing: false) }
         }
         issues.append(contentsOf: checkModelBoundaries(project))
+        issues.append(contentsOf: inlayIssues(project, toolpaths: toolpaths))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
         issues.append(contentsOf: RotaryIndex.issues(project, toolpaths: toolpaths))
@@ -234,6 +235,88 @@ public enum CAMEngine {
                 if cleared + 1e-6 < reach {
                     let u = project.displayUnits
                     issues.append(JobIssue(.warning, "Finishing reaches \(u.format(reach)) \(u.symbol) past the boundary but '\(rough.name)' only clears \(u.format(cleared)) \(u.symbol); the ball will cut uncut material there. Increase the roughing margin.", operation: finish.name))
+                }
+            }
+        }
+        return issues
+    }
+
+    /// V-carve inlays: whether each plug will seat in its pocket with the glue gap it asks for (see `VCarveInlay`).
+    /// A plug's pocket is the inlay pocket that shares one of its shapes, or the only one in the project. Toolpaths
+    /// turned off are checked too: the two sides are usually exported one at a time.
+    static func inlayIssues(_ project: Project, toolpaths: [Toolpath]) -> [JobIssue] {
+        let u = project.displayUnits
+        func fmt(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
+        func bit(_ t: Tool) -> String {
+            let name = t.name.isEmpty ? "T\(t.number)" : t.name
+            guard t.shape.isTapered else { return "\(name) (a \(t.shape.label.lowercased()))" }
+            return "\(name) (\(Int(t.includedAngle.rounded()))°\(t.tipDiameter > 1e-6 ? ", \(fmt(t.tipDiameter)) tip" : ""))"
+        }
+        var issues: [JobIssue] = []
+        for plug in project.operations {
+            guard case let .vcarve(params) = plug.kind, let inlay = params.inlay, inlay.role == .plug else { continue }
+            func warn(_ message: String) { issues.append(JobIssue(.warning, message, operation: plug.name)) }
+            let tool = plug.tool
+            if inlay.glueGap <= 1e-9 {
+                warn("No glue gap: the plug's face reaches the pocket's floor just as the walls meet, leaving no room for glue. "
+                    + "About \(fmt(VCarveInlay.defaultGlueGap)) is typical.")
+            } else if inlay.glueGap >= inlay.pocketDepth - 1e-9 {
+                warn("The glue gap (\(fmt(inlay.glueGap))) isn't less than the pocket depth (\(fmt(inlay.pocketDepth))), so the plug "
+                    + "has no walls to fit by.")
+            } else if inlay.glueGap < 2 * VCarveGenerator.inlayPocketRidge - 1e-9 {
+                warn("The glue gap (\(fmt(inlay.glueGap))) is smaller than the ridges a V-bit can leave where it clears the pocket's "
+                    + "floor (up to \(fmt(2 * VCarveGenerator.inlayPocketRidge))), so the plug may bottom out on them.")
+            }
+            if inlay.surfaceClearance <= 1e-9 {
+                warn("No surface clearance: the plug board's carved floor meets the pocket board's surface just as the walls meet, "
+                    + "so there's nothing left to press in or plane off.")
+            }
+            if tool.shape.isTapered {
+                let reach = min(tool.taperHeight, tool.fluteLength)
+                if inlay.plugCutDepth > reach + 1e-6 {
+                    warn("The plug is cut \(fmt(inlay.plugCutDepth)) deep (start depth plus surface clearance), but \(bit(tool))'s V is "
+                        + "only \(fmt(reach)) tall. Use a smaller pocket depth or a taller V-bit.")
+                }
+                if tool.tipDiameter > 1e-6 {
+                    let proud = tool.tipDiameter / 2 / tool.halfAngleTangent
+                    warn("\(bit(tool)) has a flat tip, so narrow parts of the plug come out up to \(fmt(proud)) taller than the "
+                        + "pocket's grooves there and can stop it seating. A pointed V-bit fits best.")
+                }
+            }
+            guard let pocket = project.inlayPocket(for: plug), case let .vcarve(pocketParams) = pocket.kind else { continue }
+            let a = pocket.tool
+            if a.shape.isTapered != tool.shape.isTapered || abs(a.includedAngle - tool.includedAngle) > 0.01
+                || abs(a.tipDiameter - tool.tipDiameter) > 0.005 {
+                warn("Uses \(bit(tool)), but its pocket “\(pocket.name)” uses \(bit(a)). Cut both with the same V-bit, or their "
+                    + "walls won't meet.")
+            }
+            guard let flat = pocketParams.flatDepth else {
+                warn("Its pocket “\(pocket.name)” has no flat depth, so the plug's depths can't be matched to it. Give the pocket a "
+                    + "flat depth of \(fmt(inlay.pocketDepth)) (the plug's pocket depth).")
+                continue
+            }
+            if abs(flat - inlay.pocketDepth) > 0.005 {
+                let gap = flat - inlay.plugStartDepth
+                if gap <= 1e-6 {
+                    warn("Pocket depth is \(fmt(inlay.pocketDepth)), but “\(pocket.name)” is only \(fmt(flat)) deep (its flat depth), "
+                        + "so the plug bottoms out before its walls meet. Set Pocket depth to \(fmt(flat)).")
+                } else {
+                    warn("Pocket depth is \(fmt(inlay.pocketDepth)), but “\(pocket.name)” is \(fmt(flat)) deep (its flat depth), so "
+                        + "the plug would sit \(fmt(gap)) off the pocket's floor instead of the \(fmt(inlay.glueGap)) glue gap. Set "
+                        + "Pocket depth to \(fmt(flat)).")
+                }
+            }
+            // Both sides in one file, on top of each other: the plug would cut away the pocket.
+            if pocket.enabled && plug.enabled {
+                func extents(_ op: CAMOperation) -> Rect2 {
+                    let ids: Set<UUID> = [op.id, VCarveGenerator.deterministicID(op.id, salt: 1)]
+                    return toolpaths.filter { ids.contains($0.sourceOperationID) }.compactMap(\.cuttingExtents)
+                        .reduce(Rect2.empty) { $0.union(Rect2(x: $1.min.x, y: $1.min.y, width: $1.max.x - $1.min.x, height: $1.max.y - $1.min.y)) }
+                }
+                let p = extents(pocket), q = extents(plug)
+                if !p.isEmpty, !q.isEmpty, p.min.x < q.max.x, q.min.x < p.max.x, p.min.y < q.max.y, q.min.y < p.max.y {
+                    warn("Overlaps its pocket “\(pocket.name)”, and both are included in the output. Cut the plug from a separate "
+                        + "board: turn off Include in output for one side before exporting the other.")
                 }
             }
         }
