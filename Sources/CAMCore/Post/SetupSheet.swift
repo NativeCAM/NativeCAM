@@ -178,8 +178,44 @@ public enum SetupSheet {
             h += "</ul>\n"
         }
 
-        // V-carve inlays: which side each toolpath cuts and the depths that make the two fit.
+        // Chamfers, flutes and prisms: the size of each bevel or flute, so it can be checked on the part.
         let cut = Set(job.toolpaths.filter { !$0.isEmpty }.map(\.sourceOperationID))
+        let shaped = project.operations.filter { $0.kind.followsVectors && cut.contains($0.id) }
+        if !shaped.isEmpty {
+            h += "<h2>Chamfers, flutes and prisms</h2>\n<ul>\n"
+            for op in shaped {
+                let bit = op.tool.shape.isTapered ? "\(Int(op.tool.includedAngle.rounded()))° T\(op.tool.number)" : "T\(op.tool.number)"
+                let from = { (start: Double) in start > 1e-9 ? ", from a start depth of \(len(start))" : "" }
+                switch op.kind {
+                case let .chamfer(p):
+                    let side = p.side == .both ? "both sides of" : "\(p.side.rawValue)"
+                    let edge = p.edge == .top ? "its top edge on the vector" : "its bottom edge on the vector"
+                    h += "<li><b>\(esc(op.name))</b>: a bevel \(len(p.width)) wide and \(len(p.depth(with: op.tool))) deep \(side) the "
+                        + "shapes, \(edge)\(from(p.startDepth)), with the \(bit)\(p.sharpCorners ? "; sharp corners" : "").</li>\n"
+                case let .fluting(p):
+                    let ramps: String
+                    switch p.ramp {
+                    case .both: ramps = "ramping in and out"
+                    case .start: ramps = "ramping in at the start"
+                    case .end: ramps = "ramping out at the end"
+                    case .none: ramps = "full depth all along"
+                    }
+                    let length = p.ramp == .none ? ""
+                        : p.rampPercent.map { " over \(Int(($0 * 100).rounded()))% of the length" } ?? " over \(len(p.rampLength))"
+                    h += "<li><b>\(esc(op.name))</b>: flutes \(len(p.depth)) deep\(from(p.startDepth)), \(ramps)\(length)"
+                        + "\(p.ramp == .none ? "" : " (\(p.rampShape.rawValue))"), with \(bit)."
+                        + (p.ramp == .start || p.ramp == .end ? " Each starts at its vector's start point." : "") + "</li>\n"
+                case let .prism(p):
+                    let depth = p.depth.map { "\(len($0)) deep" } ?? "to a full ridge"
+                    h += "<li><b>\(esc(op.name))</b>: prism carved \(depth)\(from(p.startDepth)) with the \(bit). Its bit cuts past "
+                        + "the outline too; clear round it with a pocket or profile.</li>\n"
+                default: break
+                }
+            }
+            h += "</ul>\n"
+        }
+
+        // V-carve inlays: which side each toolpath cuts and the depths that make the two fit.
         let inlays = project.operations.compactMap { op -> (CAMOperation, VCarveParams, VCarveInlay)? in
             guard case let .vcarve(p) = op.kind, let inlay = p.inlay, cut.contains(op.id) else { return nil }
             return (op, p, inlay)

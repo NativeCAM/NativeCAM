@@ -10,8 +10,9 @@ public struct Project: Hashable, Sendable {
     /// adds wrapped rotary jobs: a format-4 build would read the unrolled sheet as one face and cut it indexed. Format 6
     /// adds a V-carve's start depth and inlay plugs, which a format-5 build would carve from the surface as an ordinary
     /// V-carve of the design. Format 7 adds 3D rotary finishing and models placed on a rotary blank, which a format-6
-    /// build can't read or would lay flat on the sheet.
-    public static let currentFormatVersion = 7
+    /// build can't read or would lay flat on the sheet. Format 8 adds chamfer, fluting and prism toolpaths, which a
+    /// format-7 build can't read.
+    public static let currentFormatVersion = 8
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

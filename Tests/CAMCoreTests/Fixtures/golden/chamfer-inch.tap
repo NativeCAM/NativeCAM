@@ -1,0 +1,45 @@
+(Chamfered bracket)
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
+(Material: Maple X=8.0000 Y=6.0000 Z=0.7500 in)
+(Z zero: Material top   XY zero: Lower left)
+(Program extents: X1.0000 to X7.0000  Y1.0000 to Y5.0000  Z-0.1250 to Z0.1000)
+(Safe Z = 0.5000)
+(Tools used:)
+(  T6 90deg V-Bit 1/2in - D0.5000 V-Bit)
+(Toolpaths:)
+(  1. Chamfer edges - T6)
+G00 G94 G20 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T6 90deg V-Bit 1/2in)
+T6M6
+M07
+S18000 M03
+(Toolpath: Chamfer edges  Tool: T6 90deg V-Bit 1/2in)
+G00 Z0.5000
+G00 X1.0000 Y1.0000
+G00 Z0.1000
+G01 Z-0.1250 F30.0
+G01 Y5.0000 F80.0
+G01 X4.0000
+G01 Y3.0000
+G01 X3.8750 Y2.8750 Z0.0000
+G01 X4.0000 Y3.0000 Z-0.1250
+G01 X7.0000
+G01 Y1.0000
+G01 X1.0000
+G00 Z0.2000
+G00 X2.2061 Y2.5955
+G00 Z0.1000
+G01 Z-0.1250 F30.0
+G03 X2.8247 Y3.3802 I0.2939 J0.4045 F80.0
+G03 X2.1464 Y2.6464 I-0.3247 J-0.3802
+G03 X2.2061 Y2.5955 I0.3535 J0.3535
+G00 Z0.5000
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+M05
+M09
+M30

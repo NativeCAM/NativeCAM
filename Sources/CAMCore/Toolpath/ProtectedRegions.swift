@@ -5,7 +5,9 @@ import Foundation
 ///
 /// Each toolpath's part is held as a thin band of the material it leaves along its finished walls, on the part side:
 /// inside an outside profile's shapes (plus allowance), round an inside profile's holes, both sides of an "On" cut,
-/// round a pocket (and inside its islands), round a V-carve's carved area and round each drilled hole. A tool coming
+/// round a pocket (and inside its islands), round a V-carve's carved area, round each drilled hole, along a chamfer's
+/// foot (on its vector for a bottom-edge bevel, as the profile cutting that vector has it), inside a prism's outline
+/// and along both walls of a flute. A tool coming
 /// from the waste cuts into the part exactly when it touches the band, so a band a fraction of a millimetre wide is
 /// enough, and it never reaches material near a wall that is really scrap (beside a part, or in a hole). Bands are
 /// clipped to the material: a pocket's edge on the material's edge isn't a wall.
@@ -180,6 +182,33 @@ public struct ProtectedRegions: Sendable {
                 let outer = circle(c, radius: r + w, tolerance: tol), hole = circle(c, radius: r, tolerance: tol)
                 return [outer.oriented(counterClockwise: true), hole.oriented(counterClockwise: false)]
             }
+        case let .chamfer(p):
+            // Where the bevel meets the material below it: a bottom-edge bevel on the vector (the wall a profile on the
+            // same vector leaves, so that profile counts it as its own), a top-edge one the bevel's width away.
+            let regions = closedRegions()
+            guard !regions.isEmpty else { return [] }
+            switch (p.edge, p.side) {
+            case (.bottom, .inside): return inside(regions.flatMap(\.loops))
+            case (.bottom, .outside): return outside(regions.flatMap(\.loops))
+            case (.bottom, .both):
+                return outside(Clipper.offset(regions.flatMap(\.loops), delta: 0.01, end: .joined, arcTolerance: tol))
+            case (.top, .outside): return inside(offset(regions, p.width).flatMap(\.loops))
+            case (.top, .inside): return outside(offset(regions, -p.width).flatMap(\.loops))
+            case (.top, .both):
+                let grown = offset(regions, p.width).flatMap(\.loops), shrunk = offset(regions, -p.width).flatMap(\.loops)
+                return inside(Clipper.difference(grown, minus: shrunk))
+            }
+        case .prism:
+            // The prism's base is the drawn shape, as an outside profile's part is.
+            return inside(closedRegions().flatMap(\.loops))
+        case let .fluting(p):
+            // Both walls of the groove, at their widest.
+            let r = op.tool.radius(atHeight: p.depth)
+            let polys = shapes.flatMap { $0.polylines(tolerance: flattenTolerance) }
+            let closed = polys.filter { $0.isClosed && $0.count >= 3 }, open = polys.filter { !$0.isClosed && $0.count >= 2 }
+            guard r > 1e-6 else { return [] }
+            return outside(Clipper.union(Clipper.offset(closed, delta: r, end: .joined, arcTolerance: tol)
+                + Clipper.offset(open, delta: r, end: .round, arcTolerance: tol)))
         case .rough3D, .finish3D, .rounding, .rotaryFinish:
             return []
         }

@@ -190,6 +190,7 @@ public enum CAMEngine {
         }
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: inlayIssues(project, toolpaths: toolpaths))
+        issues.append(contentsOf: chamferIssues(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
         issues.append(contentsOf: RotaryIndex.issues(project, toolpaths: toolpaths))
@@ -361,6 +362,36 @@ public enum CAMEngine {
         return issues
     }
 
+    /// Chamfers that don't fit the profile cutting the same shapes from the same vector. A bevel on the profile's waste
+    /// side is cut away with the waste; a top-edge bevel on the part's side slopes down into the part from the top of
+    /// its wall, leaving a sharp lip. A bottom-edge bevel on the part's side is what bevels a part's (or a hole's) top
+    /// edge before it's cut out.
+    static func chamferIssues(_ project: Project) -> [JobIssue] {
+        var issues: [JobIssue] = []
+        let ops = project.operations.filter(\.enabled)
+        for chamfer in ops {
+            guard case let .chamfer(c) = chamfer.kind else { continue }
+            let depth = c.startDepth + c.depth(with: chamfer.tool)
+            for profile in ops {
+                guard case let .profile(p) = profile.kind, p.side != .on, p.depth.cutDepth > depth - 1e-6,
+                      !Set(profile.shapeIDs).isDisjoint(with: chamfer.shapeIDs) else { continue }
+                let outsideCut = p.side == .outside
+                let partSide: ChamferParams.Side = outsideCut ? .inside : .outside
+                let what = outsideCut ? "the part it cuts out" : "the rim of the hole it cuts"
+                let fix = "To bevel \(what), set Side to \(partSide.label) and Vector to Bottom edge."
+                if c.side != partSide {
+                    let half = c.side == .both ? "half of " : ""
+                    issues.append(JobIssue(.warning, "“\(profile.name)” cuts \(p.side.rawValue) the same shapes, where \(half)this "
+                        + "bevel lies, so it cuts the bevel away. \(fix)", operation: chamfer.name))
+                } else if c.edge == .top {
+                    issues.append(JobIssue(.warning, "“\(profile.name)” cuts these shapes on the same vector as this bevel's top edge, "
+                        + "so the bevel slopes down from the top of the wall and leaves a sharp lip along it. \(fix)", operation: chamfer.name))
+                }
+            }
+        }
+        return issues
+    }
+
     public static func generate(_ op: CAMOperation, shapes: [DesignShape], context: GenerationContext) -> [Toolpath] {
         switch op.kind {
         case let .profile(p):
@@ -379,6 +410,12 @@ public enum CAMEngine {
             return [RoundingGenerator.generate(op: op, params: p, context: context)]
         case let .rotaryFinish(p):
             return [Rotary3DGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
+        case let .chamfer(p):
+            return [ChamferGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
+        case let .fluting(p):
+            return [FlutingGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
+        case let .prism(p):
+            return [PrismGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         }
     }
 
