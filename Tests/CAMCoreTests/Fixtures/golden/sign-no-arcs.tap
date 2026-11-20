@@ -588,7 +588,7 @@ M05
 T1M6
 G90 G91.1 G64
 M07
-S18000 M03
+S13000 M03
 (Toolpath: Pocket plaque  Tool: T1 1/4in Upcut End Mill)
 G00 Z0.5000
 G00 X8.2274 Y4.9885

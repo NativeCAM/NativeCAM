@@ -141,9 +141,10 @@ struct ChipLoadTests {
         #expect(rec.rpm < 18000)
         let chip = rec.feed / (rec.rpm * 2) / 25.4
         #expect(chip >= 0.023 && chip <= 0.027)
-        // A 1/4" bit in plywood fits under the cap at full speed.
-        let small = ChipLoad.recommend(for: ToolLibrary.starter.tool(number: 1)!, material: .plywood, machine: machine)
-        #expect(small.rpm == 18000)
+        // A 1/4" bit in plywood fits under the cap at its own speed.
+        let quarter = ToolLibrary.starter.tool(number: 1)!
+        let small = ChipLoad.recommend(for: quarter, material: .plywood, machine: machine)
+        #expect(small.rpm == quarter.cutting.spindleRPM)
     }
 
     @Test func compressionFirstPassClearsTheUpcutSection() {
@@ -160,12 +161,12 @@ struct ChipLoadTests {
 
     @Test func underfedBitIsFlagged() {
         var slow = ToolLibrary.starter.tool(number: 1)!
-        slow.cutting.feedRate = 100.inch // 0.0028 in/tooth at 18k
+        slow.cutting.feedRate = 100.inch // 0.0038 in/tooth at 13,000 RPM
         let shape = DesignShape(kind: .rectangle(width: 50, height: 50, cornerRadius: 0), position: Vec2(100, 75))
         let op = CAMOperation(kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 3))), shapeIDs: [shape.id], tool: slow)
         let job = CAMEngine.generate(Project(stock: Stock(width: 200, height: 150, thickness: 19), shapes: [shape], operations: [op]))
         #expect(job.issues.contains { $0.message.contains("below") && $0.message.contains("chip") || $0.message.hasPrefix("Chip load") })
-        // The starter defaults are within the chart for plywood.
+        // The starter defaults are within the chart for plywood (and hardwood: StarterLibraryTests).
         let ok = CAMOperation(kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 3))), shapeIDs: [shape.id], tool: ToolLibrary.starter.tool(number: 1)!)
         let job2 = CAMEngine.generate(Project(stock: Stock(width: 200, height: 150, thickness: 19), shapes: [shape], operations: [ok]))
         #expect(!job2.issues.contains { $0.message.hasPrefix("Chip load") })

@@ -1,6 +1,6 @@
 (Demo sign)
 (Post: Avid CNC Mach4 - NativeCAM 0.1)
-(Created: 2026-11-19 09:07)
+(Created: 2026-11-20 10:05)
 (Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
 (Material: Baltic birch plywood X=24.0000 Y=18.0000 Z=0.7500 in)
 (Z zero: Material top   XY zero: Lower left)
@@ -462,7 +462,7 @@ M05
 T1M6
 G90 G91.1 G64
 M07
-S18000 M03
+S13000 M03
 (Toolpath: Pocket plaque  Tool: T1 1/4in Upcut End Mill)
 G00 Z0.5000
 G00 X8.2274 Y4.9885

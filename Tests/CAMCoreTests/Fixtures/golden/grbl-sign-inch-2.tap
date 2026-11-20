@@ -11,7 +11,7 @@ G90 G94 G17
 G20
 (Load T1 1/4in Upcut End Mill and zero Z before starting)
 M8
-S18000 M3
+S13000 M3
 (Pocket plaque T1)
 G0 Z0.5000
 G0 X8.2274 Y4.9885

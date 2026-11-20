@@ -8,7 +8,7 @@ struct RestMachiningTests {
     static let lib = ToolLibrary.starter
     static var eighth: Tool { lib.tool(number: 2)! }
     static var quarter: Tool { lib.tool(number: 1)! }
-    /// A 1/2" upcut end mill as T10 (the starter library has none).
+    /// A 1/2" upcut end mill as T10, with cutting data of its own (written before the starter library had one).
     static var half: Tool {
         Tool(id: UUID(uuidString: "4E415449-5645-4341-4D02-000000000010")!, number: 10, name: "1/2\" Upcut End Mill",
              shape: .flatEndMill, diameter: 0.5.inch, fluteLength: 1.25.inch,
