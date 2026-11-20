@@ -4,7 +4,8 @@ import Foundation
 ///
 /// Used to verify our own output (post → parse → compare) and to load `.tap`/`.nc` files from other CAM
 /// programs into the simulator. Coordinates come back in millimetres in the program's work coordinates, and a
-/// rotary A position (once the program moves A) in degrees on each motion.
+/// rotary A position (once the program moves A) in degrees on each motion. Canned drilling cycles (G73, G81–G83,
+/// G85, G86, G89) are expanded into the plain moves the controller makes, so their holes simulate.
 public struct GCodeProgram: Sendable {
     public struct Segment: Sendable {
         public var toolNumber: Int
@@ -71,6 +72,13 @@ public enum GCodeParser {
         var pos = Vec3.zero
         // Rotary A in degrees, unwound; nil until the program first moves it.
         var rotary: Double?
+        // Canned cycles. R, Z, Q and P stay set through a run of cycle blocks; the initial Z is where the run started.
+        var retractToR = false
+        var cycleR: Double?
+        var cycleZ: Double?
+        var cycleQ = 0.0
+        var cycleDwell = 0.0
+        var cycleStartZ: Double?
         var warnings: [String] = []
         var warned = Set<String>()
         func warnOnce(_ s: String) { if warned.insert(s).inserted { warnings.append(s) } }
@@ -103,7 +111,9 @@ public enum GCodeParser {
             var dwellRequested = false
             for g in gCodes {
                 switch g {
-                case 0, 1, 2, 3: motionMode = Int(g)
+                case 0, 1, 2, 3:
+                    motionMode = Int(g)
+                    cycleStartZ = nil
                 case 4: dwellRequested = true
                 case 20: units = .inch
                 case 21: units = .mm
@@ -111,10 +121,21 @@ public enum GCodeParser {
                 case 91: absolute = false
                 case 90.1: arcIncremental = false
                 case 91.1: arcIncremental = true
-                case 17, 40, 49, 80, 94, 54, 43, 61, 64: break
+                case 80:
+                    // Cancels a cycle; later axis words without a G0/G1 are read as rapids.
+                    if Self.isCycle(motionMode) || motionMode == Self.skippedCycle { motionMode = 0 }
+                    cycleStartZ = nil
+                case 17, 40, 49, 94, 54, 43, 61, 64: break
                 case 18, 19: warnOnce("Arcs outside the XY plane (G18/G19) aren't simulated.")
                 case 28, 30, 53: warnOnce("Machine-coordinate moves (G28/G30/G53) are skipped in the simulation.")
-                case 81, 82, 83, 73, 85: warnOnce("Canned drilling cycles (G8x) aren't expanded; holes won't show in the simulation.")
+                case 73, 81, 82, 83, 85, 86, 89:
+                    if motionMode != Int(g) { cycleStartZ = nil }
+                    motionMode = Int(g)
+                case 98: retractToR = false
+                case 99: retractToR = true
+                case 74, 76, 84, 87, 88:
+                    warnOnce("Tapping and boring cycles (G\(Int(g))) aren't simulated; their holes won't show.")
+                    motionMode = Self.skippedCycle
                 default: warnOnce("Unsupported G\(g) ignored.")
                 }
             }
@@ -128,24 +149,85 @@ public enum GCodeParser {
             }
             if current.motions.isEmpty { current.toolNumber = tool; current.spindleRPM = rpm }
 
-            if dwellRequested {
-                let p = values["P"] ?? 0
-                let seconds: Double
+            func dwellSeconds(_ p: Double) -> Double {
                 switch dwellUnit {
-                case .seconds: seconds = p
-                case .milliseconds: seconds = p / 1000
+                case .seconds: return p
+                case .milliseconds: return p / 1000
                 case .automatic:
                     let written = wordText("P", in: line) ?? ""
-                    if !written.contains("."), p >= 100 {
-                        seconds = p / 1000
-                        warnOnce("Read whole-number dwells of 100 or more (like G04 P\(written)) as milliseconds, "
-                            + "the way Masso and Fanuc-style controls do.")
-                    } else {
-                        seconds = p
-                    }
+                    guard !written.contains("."), p >= 100 else { return p }
+                    warnOnce("Read whole-number dwells of 100 or more (like P\(written)) as milliseconds, "
+                        + "the way Masso and Fanuc-style controls do.")
+                    return p / 1000
                 }
-                current.motions.append(Motion(kind: .dwell, end: pos, feed: seconds, a: rotary))
+            }
+            func emit(_ kind: MotionKind, _ target: Vec3, feed f: Double = 0) {
+                current.motions.append(Motion(kind: kind, end: target, feed: kind == .rapid ? 0 : f, a: rotary))
                 current.lines.append(lineNo)
+                pos = target
+            }
+
+            if dwellRequested {
+                emit(.dwell, pos, feed: dwellSeconds(values["P"] ?? 0))
+                continue
+            }
+
+            if Self.isCycle(motionMode) || motionMode == Self.skippedCycle {
+                if let r = values["R"] { cycleR = units.toMM(r) }
+                if let z = values["Z"] { cycleZ = units.toMM(z) }
+                if let q = values["Q"] { cycleQ = abs(units.toMM(q)) }
+                if let p = values["P"] { cycleDwell = dwellSeconds(p) }
+                guard values["X"] != nil || values["Y"] != nil || values["Z"] != nil,
+                      motionMode != Self.skippedCycle else { continue }
+                guard let rWord = cycleR, let zWord = cycleZ else {
+                    warnOnce("Line \(lineNo): a drilling cycle without its R or Z level was skipped.")
+                    continue
+                }
+                if values["A"] != nil { warnOnce("A words in drilling cycles are ignored.") }
+                let repeats = max(1, min(Int(values["L"] ?? 1), 1000))
+                for _ in 0..<repeats {
+                    if cycleStartZ == nil { cycleStartZ = pos.z }
+                    // G91: R is measured from the Z the block starts at, and Z from the R level.
+                    let rLevel = absolute ? rWord : pos.z + rWord
+                    let bottom = absolute ? zWord : rLevel + zWord
+                    let clear = retractToR ? rLevel : max(cycleStartZ ?? rLevel, rLevel)
+                    func xy(_ c: Character, _ cur: Double) -> Double {
+                        guard let v = values[c] else { return cur }
+                        return absolute ? units.toMM(v) : cur + units.toMM(v)
+                    }
+                    let hole = Vec2(xy("X", pos.x), xy("Y", pos.y))
+                    if pos.z < rLevel { emit(.rapid, Vec3(pos.x, pos.y, rLevel)) }
+                    if hole != pos.xy { emit(.rapid, Vec3(hole, pos.z)) }
+                    if pos.z != rLevel { emit(.rapid, Vec3(hole, rLevel)) }
+                    guard bottom < rLevel else {
+                        warnOnce("Line \(lineNo): a drilling cycle's Z is not below its R level, so it drills nothing.")
+                        continue
+                    }
+                    switch motionMode {
+                    case 83 where cycleQ > 0, 73 where cycleQ > 0:
+                        // G83 rapids out to R after each peck and back down to just above the last depth; G73 only
+                        // backs off a little to break the chip.
+                        let backOff = 0.254
+                        var depth = rLevel
+                        while depth > bottom + 1e-9 {
+                            let next = max(depth - cycleQ, bottom)
+                            if motionMode == 83, depth < rLevel { emit(.rapid, Vec3(hole, depth + backOff)) }
+                            emit(.feed, Vec3(hole, next), feed: feed)
+                            depth = next
+                            if depth > bottom + 1e-9 {
+                                emit(.rapid, Vec3(hole, motionMode == 83 ? rLevel : depth + backOff))
+                            }
+                        }
+                    default:
+                        if motionMode == 83 || motionMode == 73 {
+                            warnOnce("Line \(lineNo): a peck cycle without a Q depth was drilled in one pass.")
+                        }
+                        emit(.feed, Vec3(hole, bottom), feed: feed)
+                        if motionMode == 82 || motionMode == 89 { emit(.dwell, pos, feed: cycleDwell) }
+                        if motionMode == 85 || motionMode == 89 { emit(.feed, Vec3(hole, rLevel), feed: feed) }
+                    }
+                    if pos.z != clear { emit(.rapid, Vec3(hole, clear)) }
+                }
                 continue
             }
 
@@ -187,6 +269,10 @@ public enum GCodeParser {
         if !current.motions.isEmpty { segments.append(current) }
         return GCodeProgram(segments: segments, warnings: warnings, units: units)
     }
+
+    /// Motion modes for the drilling cycles the parser expands, and the one it reads but doesn't simulate.
+    static func isCycle(_ mode: Int) -> Bool { [73, 81, 82, 83, 85, 86, 89].contains(mode) }
+    static let skippedCycle = -84
 
     static func stripComments(_ s: String) -> String {
         var out = ""
