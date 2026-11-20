@@ -75,6 +75,98 @@ public extension Project {
     }
 }
 
+public extension Project {
+    /// A chess pawn turned on Avid's rotary from a 1.75" round blank (generated as a surface of revolution, no file
+    /// needed): a rounding pass with the 1/4" end mill takes the blank down to just over the pawn's widest, then 3D
+    /// rotary finishing with the 1/4" ball nose follows it all the way round, a spiral along the blank. The pawn keeps a
+    /// short stub at each end, so it stays held between the chuck and the tailstock; part it off by hand.
+    static func demoPawn() -> Project {
+        let lib = ToolLibrary.starter
+        var stock = Stock(materialName: "Poplar", materialKind: .softwood)
+        stock.setRotary(RotaryStock(shape: .cylinder, diameter: 1.75.inch, length: 6.inch))
+        var machine = MachineProfile.avidPRO6060
+        machine.rotary = RotaryAxis()
+        var mesh = MeshModel.revolved(name: "Pawn", profile: MeshModel.pawnProfile(), segments: 96)
+        mesh.id = demoID(42)
+        let spec = ModelSpec(mesh: mesh, depth: 1, rotary: RotaryPlacement(alongAxis: .x))
+        let pawn = DesignShape(id: demoID(23), name: "Pawn", kind: .model(spec), position: Vec2(3.inch, stock.height / 2))
+        var endMill = lib.tool(number: 1)!, ball = lib.tool(number: 7)!
+        // Poplar wants a thicker chip than the plywood defaults: take the chart's recommendation.
+        for i in [0, 1] {
+            var t = i == 0 ? endMill : ball
+            let rec = ChipLoad.recommend(for: t, material: .softwood, machine: machine)
+            t.cutting.feedRate = rec.feed
+            t.cutting.spindleRPM = rec.rpm
+            if i == 0 { endMill = t } else { ball = t }
+        }
+        let ops: [CAMOperation] = [
+            CAMOperation(id: demoID(34), name: "Round to 1.55\"",
+                         kind: .rounding(RoundingParams(finishedDiameter: 1.55.inch, startX: 0.75.inch, endX: 5.25.inch)),
+                         shapeIDs: [], tool: endMill),
+            CAMOperation(id: demoID(35), name: "Finish pawn", kind: .rotaryFinish(RotaryFinishParams()), shapeIDs: [pawn.id], tool: ball),
+        ]
+        return Project(name: "Demo pawn", displayUnits: .inch, stock: stock, machine: machine, shapes: [pawn], operations: ops)
+    }
+}
+
+public extension MeshModel {
+    /// A closed surface of revolution about +X: `profile` gives (x, distance from the axis) from one end to the other
+    /// (mm), turned through `segments` steps round the axis, with flat ends where the profile doesn't meet the axis.
+    /// Angles follow the rotary blank's (from +Z toward +Y), and the triangles face outward.
+    static func revolved(name: String, profile: [(x: Double, r: Double)], segments: Int) -> MeshModel {
+        let n = max(3, segments)
+        var pos: [Float] = []
+        var idx: [UInt32] = []
+        for (x, r) in profile {
+            for j in 0..<n {
+                let a = 2 * Double.pi * Double(j) / Double(n)
+                pos += [Float(x), Float(r * sin(a)), Float(r * cos(a))]
+            }
+        }
+        func v(_ i: Int, _ j: Int) -> UInt32 { UInt32(i * n + (j % n)) }
+        for i in 0..<(profile.count - 1) {
+            for j in 0..<n {
+                // Outward with x increasing: (i, j) → (i, j+1) → (i+1, j+1) turns from +Z toward +Y, so the normal is
+                // the cross product of the two edges, pointing away from the axis.
+                idx += [v(i, j), v(i + 1, j), v(i + 1, j + 1), v(i, j), v(i + 1, j + 1), v(i, j + 1)]
+            }
+        }
+        // Flat ends.
+        for (i, outward) in [(0, -1.0), (profile.count - 1, 1.0)] where profile[i].r > 1e-9 {
+            let c = UInt32(pos.count / 3)
+            pos += [Float(profile[i].x), 0, 0]
+            for j in 0..<n {
+                idx += outward > 0 ? [c, v(i, j + 1), v(i, j)] : [c, v(i, j), v(i, j + 1)]
+            }
+        }
+        return MeshModel(name: name, positions: pos, indices: idx)
+    }
+
+    /// A chess pawn's outline (x along it from the base, distance from the axis, mm): a footed base, a concave body,
+    /// a collar, the neck and a round head, with a 4 mm stub past the head for the tailstock end. 86 mm long, 38 mm
+    /// across at the base.
+    static func pawnProfile(samples: Int = 344) -> [(x: Double, r: Double)] {
+        func r(_ x: Double) -> Double {
+            switch x {
+            case ..<5: return 19
+            case ..<9: return 16 + 3 * cos((x - 5) / 4 * .pi / 2)
+            case ..<14: return 16 - 2 * (x - 9) / 5
+            case ..<55: return 7 + 7 * pow((55 - x) / 41, 1.6)
+            case ..<60: return 7 + 4 * sin(.pi * (x - 55) / 5)
+            case ..<63: return 6.5
+            default:
+                let head = 100 - (x - 71) * (x - 71)
+                return max(4, head > 0 ? head.squareRoot() : 0, x < 64 ? 6.5 : 0)
+            }
+        }
+        let length = 86.0
+        return (0...samples).map { i in
+            let x = length * Double(i) / Double(samples)
+            return (x, r(x))
+        }
+    }
+}
+
 public extension MeshModel {
     /// Oval medallion surface: a dome with ripples and a raised rim, as a top-surface triangle grid (Z up, mm).
     static func reliefMedallion(width: Double, height: Double, resolution: Int = 240) -> MeshModel {

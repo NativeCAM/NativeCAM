@@ -21,7 +21,7 @@ struct OperationInspector: View {
                         .help("Select shapes in the Design list, then click to assign them to this toolpath")
                 }
             }
-            if let blank = project.stock.rotary, blank.isWrapped, op.indexAngles == nil, op.kind.needsShapes {
+            if let blank = project.stock.rotary, blank.isWrapped, op.indexAngles == nil, op.kind.needsShapes, !op.kind.turnsWholeBlank {
                 WrapNoteSection(blank: blank, units: units)
             } else if (project.stock.rotary != nil && op.kind.takesIndexAngles) || op.indexAngles != nil {
                 IndexAnglesSection(angles: $op.indexAngles, blank: project.stock.rotary)
@@ -203,6 +203,8 @@ struct OperationInspector: View {
                     LabeledContent("Max V depth", value: "\(units.format(op.tool.taperHeight)) \(units.symbol)")
                 }
             }
+        case let .rotaryFinish(p):
+            RotaryFinishSection(params: p, op: op, project: project, units: units) { op.kind = .rotaryFinish($0) }
         case let .rounding(p):
             let set: (RoundingParams) -> Void = { op.kind = .rounding($0) }
             let blank = project.stock.rotary
@@ -231,6 +233,68 @@ struct OperationInspector: View {
                      : "Turns the blank round in layers of passes along it, stepping round between them; on a square bar it skips the faces until the layers reach them.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+}
+
+/// 3D rotary finishing: the pattern and its stepover (with the scallop it leaves), the allowance, how much of the
+/// blank, how closely the tool is dropped, and the layers that cut down to the model first.
+struct RotaryFinishSection: View {
+    let params: RotaryFinishParams
+    let op: CAMOperation
+    let project: Project
+    let units: LengthUnit
+    let set: (RotaryFinishParams) -> Void
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+    private func prompt(_ mm: Double) -> String { units.fromMM(mm).formatted(.number.precision(.fractionLength(0...units.displayDecimals))) }
+
+    /// Where the models selected for it start and end along the blank, and the farthest they reach from the axis.
+    private var extent: (minX: Double, maxX: Double, radius: Double)? {
+        let e = project.shapes(for: op).compactMap(\.rotaryExtent)
+        guard !e.isEmpty else { return nil }
+        return (e.map(\.minX).min()!, e.map(\.maxX).max()!, e.map(\.radius).max()!)
+    }
+
+    var body: some View {
+        let p = params
+        let tool = op.tool
+        let blank = project.stock.rotary
+        Section("3D Rotary Finishing") {
+            Picker("Pattern", selection: Binding(get: { p.pattern }, set: { var q = p; q.pattern = $0; set(q) })) {
+                ForEach(RotaryFinishParams.Pattern.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction }, set: { var q = p; q.stepoverFraction = $0; set(q) }))
+            LabeledContent(p.pattern == .lines ? "Round the blank" : "Along the blank per \(p.pattern == .spiral ? "turn" : "ring")",
+                           value: len(p.stepover(tool)))
+            LabeledContent("Scallop height", value: "\(units.format(scallop(tool: tool, stepover: p.stepover(tool)), decimals: 4)) \(units.symbol)")
+            LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units,
+                        help: "Material left on the model's surface")
+            OptionalLengthField(title: "Start (X)", mm: Binding(get: { p.startX }, set: { var q = p; q.startX = $0; set(q) }), units: units,
+                                prompt: extent.map { prompt(max($0.minX, tool.radius)) } ?? "",
+                                help: "Where along the blank the finish starts; empty starts at the model's end, with the cutter inside the blank")
+            OptionalLengthField(title: "End (X)", mm: Binding(get: { p.endX }, set: { var q = p; q.endX = $0; set(q) }), units: units,
+                                prompt: extent.flatMap { e in blank.map { prompt(min(e.maxX, $0.length - tool.radius)) } } ?? "",
+                                help: "Where along the blank the finish ends; empty ends at the model's end, with the cutter inside the blank")
+        }
+        Section("Sampling") {
+            LengthField(title: "Sample spacing", mm: Binding(get: { p.sampleSpacing }, set: { var q = p; q.sampleSpacing = max(0.02, $0); set(q) }),
+                        units: units, help: "How far apart along the blank the tool is dropped onto the model; smaller is truer but makes longer G-code")
+            OptionalRateField(title: "Angle step", value: Binding(get: { p.angleStep }, set: { var q = p; q.angleStep = $0; set(q) }), unit: "°",
+                              prompt: extent.map { String(format: "%.2f", p.sampleSpacing / max($0.radius + p.allowance, 1) * 180 / .pi) } ?? "",
+                              help: "How far apart round the blank the tool is dropped; empty: the sample spacing at the model's largest radius")
+        }
+        Section {
+            LengthField(title: "Pass depth", mm: Binding(get: { p.passDepth(tool) }, set: { var q = p; q.passDepth = max(0.05, $0); set(q) }),
+                        units: units, help: "Deepest cut in one pass; where the model is deeper below the stock, layers cut down to it first")
+            PercentField(title: "Layer stepover", fraction: Binding(get: { p.layerStepoverFraction ?? RotaryFinishParams.defaultLayerStepover },
+                                                                   set: { var q = p; q.layerStepoverFraction = $0; set(q) }))
+        } header: {
+            Text("Layers")
+        } footer: {
+            Text("A ball nose follows the model all the way round as the blank turns, never closer than the model allows. Where it's deeper than the pass depth below the stock, layers no closer to the axis than each layer's radius cut down to it first. Run a Rounding first on a square bar.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

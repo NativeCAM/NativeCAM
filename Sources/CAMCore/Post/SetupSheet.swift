@@ -24,7 +24,10 @@ public enum SetupSheet {
             func rotaryRow(_ blank: RotaryStock) -> String {
                 let letter = esc(machine.rotary?.letter.rawValue ?? "A")
                 guard blank.isWrapped else {
-                    return "<dt>Rotary</dt><dd>\(esc(RotaryOutput.setupNote(machine))) Raise the tool clear of the chuck and tailstock before starting.</dd>"
+                    // Rounding and 3D rotary finishing turn the blank as they cut, on faces too.
+                    let turning = job.toolpaths.contains { $0.wrapDiameter != nil }
+                        ? " \(letter) also turns while the tool cuts the toolpaths marked “all round”." : ""
+                    return "<dt>Rotary</dt><dd>\(esc(RotaryOutput.setupNote(machine)))\(turning) Raise the tool clear of the chuck and tailstock before starting.</dd>"
                 }
                 return "<dt>Rotary</dt><dd>Designs wrap around \(len(blank.wrapDiameterOrBlank)): the middle of the sheet is the top of the blank at \(letter)0, and \(letter) turns while the tool cuts. Raise the tool clear of the chuck and tailstock before starting.</dd>"
             }
@@ -138,11 +141,42 @@ public enum SetupSheet {
             let maxFeed = tp.motions.filter { $0.kind == .feed || $0.kind.isArc }.map(\.feed).max() ?? 0
             let depth = tp.cuttingExtents.map { -$0.min.z } ?? 0
             let seconds = job.estimatedSeconds(toolpath: tp.id).map(time) ?? "–"
-            let angle = angleColumn ? "<td class=\"num\">\(tp.indexAngle.map { esc(RotaryIndex.label($0)) } ?? "–")</td>" : ""
+            let angle = angleColumn
+                ? "<td class=\"num\">\(tp.wrapDiameter != nil ? "all round" : tp.indexAngle.map { esc(RotaryIndex.label($0)) } ?? "–")</td>" : ""
             h += "<tr><td>\(step)</td><td>\(esc(tp.name))</td><td>T\(tp.tool.number)</td>\(angle)<td class=\"num\">\(Int(rpm.rounded()))\(machine.spindle == .router ? " (dial)" : "")</td>"
                 + "<td class=\"num\">\(feed(maxFeed))</td><td class=\"num\">\(len(max(0, depth)))</td><td class=\"num\">\(seconds)</td></tr>\n"
         }
         h += "</table>\n"
+
+        // 3D rotary finishing: the model each one follows, how it sits on the blank and the pattern.
+        let finishes = project.operations.compactMap { op -> (CAMOperation, RotaryFinishParams)? in
+            guard op.enabled, case let .rotaryFinish(p) = op.kind, job.toolpaths.contains(where: { $0.sourceOperationID == op.id && !$0.isEmpty })
+            else { return nil }
+            return (op, p)
+        }
+        if !finishes.isEmpty {
+            h += "<h2>3D rotary</h2>\n<ul>\n"
+            for (op, p) in finishes {
+                let models = project.shapes(for: op).filter { $0.modelSpec != nil }
+                let placed = models.compactMap { m -> String? in
+                    guard let e = m.rotaryExtent, let spec = m.modelSpec else { return nil }
+                    let axis = (spec.rotary ?? RotaryPlacement(longestOf: spec.mesh)).alongAxis.rawValue.uppercased()
+                    return "“\(esc(m.name))” (its \(axis) axis along the blank, X \(len(e.minX)) to \(len(e.maxX)), "
+                        + "\(len(2 * e.radius)) across at most)"
+                }.joined(separator: ", ")
+                let how: String
+                switch p.pattern {
+                case .spiral: how = "a spiral, \(len(p.stepover(op.tool))) along the blank per turn"
+                case .rings: how = "rings \(len(p.stepover(op.tool))) apart"
+                case .lines: how = "passes along the blank \(len(p.stepover(op.tool))) apart round it"
+                }
+                let layers = p.passDepth.map { " Cuts in layers no deeper than \(len($0)) first where the model is deeper." }
+                    ?? " Cuts in layers no deeper than the bit's stepdown first where the model is deeper."
+                h += "<li><b>\(esc(op.name))</b> follows \(placed) with T\(op.tool.number), as \(how)"
+                    + (p.allowance > 1e-9 ? ", leaving \(len(p.allowance))" : "") + ". The blank turns while it cuts.\(layers)</li>\n"
+            }
+            h += "</ul>\n"
+        }
 
         // V-carve inlays: which side each toolpath cuts and the depths that make the two fit.
         let cut = Set(job.toolpaths.filter { !$0.isEmpty }.map(\.sourceOperationID))

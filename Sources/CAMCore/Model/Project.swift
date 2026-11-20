@@ -9,8 +9,9 @@ public struct Project: Hashable, Sendable {
     /// a rotary axis turned by hand, where builds that read format 3 would write A moves the machine can't make. Format 5
     /// adds wrapped rotary jobs: a format-4 build would read the unrolled sheet as one face and cut it indexed. Format 6
     /// adds a V-carve's start depth and inlay plugs, which a format-5 build would carve from the surface as an ordinary
-    /// V-carve of the design.
-    public static let currentFormatVersion = 6
+    /// V-carve of the design. Format 7 adds 3D rotary finishing and models placed on a rotary blank, which a format-6
+    /// build can't read or would lay flat on the sheet.
+    public static let currentFormatVersion = 7
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
@@ -27,6 +28,28 @@ public struct Project: Hashable, Sendable {
             guard case var .spiral(spec) = shapes[i].kind, abs(spec.around - stock.height) > 1e-9 else { continue }
             spec.around = stock.height
             shapes[i].kind = .spiral(spec)
+        }
+    }
+
+    /// Keeps the 3D models placed for the stock. On a rotary blank each lies along the axis and is centred on it (its
+    /// place across the sheet and its rotation there don't apply); one new to the blank is laid along its longest axis,
+    /// scaled to fit (`RotaryPlacement.fitScale`) and put in the middle of the blank. On a flat sheet each lies flat
+    /// again. Call it after changing the blank or adding a model.
+    public mutating func placeModelsOnBlank() {
+        for i in shapes.indices {
+            guard case var .model(spec) = shapes[i].kind else { continue }
+            if let blank = stock.rotary {
+                if spec.rotary == nil {
+                    spec.rotary = RotaryPlacement(longestOf: spec.mesh)
+                    shapes[i].scale = RotaryPlacement.fitScale(spec.alongAxis, blank: blank)
+                    shapes[i].position.x = blank.length / 2
+                }
+                shapes[i].position.y = stock.height / 2
+                shapes[i].rotation = 0
+            } else {
+                spec.rotary = nil
+            }
+            shapes[i].kind = .model(spec)
         }
     }
 

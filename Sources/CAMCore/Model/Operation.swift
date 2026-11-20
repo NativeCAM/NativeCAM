@@ -535,6 +535,76 @@ public struct RoundingParams: Hashable, Codable, Sendable {
     }
 }
 
+/// 3D rotary finishing (see `Rotary3DGenerator`): a ball nose follows a 3D model laid along the rotation axis, all
+/// the way round it, with the blank turning as it cuts. Deeper than the pass depth below the stock, it cuts down in
+/// layers first, each following the model no closer to the axis than its layer.
+public struct RotaryFinishParams: Hashable, Codable, Sendable {
+    public enum Pattern: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// One continuous helix along the blank, a stepover per turn, with a full turn at each end.
+        case spiral
+        /// A full turn at one station, then a stepover along the blank, and again.
+        case rings
+        /// Passes along the blank at one angle, zig-zag, turning a stepover (at the model's largest radius) between
+        /// them. Often quicker when the rotary is slow.
+        case lines
+        public var id: String { rawValue }
+        public var label: String {
+            switch self {
+            case .spiral: "Spiral"
+            case .rings: "Rings"
+            case .lines: "Along X"
+            }
+        }
+    }
+
+    public var pattern: Pattern
+    /// Stepover as a fraction of the tool diameter: along the blank per turn (spiral, rings), or round it at the
+    /// model's largest radius (along X).
+    public var stepoverFraction: Double
+    /// Material left on the model's surface, mm.
+    public var allowance: Double
+    /// Where along the blank (X) the finish starts and ends, mm; nil = the model's ends, kept the cutter's radius
+    /// inside the blank's ends (clear of the chuck and tailstock).
+    public var startX: Double?
+    public var endX: Double?
+    /// Distance between the points the tool is dropped at along the blank, mm.
+    public var sampleSpacing: Double
+    /// Angle between the points round the blank, degrees; nil = the sample spacing at the model's largest radius.
+    public var angleStep: Double?
+    /// Deepest cut per pass, mm: where the model is deeper than this below the stock, layers cut down to it first,
+    /// each at most this much deeper than the last. nil = the tool's stepdown.
+    public var passDepth: Double?
+    /// The layers' stepover as a fraction of the tool diameter; nil = 40%, or the finish's if that's more.
+    public var layerStepoverFraction: Double?
+
+    public static let defaultLayerStepover = 0.4
+
+    public init(pattern: Pattern = .spiral, stepoverFraction: Double = 0.1, allowance: Double = 0, startX: Double? = nil,
+                endX: Double? = nil, sampleSpacing: Double = 0.25, angleStep: Double? = nil, passDepth: Double? = nil,
+                layerStepoverFraction: Double? = nil) {
+        self.pattern = pattern
+        self.stepoverFraction = stepoverFraction
+        self.allowance = allowance
+        self.startX = startX
+        self.endX = endX
+        self.sampleSpacing = sampleSpacing
+        self.angleStep = angleStep
+        self.passDepth = passDepth
+        self.layerStepoverFraction = layerStepoverFraction
+    }
+
+    /// The finish's stepover with `tool`, mm.
+    public func stepover(_ tool: Tool) -> Double { max(0.01, stepoverFraction * tool.diameter) }
+
+    /// The layers' stepover with `tool`, mm: never finer than the finish's.
+    public func layerStepover(_ tool: Tool) -> Double {
+        max(stepover(tool), (layerStepoverFraction ?? Self.defaultLayerStepover) * tool.diameter)
+    }
+
+    /// The deepest cut per pass with `tool`, mm.
+    public func passDepth(_ tool: Tool) -> Double { max(0.05, passDepth ?? tool.cutting.stepdown) }
+}
+
 public enum OperationKind: Hashable, Codable, Sendable {
     case profile(ProfileParams)
     case pocket(PocketParams)
@@ -544,6 +614,8 @@ public enum OperationKind: Hashable, Codable, Sendable {
     case finish3D(Finish3DParams)
     /// Rotary jobs: turning the blank round (needs no shapes).
     case rounding(RoundingParams)
+    /// Rotary jobs: a 3D model on the blank, finished all the way round as it turns.
+    case rotaryFinish(RotaryFinishParams)
 
     public var label: String {
         switch self {
@@ -554,6 +626,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .rough3D: "3D Roughing"
         case .finish3D: "3D Finishing"
         case .rounding: "Rounding"
+        case .rotaryFinish: "3D Rotary Finishing"
         }
     }
 
@@ -563,9 +636,19 @@ public enum OperationKind: Hashable, Codable, Sendable {
         return true
     }
 
+    /// True for the rotary operations that cut all the way round the blank as it turns, on either layout: rounding and
+    /// 3D rotary finishing. Their toolpaths are wrapped round the blank at the sheet's radius, and they take no index
+    /// angles.
+    public var turnsWholeBlank: Bool {
+        switch self {
+        case .rounding, .rotaryFinish: true
+        default: false
+        }
+    }
+
     public var is3D: Bool {
         switch self {
-        case .rough3D, .finish3D: true
+        case .rough3D, .finish3D, .rotaryFinish: true
         default: false
         }
     }
@@ -577,7 +660,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case let .pocket(p): p.depth.cutDepth
         case let .drill(p): p.depth
         case let .vcarve(p): p.deepest
-        case .rough3D, .finish3D, .rounding: nil
+        case .rough3D, .finish3D, .rounding, .rotaryFinish: nil
         }
     }
 }
@@ -623,11 +706,12 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
 
     /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
     /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it). A V-carve
-    /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`).
+    /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`). 3D rotary finishing is format 7.
     public var requiredFormatVersion: Int {
         let own: Int
         switch kind {
         case .rounding: own = 5
+        case .rotaryFinish: own = 7
         case let .vcarve(p): own = p.requiredFormatVersion
         default: own = 1
         }

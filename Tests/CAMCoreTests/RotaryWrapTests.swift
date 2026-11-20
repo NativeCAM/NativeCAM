@@ -312,7 +312,7 @@ struct RotaryWrapTests {
             p.stock.setRotary(b)
         }
         has("each shape's place on the sheet sets the angle") { $0.operations[0].indexAngles = [0, 90] }
-        has("3D toolpaths aren't supported on rotary stock") { p in
+        has("3D Roughing and 3D Finishing cut flat sheets") { p in
             p.operations[0].kind = .finish3D(Finish3DParams())
         }
         has("no inverse-time feed (G93)", .error, ControllerPostTests.controller(.centroid, units: .mm))

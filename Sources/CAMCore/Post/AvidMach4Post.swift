@@ -51,13 +51,16 @@ public struct AvidMach4Post: Sendable {
             w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
         }
         if let ext = extents(paths) {
-            if let rotary, let blank = stock.rotary, blank.isWrapped {
-                // Y stays on the axis centreline; the sheet's Y range is a range of A.
-                let ends = [ext.min.y, ext.max.y].map {
-                    rotary.value(RotaryWrap.angle(y: $0, centerY: 0, diameter: blank.wrapDiameterOrBlank))
-                }
+            // Wrapped toolpaths (every one on a wrapped job; rounding and 3D rotary finishing on faces) keep Y on the axis
+            // centreline: their sheet Y range is a range of A. Y is only given for the others.
+            let wrapped = paths.compactMap { tp -> [Double]? in
+                guard let rotary, let d = tp.wrapDiameter, let e = tp.cuttingExtents else { return nil }
+                return [e.min.y, e.max.y].map { rotary.value(RotaryWrap.angle(y: stock.toWork(Vec3($0, $0, 0)).y, centerY: 0, diameter: d)) }
+            }.flatMap { $0 }
+            if let rotary, let lo = wrapped.min(), let hi = wrapped.max() {
                 let a = { (v: Double) in "\(rotary.letter)\(String(format: "%.3f", v))" }
-                w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  \(a(ends.min()!)) to \(a(ends.max()!))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
+                let flat = extents(paths.filter { $0.wrapDiameter == nil }).map { "Y\(num($0.min.y)) to Y\(num($0.max.y))  " } ?? ""
+                w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  \(flat)\(a(lo)) to \(a(hi))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
             } else {
                 w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  Y\(num(ext.min.y)) to Y\(num(ext.max.y))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
             }

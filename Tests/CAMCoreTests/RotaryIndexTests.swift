@@ -139,7 +139,7 @@ struct RotaryIndexTests {
         has("same face twice") { $0.operations[0].indexAngles = [0, 360] }
         has("only be cut at multiples of 90°") { $0.operations[1].indexAngles = [0, 60, 120] }
         has("past an end of the blank") { $0.shapes[1].position = Vec2(0.02.inch, 1.inch) }
-        has("3D toolpaths aren't supported") { p in
+        has("3D Roughing and 3D Finishing cut flat sheets") { p in
             p.operations.append(CAMOperation(kind: .rough3D(Rough3DParams()), shapeIDs: [p.shapes[0].id], tool: Self.lib.tool(number: 1)!))
         }
         // Index angles need rotary stock.

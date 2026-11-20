@@ -13,6 +13,9 @@ public struct GenerationContext: Sendable {
     public var materialTop: (@Sendable (Vec2, Double) -> Double)?
     /// Clamp and fixture zones. Leads keep the tool clear of them.
     public var keepOuts: [KeepOut] = []
+    /// On a rotary blank: how far from the axis the stock reaches at a station along it (design X), once the roundings
+    /// that run before this operation have turned it down. nil = the blank as it is (out to a square bar's corners).
+    public var rotaryStockRadius: (@Sendable (Double) -> Double)?
 
     public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005) {
         self.stock = stock
@@ -92,14 +95,15 @@ public enum CAMEngine {
             var angles: [Double?]
             var perAngle: [[(tp: Toolpath, clearing: Bool)]]
         }
-        func generateAll(_ op: CAMOperation) -> Generated? {
+        func generateAll(_ op: CAMOperation, stockRadius: (@Sendable (Double) -> Double)?) -> Generated? {
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
             if shapes.isEmpty && op.kind.needsShapes {
                 issues.append(JobIssue(.warning, "No shapes selected.", operation: op.name))
                 return nil
             }
-            // Rounding works on the whole blank, wrapped round it at the sheet's radius, whatever the layout.
-            let wrap = op.kind.needsShapes ? wrap : stock.rotary.map { 2 * $0.topRadius }
+            // Rounding and 3D rotary finishing work all the way round the blank, wrapped round it at the sheet's radius,
+            // whatever the layout.
+            let wrap = op.kind.turnsWholeBlank ? stock.rotary.map { 2 * $0.topRadius } : wrap
             // Flat jobs cut once; rotary jobs once per index angle, each on its own face model (wrapped jobs once, on the
             // unrolled sheet). Every angle is generated first, then cut toolpath by toolpath: a V-carve's flat clearing
             // at every angle, then its V-bit at every angle, so the job changes tools once rather than at every face.
@@ -112,6 +116,7 @@ public enum CAMEngine {
                 let snapshot = models[face]!.grid
                 opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
                 opContext.keepOuts = keepOuts
+                opContext.rotaryStockRadius = stockRadius
                 var generated = generate(op, shapes: shapes, context: opContext)
                 let clearing = generated.map { $0.id != op.id }
                 if let angle {
@@ -140,7 +145,9 @@ public enum CAMEngine {
                     defer { models[face] = model }
                     // Wrapped toolpaths link through safe Z: the blank turns as the tool moves across the sheet, and
                     // only safe Z is sure to clear it (and a square bar's corners) all the way round.
-                    if stock.retract == .minimum && wrap == nil {
+                    if case .rotaryFinish = op.kind {
+                        // All the way round the blank, nowhere near a face's model: it would only cost time.
+                    } else if stock.retract == .minimum && wrap == nil {
                         let settings = LinkOptimizer.Settings(safeDistance: stock.safeDistance, clearanceZ: clearanceZ,
                                                               stayDownLimit: max(3 * tp.tool.diameter, 10), floorZ: -stock.thickness,
                                                               keepOuts: keepOuts)
@@ -163,10 +170,11 @@ public enum CAMEngine {
         // Operations next to each other that share a clearance tool cut all their clearing, then each its own tool
         // (see `OperationScheduler.blocks`); every other operation cuts on its own, clearing first.
         let ops = project.operations.filter { $0.enabled && (operationIDs?.contains($0.id) ?? true) }
+        let stockRadii = rotaryStockRadii(project)
         for block in OperationScheduler.blocks(ops.map { $0.clearanceTool?.number }) {
             var generated: [Generated] = []
             for k in block {
-                guard let g = generateAll(ops[k]) else { continue }
+                guard let g = generateAll(ops[k], stockRadius: stockRadii[ops[k].id] ?? nil) else { continue }
                 emit(g, clearing: true)
                 generated.append(g)
             }
@@ -217,6 +225,28 @@ public enum CAMEngine {
             }
         }
         return JobResult(toolpaths: toolpaths, issues: issues, estimate: estimate, reorder: reorder)
+    }
+
+    /// For each operation on a rotary blank, how far the stock reaches from the axis along the blank once the enabled
+    /// roundings before it in the run order have turned it down (nil before the first rounding). A rounding counts
+    /// between its start and end stations only, so elsewhere the stock is taken to be the blank as it was.
+    static func rotaryStockRadii(_ project: Project) -> [UUID: (@Sendable (Double) -> Double)?] {
+        guard let blank = project.stock.rotary else { return [:] }
+        var out: [UUID: (@Sendable (Double) -> Double)?] = [:]
+        var rounded: [(from: Double, to: Double, radius: Double)] = []
+        for op in project.operations where op.enabled {
+            if rounded.isEmpty {
+                out[op.id] = .some(nil)
+            } else {
+                let spans = rounded, outer = blank.outerRadius
+                out[op.id] = { x in spans.reduce(outer) { x >= $1.from - 1e-9 && x <= $1.to + 1e-9 ? min($0, $1.radius) : $0 } }
+            }
+            if case let .rounding(p) = op.kind {
+                rounded.append((p.startX ?? op.tool.radius, p.endX ?? blank.length - op.tool.radius,
+                                RoundingGenerator.finishedRadius(p, blank: blank)))
+            }
+        }
+        return out
     }
 
     /// With "Selected vectors" boundaries, a 3D finish assumes the band its tool can touch was cleared by a 3D rough
@@ -339,6 +369,8 @@ public enum CAMEngine {
             return [Model3DGenerator.finish(op: op, params: p, shapes: shapes, context: context)]
         case let .rounding(p):
             return [RoundingGenerator.generate(op: op, params: p, context: context)]
+        case let .rotaryFinish(p):
+            return [Rotary3DGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         }
     }
 
@@ -457,8 +489,9 @@ public enum CAMEngine {
         } else if breakthrough > 1e-6 {
             issues.append(JobIssue(.info, "Cuts through the material (\(fmt(breakthrough)) into the spoilboard).", operation: tp.name))
         }
-        // Tool reach.
-        if deepest > tp.tool.fluteLength + 1e-6 {
+        // Tool reach. A 3D rotary finish measures its own, from the stock it cuts rather than the sheet's top.
+        if case .rotaryFinish = op.kind {
+        } else if deepest > tp.tool.fluteLength + 1e-6 {
             issues.append(JobIssue(.warning, "Depth \(fmt(deepest)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))).",
                                    operation: tp.name))
         }
