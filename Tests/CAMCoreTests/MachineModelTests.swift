@@ -29,7 +29,7 @@ struct MachineModelTests {
 
     @Test func savedProjectsResaveByteForByte() throws {
         let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/projects")
-        for name in ["sign-v1", "setup-v1"] {
+        for name in ["sign-v1", "setup-v1", "inlay-v6"] {
             let data = try Data(contentsOf: dir.appendingPathComponent(name + ".nativecam"))
             #expect(try Project.decode(data).encoded() == data, "\(name)")
         }

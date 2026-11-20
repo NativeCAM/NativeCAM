@@ -111,7 +111,7 @@ On export, NativeCAM reads the file it's about to save back and checks it before
 
 Errors ask you to confirm before exporting; the command line refuses to write a failing file without `--force`.
 
-**File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z, the safe height and the park height raised by an amount you choose, X and Y unchanged, marked by a comment at the top. **File ▸ Export Setup Sheet…** saves a printable HTML page with the machine, material and zero, tools in loading order, the run order with tool changes and times, clamps, and any open checks.
+**File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z, the safe height and the park height raised by an amount you choose, X and Y unchanged, marked by a comment at the top. **File ▸ Export Setup Sheet…** saves a printable HTML page with the machine, material and zero, tools in loading order, the run order with tool changes and times, each [V-carve inlay](using-nativecam.md#v-carve-inlays) toolpath's side and depths, clamps, and any open checks.
 
 ## Trying a new controller safely
 
