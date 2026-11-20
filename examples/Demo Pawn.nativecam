@@ -49,9 +49,9 @@
       "tool" : {
         "cornerRadius" : 0,
         "cutting" : {
-          "feedRate" : 9601.199999999999,
+          "feedRate" : 6934.2,
           "plungeRate" : 1270,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 13000,
           "stepdown" : 4.762499999999999,
           "stepoverFraction" : 0.4
         },
@@ -90,9 +90,9 @@
       "tool" : {
         "cornerRadius" : 0,
         "cutting" : {
-          "feedRate" : 9601.199999999999,
+          "feedRate" : 8001,
           "plungeRate" : 1016,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 15000,
           "stepdown" : 3.175,
           "stepoverFraction" : 0.1
         },

@@ -20,7 +20,7 @@ G64
 (Rotary job: re-zero Z on the rotation axis {Avid: Rotary tab > Z Axis Touch}, not on the blank)
 T7M6
 M07
-S18000 M03
+S15000 M03
 (Toolpath: Finish  Tool: T7 1/4in Ball Nose)
 G00 Z23.700
 G00 X10.000 Y0.000

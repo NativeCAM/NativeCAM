@@ -533,6 +533,9 @@ struct Rotary3DTests {
         p.shapes[0].kind = .model(spec)
         p.operations[0].id = id(3)
         p.operations[0].shapeIDs = [id(2)]
+        // The ball nose as format 7 saved it, spelled out rather than taken from today's starter library (whose speed
+        // has changed since): a file saved before still means what it said.
+        p.operations[0].tool.cutting.spindleRPM = 18000
         p.operations[0].kind = .rotaryFinish(RotaryFinishParams(pattern: .rings, stepoverFraction: 0.5, allowance: 0.1, startX: 12,
                                                                 angleStep: 20, passDepth: 1.5, layerStepoverFraction: 0.6))
         p.notes = "Saved by format 7: a 3D rotary finish of a model placed on a round blank."
