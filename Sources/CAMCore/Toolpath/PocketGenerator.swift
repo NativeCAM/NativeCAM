@@ -165,19 +165,28 @@ enum PocketGenerator {
         if let relief = params.cornerRelief {
             let design = CornerRelief.Design(regions.flatMap(\.loops))
             let index = CornerRelief.ShapeIndex(shapes, tolerance: context.flattenTolerance)
+            // The parts other toolpaths cut nearby, less the pocket itself.
+            var others: [ProtectedRegions.Zone] = []
+            if let parts = context.protectedRegions {
+                let cut = abs(params.allowance) < 1e-9 ? regions
+                    : regions.flatMap { $0.offset(by: -params.allowance, arcTolerance: context.arcTolerance) }
+                let reach = regions.reduce(Rect2.empty) { $0.union($1.bounds) }.insetBy(-(abs(params.allowance) + r + 1))
+                others = parts.zones(toolRadius: r, cut: cut.flatMap(\.loops), walls: regions.flatMap(\.loops), near: reach,
+                                     arcTolerance: context.arcTolerance)
+            }
             var matched = Set<Int>()
-            var blocked = 0
+            var tally = CornerRelief.Tally()
             var marks: [ReliefCorner] = []
             for loop in boundary.flatMap(\.loops) {
                 let found = CornerRelief.corners(loop, wasteOnLeft: true, design: design, offset: r + params.allowance,
-                                                 maxCornerAngle: relief.maxCornerAngle)
+                                                 maxCornerAngle: relief.maxCornerAngle, others: others)
                 let chosen = CornerRelief.choose(found, settings: relief, shapes: index, matched: &matched)
                 reliefs += chosen.reliefs
-                blocked += chosen.blocked
+                tally.add(chosen)
                 marks += chosen.corners
             }
             reliefCorners = marks
-            warnings += CornerRelief.warnings(blocked: blocked, unmatched: (relief.overrides?.count ?? 0) - matched.count)
+            warnings += CornerRelief.warnings(tally, unmatched: (relief.overrides?.count ?? 0) - matched.count)
         }
 
         if let reached {

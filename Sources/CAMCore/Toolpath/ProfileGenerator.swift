@@ -54,6 +54,16 @@ enum ProfileGenerator {
 
         // Climb keeps the finished wall on the tool's right, so the waste is on its left.
         let wasteOnLeft = params.direction == .climb
+        // The parts other toolpaths cut nearby, less what this one cuts away itself (a rough's allowance, say), for
+        // the leads and reliefs to keep clear of.
+        var others: [ProtectedRegions.Zone] = []
+        if let parts = context.protectedRegions, params.side != .on, params.leads != nil || params.cornerRelief != nil, !regions.isEmpty {
+            let lead = params.leads.map { 2 * $0.size } ?? 0
+            let reach = regions.reduce(Rect2.empty) { $0.union($1.bounds) }.insetBy(-(abs(params.allowance) + 2 * r + lead + 1))
+            let cut = ProtectedRegions.profileCut(regions, side: params.side, allowance: params.allowance, toolRadius: r,
+                                                  arcTolerance: context.arcTolerance)
+            others = parts.zones(toolRadius: r, cut: cut, walls: regions.flatMap(\.loops), near: reach, arcTolerance: context.arcTolerance)
+        }
         var reliefCorners: [ReliefCorner]?
         if let relief = params.cornerRelief {
             if params.side == .on {
@@ -62,18 +72,18 @@ enum ProfileGenerator {
                 let design = CornerRelief.Design(regions.flatMap(\.loops))
                 let index = CornerRelief.ShapeIndex(shapes, tolerance: context.flattenTolerance)
                 var matched = Set<Int>()
-                var blocked = 0
+                var tally = CornerRelief.Tally()
                 var marks: [ReliefCorner] = []
                 for i in contours.indices where contours[i].closed {
                     let found = CornerRelief.corners(contours[i].loop, wasteOnLeft: wasteOnLeft, design: design, offset: offset,
-                                                     maxCornerAngle: relief.maxCornerAngle)
+                                                     maxCornerAngle: relief.maxCornerAngle, others: others)
                     let chosen = CornerRelief.choose(found, settings: relief, shapes: index, matched: &matched)
                     contours[i].reliefs = chosen.reliefs
-                    blocked += chosen.blocked
+                    tally.add(chosen)
                     marks += chosen.corners
                 }
                 reliefCorners = marks
-                warnings += CornerRelief.warnings(blocked: blocked, unmatched: (relief.overrides?.count ?? 0) - matched.count)
+                warnings += CornerRelief.warnings(tally, unmatched: (relief.overrides?.count ?? 0) - matched.count)
             }
         }
 
@@ -151,7 +161,7 @@ enum ProfileGenerator {
         var probe = firstXY
         cursor = firstXY ?? .zero
         let clearance = ToolCentreClearance(regions: offsetRegions, inside: params.side == .inside, stock: context.stock,
-                                            toolRadius: tool.radius, keepOuts: context.keepOuts,
+                                            toolRadius: tool.radius, keepOuts: context.keepOuts, others: others,
                                             materialTop: context.materialTop, topLimit: -depth.startDepth)
         let rampLength: Double? = params.entry.kind == .ramp && params.entry.rampLength > 0 ? params.entry.rampLength : nil
         var unfitted = 0

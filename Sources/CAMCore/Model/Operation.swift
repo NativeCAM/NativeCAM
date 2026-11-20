@@ -144,20 +144,48 @@ public enum TBoneSide: String, Codable, Sendable, CaseIterable, Identifiable {
 }
 
 /// Relief for inside corners the bit can't reach (so square tenons, tabs and finger joints fit).
-public struct CornerReliefSettings: Hashable, Codable, Sendable {
+public struct CornerReliefSettings: Hashable, Sendable {
     public var style: CornerReliefStyle
     public var tBoneSide: TBoneSide
     /// Corners up to this angle (degrees, measured across the cut-away area; a square corner is 90) are relieved.
     public var maxCornerAngle: Double
     /// Corners given their own relief on the canvas; nil = every corner follows the settings above.
     public var overrides: [CornerOverride]?
+    /// Leave off a relief whose bit would cut into a part another toolpath cuts (through a thin wall between them, say),
+    /// rather than gouging it. Off cuts it anyway. Either way the corner is flagged and Checks says so.
+    ///
+    /// Saved only when off. No new file format: a build that doesn't know the key cuts every relief, as off does.
+    public var avoidsOtherParts: Bool
 
     public init(style: CornerReliefStyle = .dogbone, tBoneSide: TBoneSide = .longer, maxCornerAngle: Double = 120,
-                overrides: [CornerOverride]? = nil) {
+                overrides: [CornerOverride]? = nil, avoidsOtherParts: Bool = true) {
         self.style = style
         self.tBoneSide = tBoneSide
         self.maxCornerAngle = maxCornerAngle
         self.overrides = overrides
+        self.avoidsOtherParts = avoidsOtherParts
+    }
+}
+
+extension CornerReliefSettings: Codable {
+    private enum CodingKeys: String, CodingKey { case style, tBoneSide, maxCornerAngle, overrides, avoidsOtherParts }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        style = try c.decode(CornerReliefStyle.self, forKey: .style)
+        tBoneSide = try c.decode(TBoneSide.self, forKey: .tBoneSide)
+        maxCornerAngle = try c.decode(Double.self, forKey: .maxCornerAngle)
+        overrides = try c.decodeIfPresent([CornerOverride].self, forKey: .overrides)
+        avoidsOtherParts = try c.decodeIfPresent(Bool.self, forKey: .avoidsOtherParts) ?? true
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(style, forKey: .style)
+        try c.encode(tBoneSide, forKey: .tBoneSide)
+        try c.encode(maxCornerAngle, forKey: .maxCornerAngle)
+        try c.encodeIfPresent(overrides, forKey: .overrides)
+        if !avoidsOtherParts { try c.encode(false, forKey: .avoidsOtherParts) }
     }
 }
 

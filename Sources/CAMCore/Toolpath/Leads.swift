@@ -1,7 +1,7 @@
 import Foundation
 
 /// Where a profile's tool centre may go off the cut itself (leads and the links between passes): on the waste side of
-/// the toolpath's loops, on the material, and clear of clamps.
+/// the toolpath's loops, on the material, clear of clamps, and clear of the parts other toolpaths cut.
 struct ToolCentreClearance {
     let regions: [Region]
     let regionBounds: [Rect2]
@@ -10,6 +10,8 @@ struct ToolCentreClearance {
     /// The material grown by the tool radius (what `CAMEngine.validate` allows).
     let area: Rect2
     let keepOuts: [(outline: Polyline, bounds: Rect2)]
+    /// Where the tool centre would cut into another toolpath's part (see `ProtectedRegions`).
+    let others: [ProtectedRegions.Zone]
     let toolRadius: Double
     /// Height the material may reach under a lead (design Z), and how to read it; nil when not checked.
     let materialTop: (@Sendable (Vec2, Double) -> Double)?
@@ -18,7 +20,7 @@ struct ToolCentreClearance {
     let tolerance = 0.01
     let spacing: Double
 
-    init(regions: [Region], inside: Bool, stock: Stock, toolRadius: Double, keepOuts: [KeepOut],
+    init(regions: [Region], inside: Bool, stock: Stock, toolRadius: Double, keepOuts: [KeepOut], others: [ProtectedRegions.Zone] = [],
          materialTop: (@Sendable (Vec2, Double) -> Double)?, topLimit: Double) {
         self.regions = regions
         regionBounds = regions.map { $0.bounds.insetBy(-0.02) }
@@ -29,6 +31,7 @@ struct ToolCentreClearance {
             : stock.bounds.insetBy(-toolRadius)
         self.keepOuts = keepOuts.filter { $0.outline.isClosed && $0.outline.count >= 3 }
             .map { ($0.outline, $0.outline.bounds.insetBy(-toolRadius - 0.1)) }
+        self.others = others
         self.toolRadius = toolRadius
         self.materialTop = materialTop
         self.topLimit = topLimit
@@ -40,6 +43,7 @@ struct ToolCentreClearance {
         for k in keepOuts where k.bounds.contains(p) {
             if k.outline.contains(p) || k.outline.closestPoint(to: p).distance < toolRadius + 0.05 { return false }
         }
+        for zone in others where zone.contains(p) { return false }
         var inRegion = false
         for (i, region) in regions.enumerated() where regionBounds[i].contains(p) && region.contains(p) {
             inRegion = true
@@ -65,8 +69,9 @@ struct ToolCentreClearance {
     }
 
     /// Whether a lead keeps at least a quarter of the distance from the cut it would have off a straight edge: so its
-    /// far end, where the bit plunges, isn't on the wall of a nearby corner, and it doesn't run along another wall.
-    /// (Inside a small hole a lead naturally comes back toward the wall a little; a quarter allows that.)
+    /// far end, where the bit plunges, isn't on the wall of a nearby corner or another toolpath's part, and it doesn't
+    /// run along another wall. (Inside a small hole a lead naturally comes back toward the wall a little; a quarter
+    /// allows that.)
     func keepsAway(_ lead: [Vec2], from p: Vec2, normal n: Vec2) -> Bool {
         for q in samples(lead) {
             let ideal = (q - p).dot(n)
@@ -76,12 +81,14 @@ struct ToolCentreClearance {
         return true
     }
 
-    /// Distance to the nearest tool-centre loop, if one is within `limit`.
+    /// Distance to the nearest tool-centre loop, or the edge of another toolpath's part's zone (as near as the tool
+    /// centre may come to it), if one is within `limit`.
     func boundaryDistance(_ p: Vec2, within limit: Double) -> Double {
         var nearest = Double.infinity
         for (i, region) in regions.enumerated() where regionBounds[i].contains(p, tolerance: limit) {
             for loop in region.loops { nearest = min(nearest, loop.closestPoint(to: p).distance) }
         }
+        for zone in others { nearest = min(nearest, zone.distance(p, within: limit)) }
         return nearest
     }
 

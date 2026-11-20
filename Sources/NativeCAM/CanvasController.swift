@@ -269,9 +269,25 @@ final class CanvasController: ViewportInteractionDelegate {
         return "side at \(Int(angle.rounded()))°"
     }
 
+    /// Why a corner is drawn in orange, for the top of its menu.
+    static func flagReason(_ corner: ReliefCorner) -> String? {
+        switch (corner.blocked, corner.otherPart) {
+        case let (true, other?): "Left off: it would cut into the part \u{201C}\(other)\u{201D} cuts"
+        case (true, nil): "Left off: it would cut into nearby geometry"
+        case let (false, other?): "Cuts into the part \u{201C}\(other)\u{201D} cuts"
+        case (false, nil): nil
+        }
+    }
+
     private func cornerMenu(_ corner: ReliefCorner, operation: UUID) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        if let reason = Self.flagReason(corner) {
+            let item = NSMenuItem(title: reason, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
         var choices: [(String, ReliefCorner.Relief)] = [("Dogbone", .dogbone)]
         for (k, wall) in corner.walls.enumerated() { choices.append(("T-bone into the \(Self.wallName(wall))", .tBone(wall: k))) }
         choices.append(("No Relief", .asCut))

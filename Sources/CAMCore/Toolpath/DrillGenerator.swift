@@ -6,22 +6,12 @@ enum DrillGenerator {
     static func generate(op: CAMOperation, params: DrillParams, shapes: [DesignShape], context: GenerationContext) -> Toolpath {
         let tool = op.tool
         var warnings: [String] = []
-        var points: [Vec2] = []
         for shape in shapes {
-            switch shape.kind {
-            case let .circle(radius):
-                points.append(shape.position)
-                if radius * shape.scale > tool.radius * 1.05 {
-                    warnings.append("\(shape.name): hole is larger than the tool; use a pocket or inside profile to size it.")
-                }
-            case let .paths(paths) where paths.allSatisfy({ $0.isClosed }):
-                // Imported circles: use each loop's centre.
-                for loop in shape.polylines(tolerance: context.flattenTolerance) { points.append(loop.bounds.center) }
-                _ = paths
-            default:
-                points.append(shape.position)
+            if case let .circle(radius) = shape.kind, radius * shape.scale > tool.radius * 1.05 {
+                warnings.append("\(shape.name): hole is larger than the tool; use a pocket or inside profile to size it.")
             }
         }
+        let points = holeCentres(shapes, tolerance: context.flattenTolerance)
         let depth = max(0, params.depth)
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
         if depth <= 0 { warnings.append("Drill depth must be greater than zero.") }
@@ -54,5 +44,22 @@ enum DrillGenerator {
             b.retract()
         }
         return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+    }
+
+    /// Where the holes go: a circle's centre, each closed loop's centre for imported circles, otherwise the shape's
+    /// placement point.
+    static func holeCentres(_ shapes: [DesignShape], tolerance: Double) -> [Vec2] {
+        var points: [Vec2] = []
+        for shape in shapes {
+            switch shape.kind {
+            case .circle:
+                points.append(shape.position)
+            case let .paths(paths) where paths.allSatisfy({ $0.isClosed }):
+                for loop in shape.polylines(tolerance: tolerance) { points.append(loop.bounds.center) }
+            default:
+                points.append(shape.position)
+            }
+        }
+        return points
     }
 }

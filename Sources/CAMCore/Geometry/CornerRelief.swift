@@ -14,7 +14,9 @@ import Foundation
 /// island near a wall), so it's left alone, as is a corner the bit already reaches (rounded at or above its radius).
 /// - Dogbone: out along w to C + (h − o)·w, where the bit just touches H.
 /// - T-bone: along one wall's tool line to the point nearest H, so the notch is only in the other wall.
-/// A relief that would come within o of any other drawn geometry is skipped and counted.
+/// A relief that would come within o of any other drawn geometry is skipped and counted. So, unless the toolpath says
+/// otherwise (`CornerReliefSettings.avoidsOtherParts`), is one whose bit would cut into a part another toolpath cuts
+/// (see `ProtectedRegions`); either way that relief is flagged.
 enum CornerRelief {
     struct Relief: Hashable, Sendable {
         /// The loop vertex the relief leaves from and returns to.
@@ -25,7 +27,7 @@ enum CornerRelief {
 
     struct Plan {
         var reliefs: [Relief] = []
-        /// Corners left alone because their relief would cut into other drawn geometry.
+        /// Corners left alone because their relief would cut into other drawn geometry (or another toolpath's part).
         var blocked = 0
     }
 
@@ -42,6 +44,8 @@ enum CornerRelief {
             var tip: Vec2
             /// The relief would cut into other drawn geometry.
             var blocked: Bool
+            /// The toolpath whose part the relief would cut into, when it isn't `blocked`.
+            var otherPart: String? = nil
         }
         /// The loop vertex C.
         var vertex: Vec2
@@ -86,11 +90,12 @@ enum CornerRelief {
     /// the waste side for the loop's direction; `offset` is the distance from the drawn wall to the tool centre
     /// (tool radius + allowance).
     static func plan(_ loop: Polyline, wasteOnLeft: Bool, design: Design, offset o: Double,
-                     settings: CornerReliefSettings) -> Plan {
+                     settings: CornerReliefSettings, others: [ProtectedRegions.Zone] = []) -> Plan {
         var plan = Plan()
-        for corner in corners(loop, wasteOnLeft: wasteOnLeft, design: design, offset: o, maxCornerAngle: settings.maxCornerAngle) {
+        for corner in corners(loop, wasteOnLeft: wasteOnLeft, design: design, offset: o, maxCornerAngle: settings.maxCornerAngle,
+                              others: others) {
             guard let option = corner.option(corner.standard(settings)) else { continue }
-            if option.blocked {
+            if option.blocked || (option.otherPart != nil && settings.avoidsOtherParts) {
                 plan.blocked += 1
                 continue
             }
@@ -99,8 +104,10 @@ enum CornerRelief {
         return plan
     }
 
-    /// The loop's corners the bit can't reach and that are no wider than `maxCornerAngle` (degrees).
-    static func corners(_ loop: Polyline, wasteOnLeft: Bool, design: Design, offset o: Double, maxCornerAngle: Double) -> [Corner] {
+    /// The loop's corners the bit can't reach and that are no wider than `maxCornerAngle` (degrees). `others` are where
+    /// the tool centre would cut into other toolpaths' parts.
+    static func corners(_ loop: Polyline, wasteOnLeft: Bool, design: Design, offset o: Double, maxCornerAngle: Double,
+                        others: [ProtectedRegions.Zone] = []) -> [Corner] {
         let pts = loop.points
         let n = pts.count
         guard loop.isClosed, n >= 3, o > 1e-6, !design.loops.isEmpty else { return [] }
@@ -156,7 +163,9 @@ enum CornerRelief {
                   design.isWall(near: c + cand.dout * delta, of: hit, within: window, searchRadius: o + 0.1) else { continue }
 
             func option(_ tip: Vec2) -> Corner.Option {
-                Corner.Option(tip: tip, blocked: design.blocks(from: c, to: tip, clearance: o - 0.01, except: hit, within: window + 2 * o))
+                let blocked = design.blocks(from: c, to: tip, clearance: o - 0.01, except: hit, within: window + 2 * o)
+                let other = blocked ? nil : others.first { $0.crosses(from: c, to: tip, spacing: 0.05) }
+                return Corner.Option(tip: tip, blocked: blocked, otherPart: other?.name)
             }
             // A T-bone travels along one wall's tool line until the bit touches H, so the notch is in the other wall.
             func tee(along e: Vec2) -> Corner.Option? {
@@ -216,6 +225,23 @@ enum CornerRelief {
         var corners: [ReliefCorner] = []
         /// Chosen reliefs left off because they'd cut into other drawn geometry.
         var blocked = 0
+        /// The toolpaths whose parts chosen reliefs would cut into, once per relief: left off (the settings avoid
+        /// other parts) or cut anyway.
+        var leftOffForOthers: [String] = []
+        var cutIntoOthers: [String] = []
+    }
+
+    /// Choices counted over all of a toolpath's loops, for its Checks messages.
+    struct Tally {
+        var blocked = 0
+        var leftOffForOthers: [String] = []
+        var cutIntoOthers: [String] = []
+
+        mutating func add(_ c: Choices) {
+            blocked += c.blocked
+            leftOffForOthers += c.leftOffForOthers
+            cutIntoOthers += c.cutIntoOthers
+        }
     }
 
     /// Chooses each corner's relief: its own choice when one matches, otherwise the settings. `matched` collects
@@ -266,15 +292,46 @@ enum CornerRelief {
                 }
             }
             let option = corner.option(pick)
-            let blocked = option?.blocked ?? false
+            let other = option?.otherPart
+            let blocked = (option?.blocked ?? false) || (other != nil && settings.avoidsOtherParts)
             let tip = blocked ? nil : option?.tip
             if let tip { out.reliefs.append(Relief(corner: corner.vertex, tip: tip)) }
-            if blocked { out.blocked += 1 }
+            if let other {
+                if blocked { out.leftOffForOthers.append(other) } else { out.cutIntoOthers.append(other) }
+            } else if blocked {
+                out.blocked += 1
+            }
             out.corners.append(ReliefCorner(point: corner.hit.point, walls: walls.map(\.wall), relief: relief(pick),
                                             standard: relief(standard), tip: tip, blocked: blocked,
-                                            shapeID: owner?.entry.shape.id, localPoint: owner?.local ?? corner.hit.point))
+                                            shapeID: owner?.entry.shape.id, localPoint: owner?.local ?? corner.hit.point,
+                                            otherPart: other))
         }
         return out
+    }
+
+    /// Checks messages for corners left off, for reliefs cut into other toolpaths' parts, and for choices that no
+    /// longer find their corner.
+    static func warnings(_ tally: Tally, unmatched: Int) -> [String] {
+        var out = warnings(blocked: tally.blocked, unmatched: 0)
+        /// “A”, “A” and “B”, “A”, “B” and “C”: each toolpath once.
+        func names(_ list: [String]) -> String {
+            var seen = Set<String>()
+            let quoted = list.filter { seen.insert($0).inserted }.map { "\u{201C}\($0)\u{201D}" }
+            guard quoted.count > 1 else { return quoted.joined() }
+            return quoted.dropLast().joined(separator: ", ") + " and " + quoted[quoted.count - 1]
+        }
+        let off = tally.leftOffForOthers, cut = tally.cutIntoOthers
+        if !off.isEmpty {
+            let what = Set(off).count == 1 ? "a part cut by \(names(off))" : "parts cut by \(names(off))"
+            out.append(off.count == 1 ? "1 corner wasn't relieved: its relief would cut into \(what)."
+                : "\(off.count) corners weren't relieved: their reliefs would cut into \(what).")
+        }
+        if !cut.isEmpty {
+            let what = Set(cut).count == 1 ? "a part cut by \(names(cut))" : "parts cut by \(names(cut))"
+            out.append((cut.count == 1 ? "1 corner relief cuts into \(what)." : "\(cut.count) corner reliefs cut into \(what).")
+                + " Move the parts apart, or turn on Corners \u{25B8} Leave off reliefs that cut into other parts.")
+        }
+        return out + warnings(blocked: 0, unmatched: unmatched)
     }
 
     /// Checks messages for corners left off and for choices that no longer find their corner.
@@ -476,11 +533,17 @@ public struct ReliefCorner: Hashable, Codable, Sendable {
     public var standard: Relief
     /// Where the bit's centre goes for the relief; nil when nothing is cut here.
     public var tip: Vec2?
-    /// The chosen relief would cut into other geometry, so it's left off.
+    /// The chosen relief would cut into other geometry (or another toolpath's part), so it's left off.
     public var blocked: Bool
     /// The shape the corner is on, and the corner in that shape's own coordinates.
     public var shapeID: UUID?
     public var localPoint: Vec2
+    /// The toolpath whose part the chosen relief would cut into: with `blocked` it's left off for that (the toolpath
+    /// avoids other parts), otherwise it's cut anyway. nil when it keeps clear of other toolpaths' parts.
+    public var otherPart: String? = nil
+
+    /// Worth a look: the relief is left off, or cuts into another toolpath's part.
+    public var isFlagged: Bool { blocked || otherPart != nil }
 
     /// The corner has its own choice.
     public var isChanged: Bool { relief != standard }
