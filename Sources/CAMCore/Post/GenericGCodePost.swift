@@ -92,8 +92,8 @@ public struct GenericGCodePost: PostProcessor {
         }
         let rotary = RotaryOutput(project)
         if rotary != nil {
-            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: false,
-                                            feeds: RotaryWrap.feedMode(dialect)) { w.comment(line) }
+            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: false, feeds: RotaryWrap.feedMode(dialect),
+                                            turnsWhileCutting: paths.contains { $0.wrapDiameter != nil }) { w.comment(line) }
         } else {
             w.comment("Material: \(stock.materialName) X\(num(stock.width)) Y\(num(stock.height)) Z\(num(stock.thickness)) \(units.symbol)")
             w.comment("Z zero: \(stock.zZero.label)  XY zero: \(stock.xyOrigin.label)")
@@ -113,6 +113,8 @@ public struct GenericGCodePost: PostProcessor {
         var currentRPM: Double?
         var state = ModalState()
         var turned = false
+        // The A value last written, across tool changes (the change doesn't turn the blank).
+        var lastA: Double?
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
             if toolChanged {
@@ -139,10 +141,11 @@ public struct GenericGCodePost: PostProcessor {
                     w.comment("SKIPPED: \(dialect.name) can't be given the right feed for wrapped moves")
                     continue
                 }
-                for part in [writer.approach(tp, state: &state), writer.motions(tp, state: &state)] {
-                    for line in part.lines { w.line(line) }
-                    if part.turned { turned = true }
-                }
+                let approach = writer.approach(tp, state: &state, after: lastA)
+                let cut = writer.motions(tp, state: &state, offset: approach.offset)
+                for line in approach.lines + cut.lines { w.line(line) }
+                if approach.turned || cut.turned { turned = true }
+                lastA = state.a ?? lastA
                 continue
             }
             let start = stock.toWork(tp.start)
@@ -150,9 +153,11 @@ public struct GenericGCodePost: PostProcessor {
             state.x = round(start.x)
             state.y = round(start.y)
             // Rotary: turn the blank at safe Z, over the start of the cut, whenever the angle isn't known to be right.
-            if let rotary, let angle = tp.indexAngle, state.a != rotary.value(angle) {
-                w.line("G0 \(rotary.word(angle))")
-                state.a = rotary.value(angle)
+            if let rotary, let angle = tp.indexAngle, case let target = RotaryOutput.nearestTurn(rotary.value(angle), after: lastA),
+               state.a != target {
+                w.line("G0 \(rotary.word(value: target))")
+                state.a = target
+                lastA = target
                 turned = true
             }
             emitMotions(tp, writer: &w, state: &state)
@@ -160,7 +165,11 @@ public struct GenericGCodePost: PostProcessor {
 
         let home = stock.toWork(stock.parkPosition)
         w.line("G0 Z\(fmt(round(home.z)))")
-        if let rotary, turned { w.line("G0 \(rotary.word(0))") }
+        if let rotary, turned {
+            let home = RotaryOutput.home(after: lastA ?? 0)
+            if let note = RotaryOutput.homeNote(home, avid: false) { w.comment(note) }
+            w.line("G0 \(rotary.word(value: home))")
+        }
         w.line("G0 X\(fmt(round(home.x))) Y\(fmt(round(home.y)))")
         w.line("M5")
         w.line("M9")

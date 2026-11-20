@@ -352,6 +352,48 @@ public struct Finish3DParams: Hashable, Codable, Sendable {
     public static func autoMargin(tool: Tool) -> Double { tool.radius + 0.5 }
 }
 
+/// Turning a rotary blank down to a round of a given diameter: a square bar to round, or a round blank smaller (see
+/// `RoundingGenerator`). Needs no shapes.
+public struct RoundingParams: Hashable, Codable, Sendable {
+    public enum Method: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// Round the blank: one spiral per layer, stepping along it as it turns (Vectric's "Radial").
+        case radial
+        /// Along the blank: passes parallel to the axis, turning a step between them (Vectric's "Raster"). Often
+        /// quicker where the rotary is slower than X, and it skips the corners of a square bar it has already cut.
+        case raster
+        public var id: String { rawValue }
+        public var label: String { self == .radial ? "Around" : "Along" }
+    }
+
+    /// Diameter to turn down to, mm; nil = the job's wrap diameter on a wrapped job, the blank's own on a faces job
+    /// (a square bar's size across the faces).
+    public var finishedDiameter: Double?
+    public var method: Method
+    /// Depth per layer, measured in from the surface, mm; nil uses the tool's stepdown.
+    public var passDepth: Double?
+    /// Stepover as a fraction of the tool diameter (along the blank for Around, round it at the largest radius for
+    /// Along); nil uses the tool's.
+    public var stepoverFraction: Double?
+    /// Where along the blank (X) the rounding starts and ends, mm; nil keeps the cutter just inside each end.
+    public var startX: Double?
+    public var endX: Double?
+
+    /// The diameter this turns `blank` down to.
+    public func finishedDiameter(on blank: RotaryStock) -> Double {
+        finishedDiameter ?? (blank.isWrapped ? blank.wrapDiameterOrBlank : blank.diameter)
+    }
+
+    public init(finishedDiameter: Double? = nil, method: Method = .radial, passDepth: Double? = nil, stepoverFraction: Double? = nil,
+                startX: Double? = nil, endX: Double? = nil) {
+        self.finishedDiameter = finishedDiameter
+        self.method = method
+        self.passDepth = passDepth
+        self.stepoverFraction = stepoverFraction
+        self.startX = startX
+        self.endX = endX
+    }
+}
+
 public enum OperationKind: Hashable, Codable, Sendable {
     case profile(ProfileParams)
     case pocket(PocketParams)
@@ -359,6 +401,8 @@ public enum OperationKind: Hashable, Codable, Sendable {
     case vcarve(VCarveParams)
     case rough3D(Rough3DParams)
     case finish3D(Finish3DParams)
+    /// Rotary jobs: turning the blank round (needs no shapes).
+    case rounding(RoundingParams)
 
     public var label: String {
         switch self {
@@ -368,7 +412,14 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .vcarve: "V-carve"
         case .rough3D: "3D Roughing"
         case .finish3D: "3D Finishing"
+        case .rounding: "Rounding"
         }
+    }
+
+    /// True for an operation that works on the blank itself rather than on shapes.
+    public var needsShapes: Bool {
+        if case .rounding = self { return false }
+        return true
     }
 
     public var is3D: Bool {
@@ -385,7 +436,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case let .pocket(p): p.depth.cutDepth
         case let .drill(p): p.depth
         case let .vcarve(p): p.flatDepth
-        case .rough3D, .finish3D: nil
+        case .rough3D, .finish3D, .rounding: nil
         }
     }
 }
@@ -419,6 +470,9 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     public var rotaryAngles: [Double] { indexAngles ?? [0] }
 
     /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
-    /// drop them and cut every face's shapes at one angle.
-    public var requiredFormatVersion: Int { indexAngles == nil ? 1 : 3 }
+    /// drop them and cut every face's shapes at one angle. Rounding is format 4 (older builds can't read it).
+    public var requiredFormatVersion: Int {
+        if case .rounding = kind { return 4 }
+        return indexAngles == nil ? 1 : 3
+    }
 }

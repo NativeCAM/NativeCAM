@@ -14,12 +14,14 @@ struct OperationInspector: View {
             Section(op.kind.label) {
                 TextField("Name", text: $op.name)
                 Toggle("Include in output", isOn: $op.enabled)
-                LabeledContent("Shapes", value: "\(op.shapeIDs.count)")
-                Button("Use Selected Shapes") { op.shapeIDs = workspace.selectedShapeIDs }
-                    .disabled(workspace.selectedShapeIDs.isEmpty)
-                    .help("Select shapes in the Design list, then click to assign them to this toolpath")
+                if op.kind.needsShapes {
+                    LabeledContent("Shapes", value: "\(op.shapeIDs.count)")
+                    Button("Use Selected Shapes") { op.shapeIDs = workspace.selectedShapeIDs }
+                        .disabled(workspace.selectedShapeIDs.isEmpty)
+                        .help("Select shapes in the Design list, then click to assign them to this toolpath")
+                }
             }
-            if let blank = project.stock.rotary, blank.isWrapped, op.indexAngles == nil {
+            if let blank = project.stock.rotary, blank.isWrapped, op.indexAngles == nil, op.kind.needsShapes {
                 WrapNoteSection(blank: blank, units: units)
             } else if (project.stock.rotary != nil && op.kind.takesIndexAngles) || op.indexAngles != nil {
                 IndexAnglesSection(angles: $op.indexAngles, blank: project.stock.rotary)
@@ -170,6 +172,34 @@ struct OperationInspector: View {
                 if op.tool.shape.isTapered {
                     LabeledContent("Max V depth", value: "\(units.format(op.tool.taperHeight)) \(units.symbol)")
                 }
+            }
+        case let .rounding(p):
+            let set: (RoundingParams) -> Void = { op.kind = .rounding($0) }
+            let blank = project.stock.rotary
+            let auto = blank.map { RoundingParams().finishedDiameter(on: $0) }
+            Section("Rounding") {
+                OptionalLengthField(title: "Finished diameter", mm: Binding(get: { p.finishedDiameter }, set: { var q = p; q.finishedDiameter = $0; set(q) }),
+                                    units: units,
+                                    prompt: auto.map { units.fromMM($0).formatted(.number.precision(.fractionLength(0...units.displayDecimals))) } ?? "",
+                                    help: "Empty: the wrap diameter on a wrapped job, the blank's own (across the faces) otherwise")
+                Picker("Passes", selection: Binding(get: { p.method }, set: { var q = p; q.method = $0; set(q) })) {
+                    ForEach(RoundingParams.Method.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                LengthField(title: "Layer depth", mm: Binding(get: { p.passDepth ?? op.tool.cutting.stepdown }, set: { var q = p; q.passDepth = max(0.05, $0); set(q) }),
+                            units: units)
+                PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction ?? op.tool.cutting.stepoverFraction },
+                                                                 set: { var q = p; q.stepoverFraction = $0; set(q) }))
+                OptionalLengthField(title: "Start (X)", mm: Binding(get: { p.startX }, set: { var q = p; q.startX = $0; set(q) }), units: units,
+                                    prompt: units.fromMM(op.tool.radius).formatted(.number.precision(.fractionLength(0...units.displayDecimals))),
+                                    help: "Where along the blank the rounding starts; empty keeps the cutter just inside the end")
+                OptionalLengthField(title: "End (X)", mm: Binding(get: { p.endX }, set: { var q = p; q.endX = $0; set(q) }), units: units,
+                                    prompt: blank.map { units.fromMM($0.length - op.tool.radius).formatted(.number.precision(.fractionLength(0...units.displayDecimals))) } ?? "",
+                                    help: "Where along the blank the rounding ends; empty keeps the cutter just inside the end")
+                Text(p.method == .radial
+                     ? "Turns the blank round in layers, each a spiral along it: smooth, and best when the rotary is quick."
+                     : "Turns the blank round in layers of passes along it, stepping round between them; on a square bar it skips the faces until the layers reach them.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
     }

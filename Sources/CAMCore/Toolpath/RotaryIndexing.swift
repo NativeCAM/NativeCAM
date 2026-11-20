@@ -51,6 +51,10 @@ public enum RotaryIndex {
                 issues.append(JobIssue(.error, "Has index angles, but the material isn't a rotary blank. Set up rotary stock "
                     + "or clear the angles.", operation: op.name))
             }
+            for op in ops where !op.kind.needsShapes {
+                issues.append(JobIssue(.error, "Rounding turns a rotary blank, but the material isn't one. Set up rotary stock.",
+                                       operation: op.name))
+            }
             return issues
         }
 
@@ -98,11 +102,13 @@ public enum RotaryIndex {
             return issues + centreHeightIssues(machine)
         }
 
+        issues += roundingIssues(project)
         for op in ops {
             switch op.kind {
             case .vcarve: issues.append(JobIssue(.error, "V-carving isn't supported on rotary stock yet.", operation: op.name))
             case .rough3D, .finish3D:
                 issues.append(JobIssue(.error, "3D toolpaths aren't supported on rotary stock yet.", operation: op.name))
+            case .rounding: continue
             default: break
             }
             let angles = op.rotaryAngles
@@ -151,27 +157,30 @@ public enum RotaryIndex {
         let u = project.displayUnits
         func fmt(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
         var issues: [JobIssue] = []
-        if blank.shape == .squareBar {
-            issues.append(JobIssue(.error, "Wrapped designs need a round blank: a square bar's faces aren't at the wrap diameter, "
-                + "so cuts would come out deeper in the middle of each face than at its edges. Use a round blank, or lay the "
-                + "design out on faces."))
-        }
         let wrap = blank.wrapDiameterOrBlank
+        // A rounding that turns the blank down to the wrap diameter (or less) makes it round there.
+        let rounded = project.operations.contains { op in
+            guard op.enabled, case let .rounding(p) = op.kind else { return false }
+            return 2 * RoundingGenerator.finishedRadius(p, blank: blank) <= wrap + 1e-6
+        }
+        if blank.shape == .squareBar && !rounded {
+            issues.append(JobIssue(.error, "Wrapped designs need a round blank: a square bar's faces aren't at the wrap diameter, "
+                + "so cuts would come out deeper in the middle of each face than at its edges. Add a Rounding toolpath that turns "
+                + "it down to the wrap diameter first, or lay the design out on faces."))
+        }
+        issues += roundingIssues(project)
         if wrap > blank.diameter + 1e-6 {
             issues.append(JobIssue(.error, "The wrap diameter (\(fmt(wrap))) is bigger than the blank (\(fmt(blank.diameter))), so "
                 + "the shallow cuts would be in the air. Set it to the blank's diameter or less."))
-        } else if wrap < blank.diameter - 1e-6 {
+        } else if wrap < blank.diameter - 1e-6 && !rounded {
             issues.append(JobIssue(.warning, "Designs wrap at \(fmt(wrap)), smaller than the \(fmt(blank.diameter)) blank, so every "
                 + "cut starts \(fmt((blank.diameter - wrap) / 2)) below the blank's surface. Turn the blank down to \(fmt(wrap)) "
                 + "first."))
         }
-        if project.machine.customPost == nil, let dialect = Dialect.for(project.machine), dialect.rotaryAxes.contains(letter),
-           RotaryWrap.feedMode(dialect) == nil {
-            issues.append(JobIssue(.error, "\(dialect.name) has no inverse-time feed (G93), and what F means there when the "
-                + "rotary axis turns isn't documented, so NativeCAM can't give wrapped cuts the right feed. Use faces (indexed) "
-                + "for this controller."))
+        if let problem = wrappedFeedIssue(project.machine) {
+            issues.append(JobIssue(.error, problem + " Use faces (indexed) for this controller."))
         }
-        for op in project.operations where op.enabled {
+        for op in project.operations where op.enabled && op.kind.needsShapes {
             if op.indexAngles != nil {
                 issues.append(JobIssue(.error, "Has index angles, but on a wrapped job each shape's place on the sheet sets the "
                     + "angle it's cut at. Clear the angles.", operation: op.name))
@@ -189,9 +198,12 @@ public enum RotaryIndex {
                 + "one is \(fmt(project.stock.height)), so its turns won't meet. Set the blank again to refit it."))
         }
         // A wrapped design is true to size only at the wrap diameter; deeper in, the same angle spans less.
-        // A radial hole is a hole at any depth, so drilling is left out.
+        // A radial hole is a hole at any depth, so drilling is left out, and rounding cuts to its own diameter.
         let radius = blank.topRadius
-        var reported = Set(project.operations.filter { if case .drill = $0.kind { true } else { false } }.map(\.id))
+        var reported = Set(project.operations.filter { op in
+            if case .drill = op.kind { return true }
+            return !op.kind.needsShapes
+        }.map(\.id))
         for tp in toolpaths where tp.wrapDiameter != nil && !reported.contains(tp.sourceOperationID) {
             guard let e = tp.cuttingExtents else { continue }
             let depth = -e.min.z
@@ -204,6 +216,29 @@ public enum RotaryIndex {
         }
         issues.append(JobIssue(.info, "Before the first wrapped cut, jog the rotary axis positive: the top of the blank should "
             + "roll toward −Y. If it rolls toward +Y, tick Reversed, or wrapped designs come out mirrored."))
+        return issues
+    }
+
+    /// Why the machine's controller can't be given the right feed for moves that turn the blank; nil when it can.
+    static func wrappedFeedIssue(_ machine: MachineProfile) -> String? {
+        guard machine.customPost == nil, let dialect = Dialect.for(machine), dialect.rotaryAxes.contains(letter),
+              RotaryWrap.feedMode(dialect) == nil else { return nil }
+        return "\(dialect.name) has no inverse-time feed (G93), and what F means there when the rotary axis turns isn't "
+            + "documented, so NativeCAM can't give cuts that turn the blank the right feed."
+    }
+
+    /// Rounding on a rotary job, on faces or wrapped: it turns the whole blank, so it takes no index angles, and it
+    /// turns the blank while cutting, so the controller has to be able to feed that.
+    static func roundingIssues(_ project: Project) -> [JobIssue] {
+        let rounding = project.operations.filter { $0.enabled && !$0.kind.needsShapes }
+        guard !rounding.isEmpty else { return [] }
+        var issues: [JobIssue] = []
+        for op in rounding where op.indexAngles != nil {
+            issues.append(JobIssue(.error, "Rounding turns the whole blank, so index angles don't apply. Clear them.", operation: op.name))
+        }
+        if project.stock.rotary?.isWrapped != true, let problem = wrappedFeedIssue(project.machine) {
+            issues.append(JobIssue(.error, problem, operation: rounding[0].name))
+        }
         return issues
     }
 
@@ -232,6 +267,36 @@ struct RotaryOutput {
 
     func word(_ angle: Double) -> String { "\(letter)\(String(format: "%.3f", value(angle)))" }
 
+    /// The A word for a value as written.
+    func word(value v: Double) -> String { "\(letter)\(String(format: "%.3f", v == 0 ? 0 : v))" }
+
+    /// `a` (as written) moved by whole turns to within a turn of `last` when it's more than a turn away: the same
+    /// orientation of the blank, without winding back every turn a long wrapped cut (a rounding pass) has made.
+    static func nearestTurn(_ a: Double, after last: Double?) -> Double {
+        guard let last, abs(last - a) > 360 else { return a }
+        let v = ((a + 360 * ((last - a) / 360).rounded()) * 1000).rounded() / 1000
+        return v == 0 ? 0 : v
+    }
+
+    /// Where the blank turns to at the end of the program: back to A0, unless that would wind back more than
+    /// `maxUnwindTurns`; then on to the nearest whole turn, which is the same orientation.
+    static func home(after last: Double) -> Double {
+        guard abs(last) > 360 * Double(maxUnwindTurns) else { return 0 }
+        let v = 360 * (last / 360).rounded()
+        return v == 0 ? 0 : v
+    }
+
+    /// Turns the program end winds back at most, at A's rapid rate.
+    static let maxUnwindTurns = 10
+
+    /// The note before the end of a program that leaves A on a whole turn other than 0.
+    static func homeNote(_ home: Double, avid: Bool) -> String? {
+        guard home != 0 else { return nil }
+        let turns = Int((abs(home) / 360).rounded())
+        return "A finishes \(turns) whole turns from where it started, so it doesn't wind back: zero A"
+            + (avid ? " (Avid: Rotary tab > Zero A)" : "") + " before the next job"
+    }
+
     /// Where X zero is on the blank.
     static func xZero(_ stock: Stock) -> String {
         switch stock.xyOrigin {
@@ -244,7 +309,7 @@ struct RotaryOutput {
     /// Header comments for the blank and the zeros, in place of the flat job's material and zero lines. A wrapped
     /// job also says how the sheet wraps and how its rotary moves are fed (`feeds`).
     static func header(_ stock: Stock, units: LengthUnit, num: (Double) -> String, avid: Bool,
-                       feeds: RotaryWrap.FeedMode? = nil) -> [String] {
+                       feeds: RotaryWrap.FeedMode? = nil, turnsWhileCutting: Bool = false) -> [String] {
         guard let blank = stock.rotary else { return [] }
         let shape = blank.shape == .cylinder ? "round, D=\(num(blank.diameter))" : "square bar, \(num(blank.diameter)) across"
         var lines = [
@@ -254,6 +319,8 @@ struct RotaryOutput {
         ]
         if blank.isWrapped {
             lines.append("Wrapped: sheet Y wraps around D=\(num(blank.wrapDiameterOrBlank)), A = Y x 360 / (pi x D), A0 = middle of the sheet")
+        }
+        if blank.isWrapped || turnsWhileCutting {
             switch feeds {
             case .inverseTime?: lines.append("Feeds: G93 inverse time on moves that turn A, G94 otherwise")
             case .perMinute?: lines.append("Feeds: worked out per move for this controller's rotary feed rule")

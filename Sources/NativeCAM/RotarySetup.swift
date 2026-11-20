@@ -310,7 +310,7 @@ extension OperationKind {
     var takesIndexAngles: Bool {
         switch self {
         case .profile, .pocket, .drill: true
-        case .vcarve, .rough3D, .finish3D: false
+        case .vcarve, .rough3D, .finish3D, .rounding: false
         }
     }
 }

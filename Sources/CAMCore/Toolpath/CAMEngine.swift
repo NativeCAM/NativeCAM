@@ -85,10 +85,12 @@ public enum CAMEngine {
         let wrap = stock.rotary.flatMap { $0.isWrapped ? $0.wrapDiameterOrBlank : nil }
         for op in project.operations where op.enabled && (operationIDs?.contains(op.id) ?? true) {
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
-            if shapes.isEmpty {
+            if shapes.isEmpty && op.kind.needsShapes {
                 issues.append(JobIssue(.warning, "No shapes selected.", operation: op.name))
                 continue
             }
+            // Rounding works on the whole blank, wrapped round it at the sheet's radius, whatever the layout.
+            let wrap = op.kind.needsShapes ? wrap : stock.rotary.map { 2 * $0.topRadius }
             // Flat jobs cut once; rotary jobs once per index angle, each on its own face model.
             let angles: [Double?] = stock.rotary == nil || wrap != nil ? [nil] : op.rotaryAngles
             for (position, angle) in angles.enumerated() {
@@ -154,6 +156,9 @@ public enum CAMEngine {
                 if case .finish3D = later.kind {
                     issues.append(JobIssue(.warning, "Runs before its roughing (“\(early.name)”). "
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))
+                } else if !early.kind.needsShapes {
+                    issues.append(JobIssue(.warning, "Runs before the blank is rounded (“\(early.name)”), so it cuts the blank "
+                        + "before it's round. Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))
                 } else {
                     issues.append(JobIssue(.warning, "Runs after “\(later.name)” has cut its part free, so the part can shift. "
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: early.name))
@@ -208,6 +213,8 @@ public enum CAMEngine {
             return [Model3DGenerator.rough(op: op, params: p, shapes: shapes, context: context)]
         case let .finish3D(p):
             return [Model3DGenerator.finish(op: op, params: p, shapes: shapes, context: context)]
+        case let .rounding(p):
+            return [RoundingGenerator.generate(op: op, params: p, context: context)]
         }
     }
 

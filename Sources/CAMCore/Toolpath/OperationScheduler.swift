@@ -65,6 +65,9 @@ public enum OperationScheduler {
                     hard = true
                 } else if case .finish3D = b.kind, case .rough3D = a.kind, !Set(a.shapeIDs).isDisjoint(with: b.shapeIDs) {
                     hard = true
+                } else if !a.kind.needsShapes, b.kind.needsShapes {
+                    // Rounding turns the blank down before anything is cut on it.
+                    hard = true
                 } else if i < j, !aFreesB, overlaps(boxes[i], boxes[j]) {
                     before[j] |= 1 << UInt64(i)
                 }

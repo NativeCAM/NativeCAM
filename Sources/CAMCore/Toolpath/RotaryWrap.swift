@@ -232,22 +232,24 @@ struct WrappedWriter {
     }
 
     /// From safe Z: over the start along X with the tool on the axis centreline, then the turn that brings the start
-    /// under it. True when the blank turns.
-    func approach<S: WrapModalState>(_ tp: Toolpath, state: inout S) -> (lines: [String], turned: Bool) {
-        guard let d = tp.wrapDiameter else { return ([], false) }
+    /// under it, the shorter way round from `last` (the A value last written) when it's more than a turn away. True
+    /// when the blank turns; `offset` (whole turns) goes to `motions`.
+    func approach<S: WrapModalState>(_ tp: Toolpath, state: inout S, after last: Double?) -> (lines: [String], turned: Bool, offset: Double) {
+        guard let d = tp.wrapDiameter else { return ([], false, 0) }
         let x = round(stock.toWork(tp.start).x)
         var lines = ["\(rapidWord) X\(fmt(x)) Y\(fmt(0))"]
         state.x = x
         state.y = 0
-        let a = aValue(tp.start.y, diameter: d)
-        guard state.a != a else { return (lines, false) }
-        lines.append("\(rapidWord) \(rotary.letter)\(String(format: "%.3f", a))")
+        let start = aValue(tp.start.y, diameter: d)
+        let a = RotaryOutput.nearestTurn(start, after: last)
+        guard state.a != a else { return (lines, false, a - start) }
+        lines.append("\(rapidWord) \(rotary.word(value: a))")
         state.a = a
-        return (lines, true)
+        return (lines, true, a - start)
     }
 
-    /// The toolpath's moves, after `approach`. True when the blank turns.
-    func motions<S: WrapModalState>(_ tp: Toolpath, state: inout S) -> (lines: [String], turned: Bool) {
+    /// The toolpath's moves, after `approach`, each A moved by `offset` (whole turns). True when the blank turns.
+    func motions<S: WrapModalState>(_ tp: Toolpath, state: inout S, offset: Double = 0) -> (lines: [String], turned: Bool) {
         guard let d = tp.wrapDiameter else { return ([], false) }
         var lines: [String] = []
         var turned = false
@@ -258,7 +260,8 @@ struct WrappedWriter {
                 continue
             }
             let w = stock.toWork(m.end)
-            let ex = round(w.x), ez = round(w.z), ea = aValue(m.end.y, diameter: d)
+            let ex = round(w.x), ez = round(w.z)
+            let ea = offset == 0 ? aValue(m.end.y, diameter: d) : ((aValue(m.end.y, diameter: d) + offset) * 1000).rounded() / 1000
             let turns = ea != state.a
             guard ex != state.x || ez != state.z || turns else { continue }
             var words = ""
