@@ -44,7 +44,8 @@ public struct AvidMach4Post: Sendable {
         let rotary = RotaryOutput(project)
         if rotary != nil {
             for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: true, axis: machine.rotary,
-                                            feeds: RotaryWrap.feedMode(.avidMach4)) { w.comment(line) }
+                                            feeds: RotaryWrap.feedMode(.avidMach4),
+                                            turnsWhileCutting: paths.contains { $0.wrapDiameter != nil }) { w.comment(line) }
         } else {
             w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")
             w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
@@ -81,6 +82,8 @@ public struct AvidMach4Post: Sendable {
         var currentRPM: Double?
         var state = ModalState()
         var turned = false
+        // The A value last written, across tool changes (the change doesn't turn the blank).
+        var lastA: Double?
         // On a blank turned by hand, the angle the operator was last asked for; nil until the first stop.
         var dial: Double?
 
@@ -117,10 +120,11 @@ public struct AvidMach4Post: Sendable {
             // Wrapped: the tool stays over the axis and the blank turns under it as it cuts.
             if let rotary, tp.wrapDiameter != nil {
                 let writer = wrappedWriter(rotary)
-                for part in [writer.approach(tp, state: &state), writer.motions(tp, state: &state)] {
-                    for line in part.lines { w.line(line) }
-                    if part.turned { turned = true }
-                }
+                let approach = writer.approach(tp, state: &state, after: lastA)
+                let cut = writer.motions(tp, state: &state, offset: approach.offset)
+                for line in approach.lines + cut.lines { w.line(line) }
+                if approach.turned || cut.turned { turned = true }
+                lastA = state.a ?? lastA
                 continue
             }
             let startWork = stock.toWork(tp.start)
@@ -129,9 +133,11 @@ public struct AvidMach4Post: Sendable {
             state.y = round(startWork.y)
             // Rotary: turn the blank at safe Z, over the start of the cut, whenever the angle isn't known to be right
             // (always after a tool change, since the macro or the operator may have turned it).
-            if let rotary, !rotary.manual, let angle = tp.indexAngle, state.a != rotary.value(angle) {
-                w.line("G00 \(rotary.word(angle))")
-                state.a = rotary.value(angle)
+            if let rotary, !rotary.manual, let angle = tp.indexAngle,
+               case let target = RotaryOutput.nearestTurn(rotary.value(angle), after: lastA), state.a != target {
+                w.line("G00 \(rotary.word(value: target))")
+                state.a = target
+                lastA = target
                 turned = true
             }
             emitMotions(tp, writer: &w, state: &state)
@@ -140,7 +146,11 @@ public struct AvidMach4Post: Sendable {
         // Footer
         let home = stock.toWork(stock.parkPosition)
         w.line("G00 Z\(num(home.z, isZ: true))")
-        if let rotary, turned { w.line("G00 \(rotary.word(0))") }
+        if let rotary, turned {
+            let home = RotaryOutput.home(after: lastA ?? 0)
+            if let note = RotaryOutput.homeNote(home, avid: true) { w.comment(note) }
+            w.line("G00 \(rotary.word(value: home))")
+        }
         w.line("G00 X\(num(home.x)) Y\(num(home.y))")
         w.line("M05")
         w.line("M09")

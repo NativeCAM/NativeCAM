@@ -454,6 +454,9 @@ public enum GCodeCheck {
         let rotary = RotaryOutput(project)
         var out: [ExpectedMove] = []
         var tool: Int?, speed: Double?
+        // The A value last written: a toolpath more than a turn away from it starts the shorter way round, as the post
+        // does.
+        var lastA: Double?
         // A blank turned by hand: the post stops the spindle for each turn, so it spins up again afterwards.
         var dial: Double?
         for tp in toolpaths where !tp.isEmpty {
@@ -464,13 +467,18 @@ public enum GCodeCheck {
                 return wrap == nil ? w : Vec3(w.x, 0, w.z)
             }
             let a = tp.indexAngle.flatMap { angle in rotary?.position(angle) }
-            func angle(_ p: Vec3) -> Double? {
+            func written(_ p: Vec3) -> Double? {
                 if let (d, out) = wrap { return out.value(RotaryWrap.angle(y: p.y, centerY: stock.originPoint.y, diameter: d)) }
                 return a
             }
             if rotary?.manual == true, let a, a != dial {
                 dial = a
                 speed = nil
+            }
+            let first = written(tp.start)
+            let offset = first.map { RotaryOutput.nearestTurn($0, after: lastA) - $0 } ?? 0
+            func angle(_ p: Vec3) -> Double? {
+                written(p).map { offset == 0 ? $0 : (($0 + offset) * 1000).rounded() / 1000 }
             }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             let s = work(tp.start)
@@ -499,6 +507,7 @@ public enum GCodeCheck {
                 if m.kind != .dwell { sx = ex; sy = ey; sz = ez; sa = ea }
                 position = m.end
             }
+            lastA = sa ?? lastA
         }
         return out
     }

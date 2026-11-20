@@ -146,6 +146,7 @@ struct SidebarView: View {
         case .vcarve: "angle"
         case .rough3D: "square.stack.3d.down.right"
         case .finish3D: "mountain.2"
+        case .rounding: "cylinder"
         }
     }
 
@@ -233,17 +234,22 @@ struct AddOperationMenu: View {
             Button("3D Finishing") { add(.finish3D) }
         }
         .disabled(selected.isEmpty)
+        if project.stock.rotary != nil {
+            Divider()
+            Button("Rounding (turn the blank round)") { add(.rounding) }
+                .help("Turn a square bar round, or a round blank down to a smaller diameter")
+        }
         if selected.isEmpty {
             Divider()
             Text("Select shapes in the Design list first")
         }
     }
 
-    enum Kind { case profile, pocket, drill, vcarve, rough3D, finish3D }
+    enum Kind { case profile, pocket, drill, vcarve, rough3D, finish3D, rounding }
 
     private func add(_ kind: Kind) {
-        let shapes = workspace.selectedShapeIDs
-        guard !shapes.isEmpty else { return }
+        let shapes = kind == .rounding ? [] : workspace.selectedShapeIDs
+        guard !shapes.isEmpty || kind == .rounding else { return }
         let op = ShapeFactory.operation(kind, shapes: shapes, project: project, library: library.tools)
         project.operations.append(op)
         workspace.selection = [.operation(op.id)]
@@ -336,6 +342,8 @@ enum ShapeFactory {
             let ball = pick({ $0.shape == .ballNose }, 7)
             let (ids, boundary) = modelBoundary(shapes, project: project)
             return CAMOperation(name: "3D Finishing", kind: .finish3D(Finish3DParams(boundary: boundary)), shapeIDs: ids, tool: ball)
+        case .rounding:
+            return CAMOperation(name: "Rounding", kind: .rounding(RoundingParams()), shapeIDs: [], tool: endMill)
         }
     }
 

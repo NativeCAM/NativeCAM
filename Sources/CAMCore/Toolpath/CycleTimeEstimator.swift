@@ -140,7 +140,11 @@ public enum CycleTimeEstimator {
             func wrappedAngle(_ y: Double) -> Double? {
                 tp.wrapDiameter.flatMap { d in rotary?.value(RotaryWrap.angle(y: y, centerY: stock.originPoint.y, diameter: d)) }
             }
-            let turnTo = wrappedAngle(tp.start.y) ?? tp.indexAngle.flatMap { rotary?.position($0) }
+            // Like the post: the shorter way round from where the blank is when that's more than a turn away (after a
+            // long rounding pass, say).
+            let wrapStart = wrappedAngle(tp.start.y)
+            let turnTo = (wrapStart ?? tp.indexAngle.flatMap { rotary?.position($0) }).map { RotaryOutput.nearestTurn($0, after: blankAt) }
+            let wrapOffset = wrapStart.flatMap { start in turnTo.map { $0 - start } } ?? 0
             if let rotary, rotary.manual, let to = turnTo, to != dial {
                 // The program stops with the spindle off while the blank is turned by hand.
                 addPause(axis.turnSeconds(from: blankAt, to: to))
@@ -225,13 +229,13 @@ public enum CycleTimeEstimator {
                 p = m.end
             }
             position = p
-            if let end = wrappedAngle(p.y) { blankAt = end }
+            if let end = wrappedAngle(p.y) { blankAt = end + wrapOffset }
         }
         // Footer: retract, turn a driven axis back to A0, and park.
         if let p = position {
             let park = stock.parkPosition
             addRapid(p, Vec3(p.xy, max(p.z, park.z)))
-            if rotary?.manual == false { addPause(axis.turnSeconds(from: blankAt, to: 0)) }
+            if rotary?.manual == false { addPause(axis.turnSeconds(from: blankAt, to: RotaryOutput.home(after: blankAt))) }
             addRapid(Vec3(p.xy, max(p.z, park.z)), park)
         }
 
