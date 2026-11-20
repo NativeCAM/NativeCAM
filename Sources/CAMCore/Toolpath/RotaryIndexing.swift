@@ -177,12 +177,16 @@ public enum RotaryIndex {
                     + "angle it's cut at. Clear the angles.", operation: op.name))
             }
             switch op.kind {
-            case .pocket: issues.append(JobIssue(.error, "Pockets aren't supported on wrapped rotary jobs yet.", operation: op.name))
-            case .vcarve: issues.append(JobIssue(.error, "V-carving isn't supported on wrapped rotary jobs yet.", operation: op.name))
             case .rough3D, .finish3D:
                 issues.append(JobIssue(.error, "3D toolpaths aren't supported on rotary stock yet.", operation: op.name))
             default: break
             }
+        }
+        // A spiral climbs one sheet height per turn; laid out for another wrap diameter, its turns don't meet.
+        for shape in project.shapes {
+            guard case let .spiral(spec) = shape.kind, abs(spec.around - project.stock.height) > 1e-6 else { continue }
+            issues.append(JobIssue(.warning, "The spiral “\(shape.name)” was laid out for a sheet \(fmt(spec.around)) high, but this "
+                + "one is \(fmt(project.stock.height)), so its turns won't meet. Set the blank again to refit it."))
         }
         // A wrapped design is true to size only at the wrap diameter; deeper in, the same angle spans less.
         // A radial hole is a hole at any depth, so drilling is left out.

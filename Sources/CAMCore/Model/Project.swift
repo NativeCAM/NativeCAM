@@ -11,7 +11,19 @@ public struct Project: Hashable, Sendable {
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
-        operations.map(\.requiredFormatVersion).reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion), max)
+        let parts = operations.map(\.requiredFormatVersion) + shapes.map(\.kind.requiredFormatVersion)
+        return parts.reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion), max)
+    }
+
+    /// Keeps every spiral climbing exactly once around the blank per pitch: on a wrapped job, a spiral's turn is the
+    /// sheet's height, which changes with the wrap diameter. Call it after changing the blank.
+    public mutating func fitSpiralsToSheet() {
+        guard stock.rotary?.isWrapped == true else { return }
+        for i in shapes.indices {
+            guard case var .spiral(spec) = shapes[i].kind, abs(spec.around - stock.height) > 1e-9 else { continue }
+            spec.around = stock.height
+            shapes[i].kind = .spiral(spec)
+        }
     }
 
     public var name: String

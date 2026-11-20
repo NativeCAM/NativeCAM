@@ -400,8 +400,32 @@ final class Workspace {
             }
         }
         v += reliefMarkLines(project)
+        v += wrapGuideLines(project)
         vectorLines = v
         publishLines()
+    }
+
+    /// On a wrapped job, dashed guides on the unrolled sheet: the top of the blank at A0 across the middle, and the
+    /// seam along the top and bottom edges, where the sheet's edges meet as it wraps.
+    private func wrapGuideLines(_ project: Project) -> [LineVertex] {
+        guard showVectors, rotaryAxis == nil, project.stock.rotary?.isWrapped == true else { return [] }
+        let s = project.stock
+        let dash = max(2.0, s.width / 120)
+        var v: [LineVertex] = []
+        func dashed(_ y: Double, _ color: SIMD4<Float>) {
+            var x = 0.0
+            while x < s.width {
+                let x1 = min(x + dash, s.width)
+                v.append(LineVertex(SIMD3(Float(x), Float(y), 0.04), color))
+                v.append(LineVertex(SIMD3(Float(x1), Float(y), 0.04), color))
+                x += 2 * dash
+            }
+        }
+        let alpha: Float = isSimulating ? 0.3 : 0.75
+        dashed(s.height / 2, SIMD4(0.45, 0.85, 0.5, alpha))
+        dashed(0, SIMD4(1, 0.65, 0.3, alpha))
+        dashed(s.height, SIMD4(1, 0.65, 0.3, alpha))
+        return v
     }
 
     func rebuildPathLines(_ project: Project) {
