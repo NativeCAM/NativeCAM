@@ -633,6 +633,190 @@ public struct RotaryFinishParams: Hashable, Codable, Sendable {
     public func passDepth(_ tool: Tool) -> Double { max(0.05, passDepth ?? tool.cutting.stepdown) }
 }
 
+/// A chamfer: a V-bit or engraving bit bevels the edges of closed vectors at its own angle (see `ChamferGenerator`).
+/// The settings follow Vectric's Chamfer toolpath, so its tutorials translate: the bevel lies outside or inside the
+/// vector (or both), and the vector is its top edge (Vectric's "Down") or its bottom edge ("Up").
+public struct ChamferParams: Hashable, Codable, Sendable {
+    /// Which side of the selected shapes the bevel lies on. Shapes inside shapes count as holes, as a profile's do.
+    public enum Side: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// Outside the shapes: round a part's edge, and into its holes.
+        case outside
+        /// Inside the shapes: into a hole or pocket, and round its islands.
+        case inside
+        /// Both sides of the vector.
+        case both
+        public var id: String { rawValue }
+        public var label: String { rawValue.capitalized }
+    }
+
+    /// Which edge of the bevel the vector marks.
+    public enum Edge: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// The vector is the bevel's top edge: it slopes down away from the vector (Vectric's "Down").
+        case top
+        /// The vector is the bevel's bottom edge, where a profile cut on the same vector leaves its wall: the bevel
+        /// rises away from the vector to the surface (Vectric's "Up").
+        case bottom
+        public var id: String { rawValue }
+        public var label: String { self == .top ? "Top edge" : "Bottom edge" }
+    }
+
+    public var side: Side
+    public var edge: Edge
+    /// The bevel's width across the top, mm. Its depth follows from the bit's angle (`depth(with:)`), so changing
+    /// the bit keeps the width.
+    public var width: Double
+    /// Depth the bevel starts at, mm below the material top: 0 on the surface, or the floor of a pocket or step.
+    public var startDepth: Double
+    /// Max depth per pass; nil uses the tool's stepdown.
+    public var passDepth: Double?
+    /// Keep corners crisp: where two faces of the bevel meet in a corner the bit can't reach at depth, it rises along
+    /// the corner's bisector (as a V-carve does), and round the outside of a corner it runs to a mitre rather than
+    /// round an arc. Off, the bit stays at depth and the corners come out rounded.
+    public var sharpCorners: Bool
+    public var direction: CutDirection
+
+    public static let defaultWidth = 0.125.inch
+
+    public init(side: Side = .outside, edge: Edge = .top, width: Double = ChamferParams.defaultWidth, startDepth: Double = 0,
+                passDepth: Double? = nil, sharpCorners: Bool = true, direction: CutDirection = .climb) {
+        self.side = side
+        self.edge = edge
+        self.width = width
+        self.startDepth = startDepth
+        self.passDepth = passDepth
+        self.sharpCorners = sharpCorners
+        self.direction = direction
+    }
+
+    /// The bevel's depth (its height) with `tool`, mm: the width over tan(half the bit's angle). 0 for a bit with no
+    /// taper.
+    public func depth(with tool: Tool) -> Double { Self.depth(width: width, tool: tool) }
+
+    /// Depth ↔ width through the bit's angle: a bevel `width` wide is width / tan(half angle) deep.
+    public static func depth(width: Double, tool: Tool) -> Double {
+        guard tool.shape.isTapered, tool.halfAngleTangent > 1e-9 else { return 0 }
+        return max(0, width) / tool.halfAngleTangent
+    }
+
+    /// The width a bevel `depth` deep has with `tool`, mm.
+    public static func width(depth: Double, tool: Tool) -> Double {
+        guard tool.shape.isTapered else { return 0 }
+        return max(0, depth) * tool.halfAngleTangent
+    }
+}
+
+/// Fluting: a ball nose, core box or V-bit cuts along vectors with its depth ramping in and out at the ends (see
+/// `FlutingGenerator`), as Vectric's Fluting toolpath does. A flute ramped at one end starts at its vector's start point.
+public struct FlutingParams: Hashable, Codable, Sendable {
+    /// Which ends of a flute ramp.
+    public enum Ramp: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// Down at the start and back up at the end.
+        case both
+        /// Down at the start only; the flute ends at full depth.
+        case start
+        /// Up at the end only; the flute starts at full depth.
+        case end
+        /// Full depth all along.
+        case none
+        public var id: String { rawValue }
+        public var label: String {
+            switch self {
+            case .both: "Both ends"
+            case .start: "Start"
+            case .end: "End"
+            case .none: "None"
+            }
+        }
+    }
+
+    public enum RampShape: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// A straight slope from the start depth to the flute depth.
+        case linear
+        /// A curve that eases into the flute depth (a quarter sine), for a rounder end.
+        case smooth
+        public var id: String { rawValue }
+        public var label: String { rawValue.capitalized }
+    }
+
+    /// Depth the flute is measured from, mm below the material top (0 on the surface, or a pocket's floor).
+    public var startDepth: Double
+    /// Depth of the flute below the start depth, mm.
+    public var depth: Double
+    public var ramp: Ramp
+    /// Length of each ramp, mm, unless `rampPercent` is set.
+    public var rampLength: Double
+    /// Length of each ramp as a fraction of the longest it can be (the flute's length for one ramp, half of it for
+    /// both), as Vectric's Ramp %; nil uses `rampLength`.
+    public var rampPercent: Double?
+    public var rampShape: RampShape
+    /// Max depth per pass; nil uses the tool's stepdown. Each pass follows the whole flute, its ramps scaled to its
+    /// depth, so the last pass cuts the full length.
+    public var passDepth: Double?
+
+    public init(startDepth: Double = 0, depth: Double = 0.125.inch, ramp: Ramp = .both, rampLength: Double = 1.inch,
+                rampPercent: Double? = nil, rampShape: RampShape = .linear, passDepth: Double? = nil) {
+        self.startDepth = startDepth
+        self.depth = depth
+        self.ramp = ramp
+        self.rampLength = rampLength
+        self.rampPercent = rampPercent
+        self.rampShape = rampShape
+        self.passDepth = passDepth
+    }
+
+    /// Tool shapes that leave a rounded or V-shaped flute (a core box bit is a ball nose in the tool library).
+    public static func suits(_ shape: ToolShape) -> Bool {
+        switch shape {
+        case .ballNose, .bullNose, .vBit, .engraving: true
+        case .flatEndMill, .surfacing, .drill: false
+        }
+    }
+
+    /// The length of the ramps on a flute `length` long, mm: the ramp length or percentage, no longer than the
+    /// flute allows (all of it for one ramp, half for two).
+    public func rampLength(onFluteOf length: Double) -> Double {
+        guard ramp != .none, length > 1e-9 else { return 0 }
+        let longest = ramp == .both ? length / 2 : length
+        let asked = rampPercent.map { max(0, $0) * longest } ?? max(0, rampLength)
+        return min(asked, longest)
+    }
+
+    /// Depth below the start depth at distance `s` along a flute `length` long, mm (0 to `depth`).
+    public func depth(at s: Double, fluteLength length: Double) -> Double {
+        let ramp = rampLength(onFluteOf: length)
+        guard ramp > 1e-9 else { return max(0, depth) }
+        func eased(_ x: Double) -> Double {
+            let f = min(1, max(0, x))
+            return rampShape == .linear ? f : sin(f * .pi / 2)
+        }
+        var fraction = 1.0
+        if self.ramp == .both || self.ramp == .start { fraction = min(fraction, eased(s / ramp)) }
+        if self.ramp == .both || self.ramp == .end { fraction = min(fraction, eased((length - s) / ramp)) }
+        return max(0, depth) * fraction
+    }
+}
+
+/// Prism carving: a V-bit carves a shape as a raised bevel rising to a ridge along its middle (see `PrismGenerator`),
+/// as Vectric's Prism Carving toolpath does. The bit's tip runs round the outline at the prism depth; its side cuts the
+/// slopes, so the outer side of the cut wants a pocket or profile round it.
+public struct PrismParams: Hashable, Codable, Sendable {
+    /// Depth the prism is calculated from, mm below the material top (0 on the surface, or a pocket's floor).
+    public var startDepth: Double
+    /// Depth of the prism's base below the start depth, mm; nil = deep enough for a full prism, its slopes meeting in
+    /// a ridge everywhere. A shallower prism has a flat top where the shape is wider than the slopes reach.
+    public var depth: Double?
+    /// Max depth per pass; nil uses the tool's stepdown.
+    public var passDepth: Double?
+    public var direction: CutDirection
+
+    public init(startDepth: Double = 0, depth: Double? = nil, passDepth: Double? = nil, direction: CutDirection = .climb) {
+        self.startDepth = startDepth
+        self.depth = depth
+        self.passDepth = passDepth
+        self.direction = direction
+    }
+}
+
 public enum OperationKind: Hashable, Codable, Sendable {
     case profile(ProfileParams)
     case pocket(PocketParams)
@@ -644,6 +828,12 @@ public enum OperationKind: Hashable, Codable, Sendable {
     case rounding(RoundingParams)
     /// Rotary jobs: a 3D model on the blank, finished all the way round as it turns.
     case rotaryFinish(RotaryFinishParams)
+    /// A V-bit bevel along closed vectors.
+    case chamfer(ChamferParams)
+    /// A groove along vectors that ramps in and out at its ends.
+    case fluting(FlutingParams)
+    /// A raised bevel rising to a ridge along the middle of a shape.
+    case prism(PrismParams)
 
     public var label: String {
         switch self {
@@ -655,6 +845,18 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .finish3D: "3D Finishing"
         case .rounding: "Rounding"
         case .rotaryFinish: "3D Rotary Finishing"
+        case .chamfer: "Chamfer"
+        case .fluting: "Fluting"
+        case .prism: "Prism"
+        }
+    }
+
+    /// True for the operations that cut along their vectors rather than from the tool's edge (chamfers, flutes and
+    /// prisms): the part they shape is the one drawn, however wide the bit.
+    public var followsVectors: Bool {
+        switch self {
+        case .chamfer, .fluting, .prism: true
+        default: false
         }
     }
 
@@ -688,7 +890,10 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case let .pocket(p): p.depth.cutDepth
         case let .drill(p): p.depth
         case let .vcarve(p): p.deepest
-        case .rough3D, .finish3D, .rounding, .rotaryFinish: nil
+        case let .fluting(p): p.startDepth + p.depth
+        // Set by the bit's angle (a chamfer's width) or the shape (a full prism).
+        case let .prism(p): p.depth.map { p.startDepth + $0 }
+        case .rough3D, .finish3D, .rounding, .rotaryFinish, .chamfer: nil
         }
     }
 }
@@ -735,11 +940,13 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
     /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it). A V-carve
     /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`). 3D rotary finishing is format 7.
+    /// Chamfers, flutes and prisms are format 8 (older builds can't read them).
     public var requiredFormatVersion: Int {
         let own: Int
         switch kind {
         case .rounding: own = 5
         case .rotaryFinish: own = 7
+        case .chamfer, .fluting, .prism: own = 8
         case let .vcarve(p): own = p.requiredFormatVersion
         default: own = 1
         }

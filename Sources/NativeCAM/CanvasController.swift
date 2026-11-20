@@ -316,7 +316,8 @@ final class CanvasController: ViewportInteractionDelegate {
             let isModel = p.shape(id: hit)?.modelSpec != nil
             let kinds: [(String, AddOperationMenu.Kind)] = isModel
                 ? [("3D Roughing", .rough3D), ("3D Finishing", .finish3D)]
-                : [("Profile", .profile), ("Pocket", .pocket), ("Drill", .drill), ("V-carve", .vcarve)]
+                : [("Profile", .profile), ("Pocket", .pocket), ("Drill", .drill), ("V-carve", .vcarve), ("Chamfer", .chamfer),
+                   ("Fluting", .fluting), ("Prism", .prism)]
             for (title, kind) in kinds {
                 sub.addItem(ClosureMenuItem(title) { [weak self] in self?.addOperation(kind) })
             }

@@ -205,6 +205,12 @@ struct OperationInspector: View {
             }
         case let .rotaryFinish(p):
             RotaryFinishSection(params: p, op: op, project: project, units: units) { op.kind = .rotaryFinish($0) }
+        case let .chamfer(p):
+            ChamferSection(params: p, tool: op.tool, units: units) { op.kind = .chamfer($0) }
+        case let .fluting(p):
+            FlutingSection(params: p, tool: op.tool, units: units) { op.kind = .fluting($0) }
+        case let .prism(p):
+            PrismSection(params: p, op: op, project: project, units: units) { op.kind = .prism($0) }
         case let .rounding(p):
             let set: (RoundingParams) -> Void = { op.kind = .rounding($0) }
             let blank = project.stock.rotary
@@ -232,6 +238,202 @@ struct OperationInspector: View {
                      ? "Turns the blank round in layers, each a spiral along it: smooth, and best when the rotary is quick."
                      : "Turns the blank round in layers of passes along it, stepping round between them; on a square bar it skips the faces until the layers reach them.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// A note under a section in the inspector's caption style.
+private struct SectionNote: View {
+    let text: String
+    var warning = false
+
+    var body: some View {
+        if warning {
+            Label(text, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Pass depth (the tool's stepdown when unset) and the passes it gives for a cut `depth` deep.
+private struct PassDepthRows: View {
+    let passDepth: Double?
+    let depth: Double
+    let tool: Tool
+    let units: LengthUnit
+    let set: (Double) -> Void
+
+    var body: some View {
+        LengthField(title: "Pass depth", mm: Binding(get: { passDepth ?? tool.cutting.stepdown }, set: { set(max(0.05, $0)) }),
+                    units: units, help: "Deepest cut per pass; defaults to the tool's stepdown")
+        let step = max(0.05, passDepth ?? tool.cutting.stepdown)
+        LabeledContent("Passes", value: "\(max(1, Int((depth / step - 1e-9).rounded(.up))))")
+    }
+}
+
+/// A chamfer: which side of the vector the bevel lies, which edge the vector marks (Vectric's Down / Up), its width
+/// and depth linked through the bit's angle, passes and sharp corners.
+struct ChamferSection: View {
+    let params: ChamferParams
+    let tool: Tool
+    let units: LengthUnit
+    let set: (ChamferParams) -> Void
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+
+    private var summary: String {
+        switch (params.edge, params.side) {
+        case (.top, .outside):
+            "Slopes down outside the shapes from their outline, as round the top of a raised part. The bit also cuts past the bevel, so cut the part out at least the bevel's width outside its outline."
+        case (.top, .inside):
+            "Slopes down into the shapes from their outline, as a countersink round the top of a hole."
+        case (.top, .both):
+            "Slopes down on both sides of the vector, leaving a sharp ridge along it."
+        case (.bottom, .inside):
+            "Rises into the shapes from their outline: bevels a part's top edge before a profile on the same vectors cuts it out."
+        case (.bottom, .outside):
+            "Rises outward from the shapes' outline: bevels the rim of a hole or pocket cut on the same vectors."
+        case (.bottom, .both):
+            "A V-groove along the vector, rising on both sides of it."
+        }
+    }
+
+    var body: some View {
+        let p = params
+        let depth = p.depth(with: tool)
+        Section("Chamfer") {
+            Picker("Side", selection: Binding(get: { p.side }, set: { var q = p; q.side = $0; set(q) })) {
+                ForEach(ChamferParams.Side.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Picker("Vector is the", selection: Binding(get: { p.edge }, set: { var q = p; q.edge = $0; set(q) })) {
+                ForEach(ChamferParams.Edge.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .help("Top edge: the bevel slopes down away from the vector (Vectric's Down). Bottom edge: it rises away from the vector to the surface (Vectric's Up).")
+            SectionNote(text: summary)
+            LengthField(title: "Width", mm: Binding(get: { p.width }, set: { var q = p; q.width = max(0.01, $0); set(q) }), units: units,
+                        help: "The bevel's width across the top; its depth follows from the bit's angle")
+            if tool.shape.isTapered {
+                LengthField(title: "Depth", mm: Binding(get: { depth }, set: { var q = p; q.width = max(0.01, ChamferParams.width(depth: $0, tool: tool)); set(q) }),
+                            units: units, help: "The bevel's height; changing it changes the width through the bit's angle")
+                LabeledContent("Angle", value: String(format: "%.1f° from vertical", tool.includedAngle / 2))
+            }
+            LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }), units: units,
+                        help: "Where the top of the bevel is: 0 on the material top, or the floor of a pocket or step", minimum: 0)
+            PassDepthRows(passDepth: p.passDepth, depth: depth, tool: tool, units: units) { var q = p; q.passDepth = $0; set(q) }
+            Toggle("Sharp corners", isOn: Binding(get: { p.sharpCorners }, set: { var q = p; q.sharpCorners = $0; set(q) }))
+                .help("Raise the bit along each corner's bisector so the bevel's faces meet in a crisp line, instead of a rounded corner")
+            Picker("Direction", selection: Binding(get: { p.direction }, set: { var q = p; q.direction = $0; set(q) })) {
+                ForEach(CutDirection.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if !tool.shape.isTapered {
+                SectionNote(text: "Chamfers need a V-bit or engraving bit.", warning: true)
+            } else if p.startDepth + depth > min(tool.taperHeight, tool.fluteLength) + 1e-6 {
+                SectionNote(text: "Deeper than the bit's V (\(len(min(tool.taperHeight, tool.fluteLength)))): the bevel's top comes out as a step.",
+                            warning: true)
+            }
+        }
+    }
+}
+
+/// Fluting: the flute's depth and how it ramps in and out (Vectric's flute type, ramp length or %, linear or smooth).
+struct FlutingSection: View {
+    let params: FlutingParams
+    let tool: Tool
+    let units: LengthUnit
+    let set: (FlutingParams) -> Void
+
+    enum LengthKind: String, CaseIterable, Identifiable {
+        case distance, percent
+        var id: String { rawValue }
+        var label: String { self == .distance ? "Distance" : "Percent" }
+    }
+
+    var body: some View {
+        let p = params
+        Section("Fluting") {
+            LengthField(title: "Flute depth", mm: Binding(get: { p.depth }, set: { var q = p; q.depth = max(0.01, $0); set(q) }), units: units,
+                        help: "Measured down from the start depth")
+            LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }), units: units,
+                        help: "Where the flute is measured from: 0 on the material top, or the floor of a pocket or step", minimum: 0)
+            Picker("Ramp", selection: Binding(get: { p.ramp }, set: { var q = p; q.ramp = $0; set(q) })) {
+                ForEach(FlutingParams.Ramp.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if p.ramp != .none {
+                Picker("Ramp length", selection: Binding(get: { p.rampPercent == nil ? LengthKind.distance : .percent }, set: {
+                    var q = p
+                    q.rampPercent = $0 == .percent ? (p.rampPercent ?? 0.5) : nil
+                    set(q)
+                })) {
+                    ForEach(LengthKind.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let percent = p.rampPercent {
+                    PercentField(title: "Length of each ramp", fraction: Binding(get: { percent }, set: { var q = p; q.rampPercent = $0; set(q) }))
+                    SectionNote(text: p.ramp == .both ? "Of half the flute's length: 100% ramps all the way to the middle."
+                                                      : "Of the flute's length: 100% ramps over the whole flute.")
+                } else {
+                    LengthField(title: "Length of each ramp", mm: Binding(get: { p.rampLength }, set: { var q = p; q.rampLength = max(0, $0); set(q) }), units: units,
+                                help: "Length of each ramp; a flute too short for it ramps as far as it can")
+                }
+                Picker("Ramp shape", selection: Binding(get: { p.rampShape }, set: { var q = p; q.rampShape = $0; set(q) })) {
+                    ForEach(FlutingParams.RampShape.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+            PassDepthRows(passDepth: p.passDepth, depth: p.depth, tool: tool, units: units) { var q = p; q.passDepth = $0; set(q) }
+            SectionNote(text: "A flute ramped at one end only starts at its vector's start point; one that's the same both ways is cut from the nearer end. Open and closed vectors both work; on a wrapped rotary job a line along the blank becomes a flute round a column.")
+            if !FlutingParams.suits(tool.shape) {
+                SectionNote(text: "Fluting is meant for a ball nose, core box or V-bit: this bit leaves square-bottomed flutes.", warning: true)
+            } else if p.startDepth + p.depth > tool.fluteLength + 1e-6 {
+                SectionNote(text: "Deeper than the tool's cutting length.", warning: true)
+            }
+        }
+    }
+}
+
+/// Prism carving: the prism's depth (a full prism by default, Vectric's "Set Depth for Full Prism") and passes.
+struct PrismSection: View {
+    let params: PrismParams
+    let op: CAMOperation
+    let project: Project
+    let units: LengthUnit
+    let set: (PrismParams) -> Void
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+
+    var body: some View {
+        let p = params
+        let tool = op.tool
+        let full = project.fullPrismDepth(for: op)
+        let depth = p.depth ?? full
+        Section("Prism") {
+            Toggle("Full prism", isOn: Binding(get: { p.depth == nil }, set: { var q = p; q.depth = $0 ? nil : max(0.01, full); set(q) }))
+                .help("Deep enough everywhere for the slopes to meet in a ridge, from the widest part of the shapes and the bit's angle")
+            if let d = p.depth {
+                LengthField(title: "Prism depth", mm: Binding(get: { d }, set: { var q = p; q.depth = max(0.01, $0); set(q) }), units: units,
+                            help: "Measured down from the start depth; shallower than a full prism leaves a flat top where the shapes are wide")
+            }
+            LabeledContent(p.depth == nil ? "Prism depth" : "Full prism depth", value: len(full))
+            LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }), units: units,
+                        help: "Where the prism is calculated from: 0 on the material top, or the floor of a pocket or step", minimum: 0)
+            PassDepthRows(passDepth: p.passDepth, depth: depth, tool: tool, units: units) { var q = p; q.passDepth = $0; set(q) }
+            Picker("Direction", selection: Binding(get: { p.direction }, set: { var q = p; q.direction = $0; set(q) })) {
+                ForEach(CutDirection.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            SectionNote(text: "The tip runs round the outline at the prism's depth and the shape rises to a ridge along its middle. The bit cuts past the outline too: clear round it with a pocket, or cut it out with a profile.")
+            if !tool.shape.isTapered {
+                SectionNote(text: "Prism carving needs a V-bit.", warning: true)
+            } else if p.startDepth + depth > min(tool.taperHeight, tool.fluteLength) + 1e-6 {
+                SectionNote(text: "Deeper than the bit's V (\(len(min(tool.taperHeight, tool.fluteLength)))): its slopes stop at a step. Use a larger V-bit or a smaller depth.",
+                            warning: true)
             }
         }
     }

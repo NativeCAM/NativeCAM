@@ -150,6 +150,9 @@ struct SidebarView: View {
         case .finish3D: "mountain.2"
         case .rounding: "cylinder"
         case .rotaryFinish: "rotate.3d"
+        case .chamfer: "skew"
+        case .fluting: "line.diagonal"
+        case .prism: "triangle"
         }
     }
 
@@ -232,6 +235,12 @@ struct AddOperationMenu: View {
             Button("Pocket") { add(.pocket) }
             Button("Drill") { add(.drill) }
             Button("V-carve") { add(.vcarve) }
+            Button("Chamfer") { add(.chamfer) }
+                .help("Bevel the edges of closed shapes with a V-bit")
+            Button("Fluting") { add(.fluting) }
+                .help("Cut along vectors with a ball nose or V-bit, ramping in and out at the ends")
+            Button("Prism") { add(.prism) }
+                .help("Carve shapes as a raised bevel rising to a ridge along their middle, with a V-bit")
             Divider()
             if project.stock.rotary == nil {
                 Button("3D Roughing") { add(.rough3D) }
@@ -253,7 +262,7 @@ struct AddOperationMenu: View {
         }
     }
 
-    enum Kind { case profile, pocket, drill, vcarve, rough3D, finish3D, rounding, rotaryFinish }
+    enum Kind { case profile, pocket, drill, vcarve, chamfer, fluting, prism, rough3D, finish3D, rounding, rotaryFinish }
 
     private func add(_ kind: Kind) {
         let shapes = kind == .rounding ? [] : workspace.selectedShapeIDs
@@ -343,6 +352,26 @@ enum ShapeFactory {
                                 shapeIDs: shapes, tool: endMill)
         case .vcarve:
             return CAMOperation(name: "V-carve", kind: .vcarve(VCarveParams()), shapeIDs: shapes, tool: vBit)
+        case .chamfer:
+            // A 90° bit for 45° bevels. On shapes a profile already cuts, bevel the edge it leaves (the part's top edge
+            // before an outside cut-out, a hole's rim with an inside one); otherwise the vector is the bevel's top.
+            let bit = pick({ $0.shape == .vBit && abs($0.includedAngle - 90) < 0.5 }, 6)
+            let cutBy = project.operations.compactMap { op -> CutSide? in
+                guard op.enabled, case let .profile(p) = op.kind, p.side != .on, !Set(op.shapeIDs).isDisjoint(with: shapes) else { return nil }
+                return p.side
+            }.first
+            var params = ChamferParams()
+            if let side = cutBy {
+                params.side = side == .outside ? .inside : .outside
+                params.edge = .bottom
+            }
+            return CAMOperation(name: "Chamfer", kind: .chamfer(params), shapeIDs: shapes, tool: bit)
+        case .fluting:
+            let ball = pick({ $0.shape == .ballNose }, 7)
+            return CAMOperation(name: "Fluting", kind: .fluting(FlutingParams(depth: min(0.125.inch, t / 2))), shapeIDs: shapes, tool: ball)
+        case .prism:
+            let bit = pick({ $0.shape == .vBit && abs($0.includedAngle - 90) < 0.5 }, 6)
+            return CAMOperation(name: "Prism", kind: .prism(PrismParams()), shapeIDs: shapes, tool: bit)
         case .rough3D:
             let (ids, boundary) = modelBoundary(shapes, project: project)
             return CAMOperation(name: "3D Roughing", kind: .rough3D(Rough3DParams(boundary: boundary)), shapeIDs: ids, tool: endMill)

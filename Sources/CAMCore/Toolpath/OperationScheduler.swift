@@ -4,7 +4,8 @@ import Foundation
 ///
 /// On a manual-change machine every tool change is a stop for a collet swap and a touch-off, minutes that dwarf any
 /// air-time saving, so the fewest changes win and the user's order breaks ties. An operation stays after:
-/// - everything inside the outline it cuts through (parts are cut free last, never finished while held by tabs),
+/// - everything inside the outline it cuts through (parts are cut free last, never finished while held by tabs; a
+///   chamfer, flute or prism on the outline itself counts as inside it),
 /// - 3D roughing of the same model (when it's the finish), and
 /// - any earlier operation whose area overlaps its own (the user's order may carry intent there).
 /// Disabled operations aren't machined, so they keep their place next to the operation they followed.
@@ -44,6 +45,12 @@ public enum OperationScheduler {
             let op = ops[idx]
             return project.shapes(for: op).map(\.bounds).filter { !$0.isEmpty }.map { $0.insetBy(-op.tool.radius) }
         }
+        // The part an operation works on, for whether a cut-out frees it: its area, but a chamfer, flute or prism
+        // shapes the part drawn, however wide its V-bit (a chamfer on a part's outline comes before its cut-out).
+        let parts: [[Rect2]] = enabled.indices.map { k in
+            let op = ops[enabled[k]]
+            return op.kind.followsVectors ? project.shapes(for: op).map(\.bounds).filter { !$0.isEmpty } : boxes[k]
+        }
         // On rotary stock a profile to the full thickness only reaches the axis, and the blank stays in the chuck.
         let flat = project.stock.rotary == nil
         func cutsThrough(_ op: CAMOperation) -> Bool {
@@ -65,9 +72,9 @@ public enum OperationScheduler {
         for j in 0..<m {
             for i in 0..<m where i != j {
                 let a = ops[enabled[i]], b = ops[enabled[j]]
-                let aFreesB = cutsThrough(a) && inside(boxes[j], boxes[i])
+                let aFreesB = cutsThrough(a) && inside(parts[j], boxes[i])
                 var hard = false
-                if cutsThrough(b), inside(boxes[i], boxes[j]), !aFreesB {
+                if cutsThrough(b), inside(parts[i], boxes[j]), !aFreesB {
                     hard = true
                 } else if case .finish3D = b.kind, case .rough3D = a.kind, !Set(a.shapeIDs).isDisjoint(with: b.shapeIDs) {
                     hard = true
