@@ -480,6 +480,73 @@ struct InlayTests {
         #expect(issues.filter { $0.severity != .info }.isEmpty, "\(issues.map(\.text))")
     }
 
+    // MARK: Links
+
+    /// A plug on its own board, as the user exports it: default inlay settings, the PRO6060 with Mach4. The design is
+    /// the L with a hole, or the text "JOY" (2 in Helvetica Bold, as in issue #17), whose band and counters are wide
+    /// enough for the end mill's rings to link across floors it has already cut.
+    static func deepPlug(pocketDepth: Double, clearance: Tool?, text: Bool) -> Project {
+        let shapes: [DesignShape]
+        if text {
+            shapes = [DesignShape(name: "JOY", kind: .text(TextSpec(string: "JOY", capHeight: 2.inch)), position: Vec2(4.inch, 2.5.inch))]
+        } else {
+            shapes = [lShape(at: Vec2(4.inch, 2.5.inch)),
+                      DesignShape(name: "Hole", kind: .circle(radius: 3), position: Vec2(4.inch + 8, 2.5.inch - 8))]
+        }
+        let plug = CAMOperation(name: "Inlay plug", kind: .vcarve(VCarveParams(clearanceTool: clearance, inlay: VCarveInlay(
+            role: .plug, pocketDepth: pocketDepth))), shapeIDs: shapes.map(\.id), tool: vBit60)
+        let stock = Stock(width: 8.inch, height: 5.inch, thickness: 0.75.inch, materialName: "Walnut")
+        return Project(name: "Deep plug", displayUnits: .inch, stock: stock, shapes: shapes, operations: [plug])
+    }
+
+    /// Sideways rapids below the material top, as "from → to" text.
+    static func lowRapids(_ tps: [Toolpath]) -> [String] {
+        var out: [String] = []
+        for tp in tps {
+            tp.forEachMotion { s, m in
+                guard m.kind == .rapid, s.xy.distance(to: m.end.xy) > 1e-6, min(s.z, m.end.z) < -1e-6 else { return }
+                out.append("\(tp.name): \(s) → \(m.end)")
+            }
+        }
+        return out
+    }
+
+    @Test(arguments: [0.15, 0.2, 0.22, 0.25, 0.3])
+    func deepPlugsNeverRapidSidewaysBelowTheSurface(inches: Double) throws {
+        for (text, clearance) in [(false, Self.eighth), (false, nil), (true, Self.eighth), (true, nil)] {
+            let project = Self.deepPlug(pocketDepth: inches.inch, clearance: clearance, text: text)
+            let job = CAMEngine.generate(project)
+            let label = "\(text ? "JOY" : "L"), P = \(inches) in, \(clearance == nil ? "V-bit alone" : "with the 1/8\" end mill")"
+            let low = Self.lowRapids(job.toolpaths)
+            #expect(low.isEmpty, "\(label): \(low.count) sideways rapids below Z 0, first \(low.first ?? "")")
+            let errors = job.issues.filter { $0.severity == .error }.map(\.message)
+            #expect(errors.isEmpty, "\(label): \(errors)")
+            let gcode = String(decoding: GoldenPostTests.post(project, job.toolpaths), as: UTF8.self)
+            let checks = GCodeCheck.run(gcode, toolpaths: job.toolpaths, project: project, dialect: .avidMach4)
+            let failed = checks.filter { $0.severity == .error }.map(\.text)
+            #expect(failed.isEmpty, "\(label): \(failed)")
+        }
+    }
+
+    @Test func startDepthCarvesInsideADeepPocketNeverRapidSidewaysBelowTheSurface() throws {
+        // A 6 mm pocket, then two V-carves on its floor from a 6 mm start depth: the links between them cross only the
+        // pocket's floor, more than the safe distance down.
+        let pocketShape = Fixture.rect(110, 70, at: Vec2(100, 75))
+        let a = Fixture.rect(20, 8, at: Vec2(75, 75)), b = Fixture.rect(20, 8, at: Vec2(125, 75))
+        let pocket = CAMOperation(kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 6))), shapeIDs: [pocketShape.id], tool: Fixture.endMill)
+        let carve = CAMOperation(kind: .vcarve(VCarveParams(startDepth: 6)), shapeIDs: [a.id, b.id], tool: Self.vBit60)
+        let project = Fixture.project(shapes: [pocketShape, a, b], ops: [pocket, carve])
+        let job = CAMEngine.generate(project)
+        let low = Self.lowRapids(job.toolpaths)
+        #expect(low.isEmpty, "\(low.count) sideways rapids below Z 0, first \(low.first ?? "")")
+        let errors = job.issues.filter { $0.severity == .error }.map(\.message)
+        #expect(errors.isEmpty, "\(errors)")
+        // The links still drop straight down to just above the pocket's floor rather than to the plunge height.
+        let carved = try #require(job.toolpaths.last)
+        let drops = carved.motions.filter { $0.kind == .rapid && $0.end.z < -1 }
+        #expect(!drops.isEmpty)
+    }
+
     // MARK: Setup sheet
 
     @Test func setupSheetNotesEachInlayToolpath() {

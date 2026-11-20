@@ -8,8 +8,9 @@ import Foundation
 //   nativecam-cli new <out.nativecam>                        write an empty project (default PRO6060 setup)
 //   nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]
 //                                                      generate toolpaths + G-code, check the file against the
-//                                                      controller and the toolpaths, print issues. Refuses to write a
-//                                                      file that fails the checks unless --force. --air-cut raises
+//                                                      controller and the toolpaths, print issues. With an error in
+//                                                      the job's checks or the file's, refuses to write it and exits
+//                                                      1 unless --force (warnings don't stop it). --air-cut raises
 //                                                      every Z by height (in the G-code's units); --sheet writes a
 //                                                      printable setup sheet
 //   nativecam-cli sim  <project.nativecam|file.tap> [--png out.png] [--cell mm] [--heights out.bin]
@@ -103,8 +104,18 @@ case "post":
         do { try html.write(toFile: sheet, atomically: true, encoding: .utf8) } catch { fail("Can't write \(sheet): \(error)") }
         print("Setup sheet -> \(sheet)")
     }
-    if checks.contains(where: { $0.severity == .error }) && !args.contains("--force") {
-        fail("The G-code failed its checks, so it wasn't written. Fix the errors above, or pass --force to write it anyway.")
+    // Errors in the job's own checks stop it as G-code check errors do, as the app's "Export Anyway?" does; warnings
+    // and notes don't.
+    let jobErrors = job.issues.filter { $0.severity == .error }.count
+    let fileErrors = checks.filter { $0.severity == .error }.count
+    if jobErrors + fileErrors > 0 {
+        let reason = [jobErrors > 0 ? "the job has \(jobErrors) error\(jobErrors == 1 ? "" : "s")" : nil,
+                      fileErrors > 0 ? "the G-code failed \(fileErrors) check\(fileErrors == 1 ? "" : "s")" : nil]
+            .compactMap { $0 }.joined(separator: " and ")
+        guard args.contains("--force") else {
+            fail("Not written: \(reason). Fix the errors above, or pass --force to write it anyway.")
+        }
+        print("Writing it anyway (--force): \(reason).")
     }
     let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? (args[1] as NSString).deletingPathExtension
     var outputs: [String] = []
