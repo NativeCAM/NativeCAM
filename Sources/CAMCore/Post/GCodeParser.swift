@@ -5,8 +5,11 @@ import Foundation
 /// Used to verify our own output (post → parse → compare) and to load `.tap`/`.nc` files from other CAM
 /// programs into the simulator. Coordinates come back in millimetres in the program's work coordinates, and a
 /// rotary A position (once the program moves A) in degrees on each motion. Canned drilling cycles (G73, G81–G83,
-/// G85, G86, G89) are expanded into the plain moves the controller makes, so their holes simulate. In inverse-time
-/// mode (G93) each feed move keeps its F word as `Motion.inverseTime`, so it's timed exactly as the controller runs it.
+/// G85, G86, G89) are expanded into the plain moves the controller makes, so their holes simulate. So are the tapping
+/// and boring cycles (G74, G76, G84, G87, G88) the controller the file is read for runs (`Dialect.CannedCycles`);
+/// controllers disagree on those (G76 is a lathe threading cycle on LinuxCNC), so without one they're skipped with a
+/// warning. In inverse-time mode (G93) each feed move keeps its F word as `Motion.inverseTime`, so it's timed exactly
+/// as the controller runs it.
 public struct GCodeProgram: Sendable {
     public struct Segment: Sendable {
         public var toolNumber: Int
@@ -17,8 +20,8 @@ public struct GCodeProgram: Sendable {
         public var lines: [Int] = []
     }
 
-    /// A program stop (M0 or M1), with the comment that tells the operator what to do: the one on its line, or else
-    /// on the line just before it.
+    /// A program stop (M0 or M1, or a boring cycle's stop for a retract by hand), with the comment that tells the
+    /// operator what to do: the one on its line, or else on the line just before it.
     public struct Pause: Sendable, Hashable {
         /// Source line (1-based).
         public var line: Int
@@ -28,7 +31,7 @@ public struct GCodeProgram: Sendable {
     public var segments: [Segment]
     public var warnings: [String]
     public var units: LengthUnit
-    /// Every M0 and M1 in the program, in order.
+    /// Every M0 and M1 in the program, and the stop at the bottom of each G88 hole, in order.
     public var pauses: [Pause] = []
 
     /// Converts the program into toolpaths using `tools` (matched by number) for geometry.
@@ -70,9 +73,20 @@ public enum GCodeParser {
         case automatic
     }
 
+    /// Seconds allowed at the bottom of each tap (G84, G74) for the spindle to stop and turn the other way. Neither the
+    /// planner nor the simulation models the spindle itself; a tapping head or a VFD reversing a slow spindle takes
+    /// about this long.
+    public static let tapReversalSeconds = 0.5
+    /// Seconds allowed each time a boring cycle (G76, G87) stops the spindle at its orientation angle.
+    public static let spindleOrientSeconds = 0.5
+    /// Seconds allowed at a G88 stop for the operator to wind the tool out of the hole by hand and press Cycle Start.
+    public static let manualRetractSeconds = 10.0
+
     /// `incrementalArcCenters` is the I/J mode before any G90.1/G91.1 (incremental on Mach4, Grbl and LinuxCNC).
-    public static func parse(_ text: String, dwellUnit: DwellUnit = .automatic,
-                             incrementalArcCenters: Bool = true) throws -> GCodeProgram {
+    /// `controller` says which tapping and boring cycles to expand, and how; without one they're read but skipped.
+    public static func parse(_ text: String, dwellUnit: DwellUnit = .automatic, incrementalArcCenters: Bool = true,
+                             controller: Dialect? = nil) throws -> GCodeProgram {
+        let cycles = controller?.cannedCycles ?? Dialect.CannedCycles()
         var units: LengthUnit = .inch
         var absolute = true
         var arcIncremental = incrementalArcCenters
@@ -92,6 +106,8 @@ public enum GCodeParser {
         var cycleQ = 0.0
         var cycleDwell = 0.0
         var cycleStartZ: Double?
+        // A boring tool's shift off the wall from signed I and J words, until a cycle ends or a Q word replaces it.
+        var cycleShift: Vec2?
         var warnings: [String] = []
         var warned = Set<String>()
         func warnOnce(_ s: String) { if warned.insert(s).inserted { warnings.append(s) } }
@@ -143,6 +159,7 @@ public enum GCodeParser {
                 case 0, 1, 2, 3:
                     motionMode = Int(g)
                     cycleStartZ = nil
+                    cycleShift = nil
                 case 4: dwellRequested = true
                 case 20: units = .inch
                 case 21: units = .mm
@@ -154,6 +171,7 @@ public enum GCodeParser {
                     // Cancels a cycle; later axis words without a G0/G1 are read as rapids.
                     if Self.isCycle(motionMode) || motionMode == Self.skippedCycle { motionMode = 0 }
                     cycleStartZ = nil
+                    cycleShift = nil
                 case 93: inverseTimeMode = true
                 case 94: inverseTimeMode = false
                 case 17, 40, 49, 54, 43, 61, 64: break
@@ -165,8 +183,14 @@ public enum GCodeParser {
                 case 98: retractToR = false
                 case 99: retractToR = true
                 case 74, 76, 84, 87, 88:
-                    warnOnce("Tapping and boring cycles (G\(Int(g))) aren't simulated; their holes won't show.")
-                    motionMode = Self.skippedCycle
+                    let code = Int(g)
+                    if cycles.expanded.contains(code) {
+                        if motionMode != code { cycleStartZ = nil }
+                        motionMode = code
+                    } else {
+                        warnOnce(Self.skippedCycleWarning(code, controller: controller))
+                        motionMode = Self.skippedCycle
+                    }
                 default: warnOnce("Unsupported G\(g) ignored.")
                 }
             }
@@ -210,32 +234,61 @@ public enum GCodeParser {
                 if let z = values["Z"] { cycleZ = units.toMM(z) }
                 if let q = values["Q"] { cycleQ = abs(units.toMM(q)) }
                 if let p = values["P"] { cycleDwell = dwellSeconds(p) }
+                if values["I"] != nil || values["J"] != nil {
+                    cycleShift = Vec2(units.toMM(values["I"] ?? 0), units.toMM(values["J"] ?? 0))
+                } else if values["Q"] != nil {
+                    cycleShift = nil
+                }
                 guard values["X"] != nil || values["Y"] != nil || values["Z"] != nil,
                       motionMode != Self.skippedCycle else { continue }
+                let noun = Self.cycleNoun(motionMode)
                 guard let rWord = cycleR, let zWord = cycleZ else {
-                    warnOnce("Line \(lineNo): a drilling cycle without its R or Z level was skipped.")
+                    warnOnce("Line \(lineNo): a \(noun) without its R or Z level was skipped.")
                     continue
                 }
-                if values["A"] != nil { warnOnce("A words in drilling cycles are ignored.") }
+                if values["A"] != nil { warnOnce("A words in canned cycles are ignored.") }
+                // Back boring starts under the part and bores upward from R to Z.
+                let backBore = motionMode == 87
+                if backBore {
+                    warnOnce("Back boring (G87) cuts under the material, which the simulation can't show: each bore is "
+                        + "carved as a hole right through, the width of the tool.")
+                }
+                if (motionMode == 84 || motionMode == 74), values["Q"] != nil {
+                    warnOnce("Line \(lineNo): tapping cycles are simulated in one pass; the Q word isn't read as a peck depth.")
+                }
+                // The boring tool's shift off the wall: signed I and J, or Q the controller's way.
+                let shift = cycleShift ?? cycles.shiftDirection * cycleQ
                 let repeats = max(1, min(Int(values["L"] ?? 1), 1000))
                 for _ in 0..<repeats {
                     if cycleStartZ == nil { cycleStartZ = pos.z }
                     // G91: R is measured from the Z the block starts at, and Z from the R level.
                     let rLevel = absolute ? rWord : pos.z + rWord
                     let bottom = absolute ? zWord : rLevel + zWord
-                    let clear = retractToR ? rLevel : max(cycleStartZ ?? rLevel, rLevel)
+                    // Back boring always returns to the starting height: its R level is under the part.
+                    let clear = retractToR && !backBore ? rLevel : max(cycleStartZ ?? rLevel, rLevel)
                     func xy(_ c: Character, _ cur: Double) -> Double {
                         guard let v = values[c] else { return cur }
                         return absolute ? units.toMM(v) : cur + units.toMM(v)
                     }
                     let hole = Vec2(xy("X", pos.x), xy("Y", pos.y))
-                    if pos.z < rLevel { emit(.rapid, Vec3(pos.x, pos.y, rLevel)) }
-                    if hole != pos.xy { emit(.rapid, Vec3(hole, pos.z)) }
-                    if pos.z != rLevel { emit(.rapid, Vec3(hole, rLevel)) }
-                    guard bottom < rLevel else {
-                        warnOnce("Line \(lineNo): a drilling cycle's Z is not below its R level, so it drills nothing.")
-                        continue
+                    if backBore {
+                        if hole != pos.xy { emit(.rapid, Vec3(hole, pos.z)) }
+                        guard bottom > rLevel else {
+                            warnOnce("Line \(lineNo): a back-boring cycle's Z is not above its R level, so it bores nothing.")
+                            continue
+                        }
+                    } else {
+                        if pos.z < rLevel { emit(.rapid, Vec3(pos.x, pos.y, rLevel)) }
+                        if hole != pos.xy { emit(.rapid, Vec3(hole, pos.z)) }
+                        if pos.z != rLevel { emit(.rapid, Vec3(hole, rLevel)) }
+                        guard bottom < rLevel else {
+                            let verb = ["tapping cycle": "taps", "boring cycle": "bores"][noun] ?? "drills"
+                            warnOnce("Line \(lineNo): a \(noun)'s Z is not below its R level, so it \(verb) nothing.")
+                            continue
+                        }
                     }
+                    let off = hole + shift
+                    func orient() { if Self.spindleOrientSeconds > 0 { emit(.dwell, pos, feed: Self.spindleOrientSeconds) } }
                     switch motionMode {
                     case 83 where cycleQ > 0, 73 where cycleQ > 0:
                         // G83 rapids out to R after each peck and back down to just above the last depth; G73 only
@@ -251,6 +304,43 @@ public enum GCodeParser {
                                 emit(.rapid, Vec3(hole, motionMode == 83 ? rLevel : depth + backOff))
                             }
                         }
+                    case 84, 74:
+                        // The spindle stops and reverses at the bottom, and the tap feeds back out along its thread.
+                        emit(.feed, Vec3(hole, bottom), feed: feed)
+                        emit(.dwell, pos, feed: Self.tapReversalSeconds)
+                        if cycleDwell > 0 { emit(.dwell, pos, feed: cycleDwell) }
+                        emit(.feed, Vec3(hole, cycles.tapFeedsOutToRetract ? clear : rLevel), feed: feed)
+                    case 88:
+                        // The spindle stops at the bottom and the program waits, as at an M0, while the operator winds
+                        // the tool out to R by hand; Cycle Start goes on from there.
+                        emit(.feed, Vec3(hole, bottom), feed: feed)
+                        if cycleDwell > 0 { emit(.dwell, pos, feed: cycleDwell) }
+                        pauses.append(GCodeProgram.Pause(line: lineNo, message: "G88: the spindle has stopped at the "
+                            + "bottom of the hole. Retract the tool by hand, then press Cycle Start."))
+                        emit(.dwell, pos, feed: Self.manualRetractSeconds)
+                        emit(.rapid, Vec3(hole, rLevel))
+                    case 76:
+                        // Fine boring: the spindle stops at its orientation angle and the tool steps off the wall, so
+                        // it doesn't score the bore on the way out, then steps back over the hole at the top.
+                        emit(.feed, Vec3(hole, bottom), feed: feed)
+                        if cycleDwell > 0 { emit(.dwell, pos, feed: cycleDwell) }
+                        orient()
+                        if off != hole { emit(.rapid, Vec3(off, bottom)) }
+                        emit(.rapid, Vec3(off, clear))
+                        if off != hole { emit(.rapid, Vec3(hole, clear)) }
+                    case 87:
+                        // Back boring: oriented and shifted, the tool goes down through the hole to R under the part,
+                        // steps back to the centre, starts and bores upward to Z, then leaves the same way.
+                        orient()
+                        if off != hole { emit(.rapid, Vec3(off, pos.z)) }
+                        emit(.rapid, Vec3(off, rLevel))
+                        if off != hole { emit(.rapid, Vec3(hole, rLevel)) }
+                        emit(.feed, Vec3(hole, bottom), feed: feed)
+                        if cycleDwell > 0 { emit(.dwell, pos, feed: cycleDwell) }
+                        orient()
+                        if off != hole { emit(.rapid, Vec3(off, bottom)) }
+                        emit(.rapid, Vec3(off, clear))
+                        if off != hole { emit(.rapid, Vec3(hole, clear)) }
                     default:
                         if motionMode == 83 || motionMode == 73 {
                             warnOnce("Line \(lineNo): a peck cycle without a Q depth was drilled in one pass.")
@@ -316,9 +406,31 @@ public enum GCodeParser {
         return GCodeProgram(segments: segments, warnings: warnings, units: units, pauses: pauses)
     }
 
-    /// Motion modes for the drilling cycles the parser expands, and the one it reads but doesn't simulate.
-    static func isCycle(_ mode: Int) -> Bool { [73, 81, 82, 83, 85, 86, 89].contains(mode) }
+    /// Motion modes for the canned cycles the parser expands (tapping and boring only for a controller that runs
+    /// them), and the one it reads but doesn't simulate.
+    static func isCycle(_ mode: Int) -> Bool { [73, 74, 76, 81, 82, 83, 84, 85, 86, 87, 88, 89].contains(mode) }
     static let skippedCycle = -84
+
+    static func cycleNoun(_ mode: Int) -> String {
+        switch mode {
+        case 74, 84: "tapping cycle"
+        case 76, 87, 88: "boring cycle"
+        default: "drilling cycle"
+        }
+    }
+
+    /// Why a tapping or boring cycle isn't simulated: no controller to read it for, one that means something else by
+    /// it, or one whose documentation doesn't list it.
+    static func skippedCycleWarning(_ code: Int, controller: Dialect?) -> String {
+        guard let controller else { return "Tapping and boring cycles (G\(code)) aren't simulated; their holes won't show." }
+        if let meaning = controller.cannedCycles.otherMeanings[code] {
+            return "G\(code) on \(controller.name) is \(meaning), so it isn't simulated."
+        }
+        let name = [74: "left-hand tapping", 76: "fine boring", 84: "tapping", 87: "back boring",
+                    88: "boring with a retract by hand"][code] ?? "a canned cycle"
+        return "G\(code) (\(name)) isn't among the codes \(controller.name) documents, so it isn't simulated; "
+            + "its holes won't show."
+    }
 
     static func stripComments(_ s: String) -> String {
         var out = ""

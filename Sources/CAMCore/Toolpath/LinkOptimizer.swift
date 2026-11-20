@@ -25,7 +25,9 @@ public struct KeepOut: Sendable {
 ///   it's short, and it doesn't run through a cut-through kerf (a freed part could have shifted);
 /// - **minimum retract**: rise only to the highest remaining material under the swept path plus the safe
 ///   distance (tabs and uncut stock count), or over clamps; then rapid down to just above the floor already
-///   cut at the entry point before feeding down.
+///   cut at the entry point before feeding down. A rapid never moves sideways below the material top: where that
+///   height would be below it (over a floor cut deeper than the safe distance), the link goes over at the safe
+///   distance above the top instead.
 /// Moves that cut are passed through unchanged and carved into the model as they go.
 enum LinkOptimizer {
     struct Settings {
@@ -91,6 +93,12 @@ enum LinkOptimizer {
                     height = min(height, settings.clearanceZ)
                 }
                 height = max(height, from.z, entryZ)
+                // Never sideways below the material top. Over a floor cut deeper than the safe distance (a deep
+                // toolpath's own earlier passes, or a pocket an earlier toolpath cut) the height above would be below
+                // Z 0. The model says that's clear, but nothing in the G-code does, and Z 0 is where the uncut
+                // material (an inlay plug's design, a pocket's walls) stands beside it. Go over at the safe distance
+                // above the top, as over uncut stock, and drop straight back down.
+                if height < -1e-9 { height = max(0, min(settings.safeDistance, settings.clearanceZ)) }
                 if height > from.z + 1e-9 { emit(.rapid(Vec3(from.xy, height))) }
                 emit(.rapid(Vec3(runEnd.xy, height)))
                 if entryZ < height - 1e-9 { emit(.rapid(Vec3(runEnd.xy, entryZ))) }

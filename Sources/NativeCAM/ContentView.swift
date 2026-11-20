@@ -299,7 +299,9 @@ struct ContentView: View {
         do {
             let data = try Data(contentsOf: url)
             let text = String(decoding: data, as: UTF8.self)
-            let program = url.pathExtension.lowercased() == "sbp" ? OpenSBPParser.parse(text) : try GCodeParser.parse(text)
+            // Tapping and boring cycles are read the way this project's controller runs them.
+            let program = url.pathExtension.lowercased() == "sbp" ? OpenSBPParser.parse(text)
+                : try GCodeParser.parse(text, controller: Dialect.for(project.machine))
             let fallback = library.tools.first ?? ToolLibrary.starter.tools[0]
             let tps = program.toolpaths(tools: library.tools, stock: project.stock, fallback: fallback)
             workspace.simulateProgram(tps, name: url.lastPathComponent, project: project)

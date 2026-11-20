@@ -349,6 +349,8 @@ public extension Dialect {
             d.dwell = .seconds
             d.m6 = .macro
             d.verified = false
+            // The controller isn't known, so neither is what it means by a tapping or boring cycle.
+            d.cannedCycles = Dialect.CannedCycles()
         }
         d.id = "vectric-pp"
         d.name = pp.name.isEmpty ? "Imported Vectric post" : pp.name

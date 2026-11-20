@@ -51,6 +51,33 @@ public struct Dialect: Hashable, Sendable {
         case none
     }
 
+    /// The tapping and boring canned cycles the controller runs, for simulating G-code written for it. Drilling cycles
+    /// (G73, G81–G83, G85, G86, G89) mean the same on every controller that has them, so they're always simulated.
+    public struct CannedCycles: Hashable, Sendable {
+        /// Cycles the controller runs with their usual milling meaning (Fanuc's, which Mach4 follows): 74 and 84
+        /// (left- and right-hand tapping), 76 (fine boring), 87 (back boring) and 88 (boring with a stop to retract
+        /// by hand). The others are read but not simulated.
+        public var expanded: Set<Int> = []
+        /// What the controller does with a cycle code it doesn't run that way, for the warning (76: "a lathe threading
+        /// cycle").
+        public var otherMeanings: [Int: String] = [:]
+        /// G84 and G74 feed all the way out to the retract height, G98's starting height included (LinuxCNC);
+        /// otherwise they feed out to R and rapid from there (Mach4, CNC12 and Fanuc).
+        public var tapFeedsOutToRetract = false
+        /// The way a Q word shifts a fine-boring or back-boring tool off the wall; signed I and J words give their own.
+        /// The controller's settings decide it: CNC12's parameter 136 starts at +Y; Mach4's manual points to bits of
+        /// parameter 5101 without saying what they mean, so +X is assumed. It only moves rapids inside the bore.
+        public var shiftDirection = Vec2(1, 0)
+
+        public init(expanded: Set<Int> = [], otherMeanings: [Int: String] = [:], tapFeedsOutToRetract: Bool = false,
+                    shiftDirection: Vec2 = Vec2(1, 0)) {
+            self.expanded = expanded
+            self.otherMeanings = otherMeanings
+            self.tapFeedsOutToRetract = tapFeedsOutToRetract
+            self.shiftDirection = shiftDirection
+        }
+    }
+
     /// The language the controller reads.
     public enum Language: Hashable, Sendable {
         case gcode
@@ -102,6 +129,8 @@ public struct Dialect: Hashable, Sendable {
     public var readsBack: Bool = true
     /// Dwells in the file all come from the toolpaths (false when a template post adds its own, say after M3).
     public var comparesDwells: Bool = true
+    /// The tapping and boring cycles G-code read for this controller simulates. NativeCAM never writes them.
+    public var cannedCycles = CannedCycles()
 
     /// How the controller is told to blend corners.
     public enum Blending: Hashable, Sendable {
@@ -171,6 +200,9 @@ public struct Dialect: Hashable, Sendable {
     ///
     /// Rotary: Mach4 drives A, B and C in any motion command and documents G93. Avid's own rotary posts all feed in
     /// G93, and nothing documents how Mach4 applies F to a G94 move that turns A, so `rotaryFeed` is unknown.
+    ///
+    /// Canned cycles: the Mach4 Mill G-code manual documents all five tapping and boring cycles with Fanuc's meaning
+    /// (G74, G76 and G87 marked as depending on the machine's configuration).
     public static let avidMach4 = Dialect(
         id: "avid-mach4", name: "Avid Mach4", maxLineLength: nil, lineEnding: "\r\n",
         allowedG: Set([0, 1, 2, 3, 4, 9, 10, 12, 13, 15, 16, 17, 18, 19, 20, 21, 28, 28.1, 30, 31, 32, 40, 41, 42, 43, 49,
@@ -180,7 +212,7 @@ public struct Dialect: Hashable, Sendable {
         allowedLetters: Set("ABCDFGHIJKLMNPQRSTUVWXYZ"), strict: false, acceptedUnits: [.inch, .mm],
         dwell: .secondsWithDecimal, arcCheck: .absolute(0.0127), maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
         coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: true,
-        rotaryAxes: Set("ABC"), inverseTime: true)
+        cannedCycles: CannedCycles(expanded: [74, 76, 84, 87, 88]), rotaryAxes: Set("ABC"), inverseTime: true)
 
     /// The dialect a machine's post writes; nil when NativeCAM has no post for its controller yet.
     public static func `for`(_ machine: MachineProfile) -> Dialect? {
@@ -264,6 +296,12 @@ public struct Dialect: Hashable, Sendable {
         d.rotaryAxes = Set("ABC")
         d.rotaryFeed = .linearAxesOnly
         d.inverseTime = true
+        // G74 and G84 tap with a floating holder (since 2.8) and feed out to the retract height; G76 threads on a lathe,
+        // and G87 and G88 are "accepted, but the behavior is undefined".
+        d.cannedCycles = CannedCycles(expanded: [74, 84],
+                                      otherMeanings: [76: "a lathe threading cycle", 87: "accepted but not implemented",
+                                                      88: "accepted but not implemented"],
+                                      tapFeedsOutToRetract: true)
         return d
     }()
 
@@ -304,6 +342,9 @@ public struct Dialect: Hashable, Sendable {
         d.lengthOffset = .always
         // Avid's EX rotary runs on A. Whether CNC12 itself takes G93 isn't confirmed.
         d.rotaryAxes = ["A"]
+        // CNC12's Mill operator's manual (v4.20) documents G74, G76 and G84, with G76's Q shift toward +Y by default;
+        // it doesn't list G87 or G88.
+        d.cannedCycles = CannedCycles(expanded: [74, 76, 84], shiftDirection: Vec2(0, 1))
         return d
     }()
 
@@ -368,6 +409,11 @@ public struct Dialect: Hashable, Sendable {
             d.allowedM = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 56, 62, 63, 64, 65, 66, 67, 68]
             d.allowedLetters = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
             d.rotaryAxes = Set("ABC")
+            // Its README lists only the drilling cycles and lathe G76; the core parses an experimental G84.
+            let rejected = "rejected as unsupported (error 20)"
+            d.cannedCycles = CannedCycles(otherMeanings: [74: rejected, 76: "a lathe threading cycle",
+                                                          84: "experimental and not in its documentation",
+                                                          87: rejected, 88: rejected])
             // Without an ATC, M6 depends on $341: modes 1–3 stop with a compatible sender, mode 4 ignores it.
             d.m6 = toolChange == .atc ? .macro : (senderPausesOnM6(controller.sender) ? .senderDependent : .recordsOnly)
         case .fluidNC:

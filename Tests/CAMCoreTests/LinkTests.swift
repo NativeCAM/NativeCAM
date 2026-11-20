@@ -78,6 +78,27 @@ struct LinkTests {
         #expect(midRapidsUp.count <= 1, "\(midRapidsUp.count) retracts between the squares")
     }
 
+    @Test func deepPocketLinksNeverRapidSidewaysBelowTheTop() throws {
+        // Deeper than the safe distance below its earlier passes, a pocket round islands links across its own floor.
+        let outline = DesignShape(kind: .rectangle(width: 120, height: 80, cornerRadius: 0), position: Vec2(100, 75))
+        let islands = [Vec2(70, 75), Vec2(100, 90), Vec2(130, 65)].map { DesignShape(kind: .circle(radius: 6), position: $0) }
+        let shapes = [outline] + islands
+        let op = CAMOperation(kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 15))), shapeIDs: shapes.map(\.id),
+                              tool: ToolLibrary.starter.tool(number: 1)!)
+        let p = Project(displayUnits: .mm, stock: Stock(width: 200, height: 150, thickness: 20, clearanceHeight: 10, plungeHeight: 2),
+                        shapes: shapes, operations: [op])
+        let job = CAMEngine.generate(p)
+        let tp = try #require(job.toolpaths.first)
+        var low = 0
+        tp.forEachMotion { s, m in
+            if m.kind == .rapid, s.xy.distance(to: m.end.xy) > 1e-6, min(s.z, m.end.z) < -1e-6 { low += 1 }
+        }
+        #expect(low == 0, "\(low) sideways rapids below the top")
+        #expect(!job.issues.contains { $0.severity == .error })
+        // Still no slower than going up to safe Z, and the part comes out the same.
+        try check(p)
+    }
+
     @Test func cutOutStartsBelowWhatRoughingCleared() throws {
         let p = Project.demoRelief()
         let job = CAMEngine.generate(p)
