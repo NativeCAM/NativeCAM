@@ -42,6 +42,7 @@ struct RotaryBlankRows: View {
                 guard var b = project.stock.rotary else { return }
                 b.layout = layout == .faces ? nil : layout
                 project.stock.setRotary(b)
+                project.fitSpiralsToSheet()
                 // On a wrapped job each shape's place on the sheet sets its angle; index angles don't apply.
                 if layout == .wrapped { for i in project.operations.indices { project.operations[i].indexAngles = nil } }
             })) {
@@ -73,6 +74,7 @@ struct RotaryBlankRows: View {
             guard var blank = project.stock.rotary else { return }
             blank[keyPath: key] = v
             project.stock.setRotary(blank)
+            project.fitSpiralsToSheet()
         })
     }
 }

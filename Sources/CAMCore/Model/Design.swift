@@ -32,6 +32,14 @@ public enum ShapeKind: Hashable, Codable, Sendable {
     case paths([Polyline])
     /// A 3D model (STL/OBJ/3MF/USDZ…) carved with 3D toolpaths; its outline is the silhouette seen from above.
     case model(ModelSpec)
+    /// Spiral lines for a wrapped rotary job (a rope or barley twist): see `SpiralSpec`.
+    case spiral(SpiralSpec)
+
+    /// The project file format a shape of this kind needs: spirals are format 5 (older builds can't read them).
+    public var requiredFormatVersion: Int {
+        if case .spiral = self { return 5 }
+        return 1
+    }
 
     public var label: String {
         switch self {
@@ -43,6 +51,7 @@ public enum ShapeKind: Hashable, Codable, Sendable {
         case .text: "Text"
         case .paths: "Vectors"
         case .model: "3D Model"
+        case .spiral: "Spiral"
         }
     }
 }
@@ -117,6 +126,8 @@ public struct DesignShape: Identifiable, Hashable, Codable, Sendable {
             return paths
         case let .model(spec):
             return spec.oriented.silhouette
+        case let .spiral(spec):
+            return spec.lines
         }
     }
 
@@ -214,5 +225,45 @@ public enum TextOutliner {
         }
         finish(closed: true)
         return loops.filter { $0.count >= 3 }
+    }
+}
+
+/// Spiral lines laid out on a wrapped rotary job's sheet: `starts` parallel lines that each climb once around the
+/// blank for every `pitch` along it. On the unrolled sheet they're straight lines longer than the sheet is high;
+/// wrapped, each becomes a helix, as in a rope or barley twist. Cut them on the line (a profile) with a ball nose or
+/// V-bit. Local coordinates are centred on the shape's position, with the starts spread evenly around the blank.
+public struct SpiralSpec: Hashable, Codable, Sendable {
+    /// Number of separate spiral lines, evenly spaced around the blank.
+    public var starts: Int
+    /// Distance along the blank (X) for one turn of each line, mm.
+    public var pitch: Double
+    /// Length along the blank (X), mm.
+    public var length: Double
+    /// Height of the sheet one turn climbs (once around the blank at the wrap diameter), mm. Kept in step with the
+    /// sheet by `Project.fitSpiralsToSheet()`.
+    public var around: Double
+    /// Twist direction. Right-handed (false) turns like an ordinary screw thread: seen from above, the lines run
+    /// down to the right.
+    public var leftHanded: Bool
+
+    public init(starts: Int = 2, pitch: Double, length: Double, around: Double, leftHanded: Bool = false) {
+        self.starts = starts
+        self.pitch = pitch
+        self.length = length
+        self.around = around
+        self.leftHanded = leftHanded
+    }
+
+    /// Turns each line makes along `length`.
+    public var turns: Double { length / max(pitch, 1e-9) }
+
+    /// The lines, centred on the origin.
+    public var lines: [Polyline] {
+        let n = max(1, starts)
+        let rise = turns * around * (leftHanded ? 1 : -1)
+        return (0..<n).map { k in
+            let y = around * Double(k) / Double(n)
+            return Polyline([Vec2(-length / 2, y - rise / 2), Vec2(length / 2, y + rise / 2)], closed: false)
+        }
     }
 }

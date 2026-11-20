@@ -312,8 +312,8 @@ struct RotaryWrapTests {
             p.stock.setRotary(b)
         }
         has("each shape's place on the sheet sets the angle") { $0.operations[0].indexAngles = [0, 90] }
-        has("Pockets aren't supported on wrapped") { p in
-            p.operations[0].kind = .pocket(PocketParams(depth: DepthSettings(cutDepth: 1)))
+        has("3D toolpaths aren't supported on rotary stock") { p in
+            p.operations[0].kind = .finish3D(Finish3DParams())
         }
         has("no inverse-time feed (G93)", .error, ControllerPostTests.controller(.centroid, units: .mm))
         has("can't be done by hand") { $0.machine.rotary?.turnsByHand = true }

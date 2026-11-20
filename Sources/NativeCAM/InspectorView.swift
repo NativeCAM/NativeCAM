@@ -364,6 +364,21 @@ struct ShapeInspector: View {
                 .help("Any installed font's PostScript name")
             LengthField(title: "Cap height", mm: Binding(get: { spec.capHeight }, set: { var s = spec; s.capHeight = max(0.5, $0); shape.kind = .text(s) }), units: units)
             LengthField(title: "Letter spacing", mm: Binding(get: { spec.letterSpacing }, set: { var s = spec; s.letterSpacing = $0; shape.kind = .text(s) }), units: units)
+        case let .spiral(spec):
+            let set: (SpiralSpec) -> Void = { shape.kind = .spiral($0) }
+            IntField(title: "Starts", value: Binding(get: { spec.starts }, set: { var s = spec; s.starts = $0; set(s) }), range: 1...24)
+            LengthField(title: "Pitch", mm: Binding(get: { spec.pitch }, set: { var s = spec; s.pitch = max(0.5, $0); set(s) }), units: units,
+                        help: "Distance along the blank for one turn of each line")
+            LengthField(title: "Length", mm: Binding(get: { spec.length }, set: { var s = spec; s.length = max(0.5, $0); set(s) }), units: units,
+                        help: "Along the blank (X)")
+            Picker("Twist", selection: Binding(get: { spec.leftHanded }, set: { var s = spec; s.leftHanded = $0; set(s) })) {
+                Text("Right hand").tag(false)
+                Text("Left hand").tag(true)
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Turns", value: spec.turns.formatted(.number.precision(.fractionLength(0...2))))
+            Text("Each line climbs once around the blank per pitch: on the unrolled sheet it runs past the seam and keeps going. Cut it on the line with a ball nose or V-bit.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         case let .paths(paths):
             LabeledContent("Contours", value: "\(paths.count) (\(paths.filter(\.isClosed).count) closed)")
             Text("Imported vectors can be moved, rotated and scaled.").font(.caption).foregroundStyle(.secondary)

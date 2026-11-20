@@ -134,6 +134,7 @@ struct SidebarView: View {
         case .text: "textformat"
         case .paths: "scribble.variable"
         case .model: "cube"
+        case .spiral: "tornado"
         }
     }
 
@@ -202,6 +203,10 @@ struct AddShapeMenu: View {
         Button("Star") { add(ShapeFactory.star(project)) }
         Divider()
         Button("Text") { add(ShapeFactory.text(project)) }
+        if project.stock.rotary?.isWrapped == true {
+            Button("Spiral") { add(ShapeFactory.spiral(project)) }
+                .help("Spiral lines that wrap around the blank, for a rope or barley twist")
+        }
     }
 
     private func add(_ shape: DesignShape) {
@@ -255,6 +260,11 @@ enum ShapeFactory {
     }
     static func circle(_ p: Project) -> DesignShape {
         DesignShape(kind: .circle(radius: size(p, 0.15)), position: center(p))
+    }
+    /// Two starts, four turns over most of the blank's length, climbing the sheet's full height each turn.
+    static func spiral(_ p: Project) -> DesignShape {
+        let length = p.stock.width * 0.8
+        return DesignShape(kind: .spiral(SpiralSpec(starts: 2, pitch: length / 4, length: length, around: p.stock.height)), position: center(p))
     }
     static func ellipse(_ p: Project) -> DesignShape {
         DesignShape(kind: .ellipse(radiusX: size(p, 0.25), radiusY: size(p, 0.15)), position: center(p))

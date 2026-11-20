@@ -25,6 +25,10 @@ public enum RotaryWrap {
     public static let maxInverseTime = 999_999.9999
     /// Decimal places of an inverse-time F word (as Avid's Fusion wrap posts write it).
     public static let inverseTimeDecimals = 4
+    /// Largest turn in one move, degrees. Longer turns are split, as Vectric's rotary posts do by default
+    /// (`MAXIMUM_ROTATION`), so a controller that takes the short way round (Mach4 with Rollover on) still turns the
+    /// right way. The pieces lie on the same helix, so nothing about the cut changes.
+    public static let maxTurnPerMove = 90.0
 
     /// The angle, degrees (right-hand rule about +X, before a reversed axis flips it), the blank turns to so that
     /// the sheet's line `y` is under the tool.
@@ -95,7 +99,8 @@ public enum RotaryWrap {
     /// - runs of short lines that lie within half the tolerance of one straight line become that line, so the
     ///   controller isn't fed thousands of tiny inverse-time moves;
     /// - a rapid that would turn the blank below `clearanceZ` goes up, across and back down, because the blank only
-    ///   turns with the tool clear of it.
+    ///   turns with the tool clear of it;
+    /// - a move that turns the blank more than `maxTurnPerMove` is split into equal pieces.
     static func prepare(_ tp: Toolpath, diameter: Double, clearanceZ: Double, tolerance: Double) -> Toolpath {
         var lines: [Motion] = []
         var p = tp.start
@@ -113,9 +118,34 @@ public enum RotaryWrap {
             }
         }
         var t = tp
-        t.motions = merged(lines, start: tp.start, tolerance: tolerance / 2)
+        t.motions = split(merged(lines, start: tp.start, tolerance: tolerance / 2), start: tp.start,
+                          maxSpan: maxTurnPerMove / 360 * .pi * diameter)
         t.wrapDiameter = diameter
         return t
+    }
+
+    /// Splits rapids and feed lines that span more than `maxSpan` of the sheet's Y into equal pieces.
+    static func split(_ motions: [Motion], start: Vec3, maxSpan: Double) -> [Motion] {
+        var out: [Motion] = []
+        var p = start
+        for m in motions {
+            defer { if m.kind != .dwell { p = m.end } }
+            let span = abs(m.end.y - p.y)
+            guard m.kind == .rapid || m.kind == .feed, span > maxSpan + 1e-9 else {
+                out.append(m)
+                continue
+            }
+            let n = Int((span / maxSpan).rounded(.up))
+            for i in 1...n {
+                var piece = m
+                if i < n {
+                    let f = Double(i) / Double(n)
+                    piece.end = Vec3(p.x + (m.end.x - p.x) * f, p.y + (m.end.y - p.y) * f, p.z + (m.end.z - p.z) * f)
+                }
+                out.append(piece)
+            }
+        }
+        return out
     }
 
     /// Joins consecutive feed lines at one feed rate while every point dropped stays within `tolerance` of the
