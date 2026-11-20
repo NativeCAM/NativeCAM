@@ -24,7 +24,7 @@ public enum SetupSheet {
             func rotaryRow(_ blank: RotaryStock) -> String {
                 let letter = esc(machine.rotary?.letter.rawValue ?? "A")
                 guard blank.isWrapped else {
-                    return "<dt>Rotary</dt><dd>Turns on \(letter) between faces, with the tool at safe Z. Raise the tool clear of the chuck and tailstock before starting.</dd>"
+                    return "<dt>Rotary</dt><dd>\(esc(RotaryOutput.setupNote(machine))) Raise the tool clear of the chuck and tailstock before starting.</dd>"
                 }
                 return "<dt>Rotary</dt><dd>Designs wrap around \(len(blank.wrapDiameterOrBlank)): the middle of the sheet is the top of the blank at \(letter)0, and \(letter) turns while the tool cuts. Raise the tool clear of the chuck and tailstock before starting.</dd>"
             }
@@ -93,6 +93,9 @@ public enum SetupSheet {
         h += "<h2>Run order</h2>\n<table><tr><th>#</th><th>Toolpath</th><th>Tool</th>\(angleColumn ? "<th class=\"num\">Angle</th>" : "")<th class=\"num\">RPM</th><th class=\"num\">Feed</th><th class=\"num\">Depth</th><th class=\"num\">Time</th></tr>\n"
         var current: Int?
         var step = 0
+        // A blank turned by hand: the program stops before each new angle, as the post writes it.
+        let rotary = RotaryOutput(project)
+        var dial: Double?
         for tp in job.toolpaths where !tp.isEmpty {
             if current != tp.tool.number {
                 let what: String
@@ -105,6 +108,11 @@ public enum SetupSheet {
                 }
                 h += "<tr class=\"change\"><td></td><td colspan=\"\(angleColumn ? 7 : 6)\">\(what)</td></tr>\n"
                 current = tp.tool.number
+            }
+            if let rotary, rotary.manual, let angle = tp.indexAngle, dial != rotary.position(angle) {
+                dial = rotary.position(angle)
+                h += "<tr class=\"change\"><td></td><td colspan=\"7\">The program stops: turn the blank to "
+                    + "\(esc(RotaryIndex.label(rotary.position(angle)))) by hand, then press Cycle Start.</td></tr>\n"
             }
             step += 1
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM

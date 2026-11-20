@@ -237,10 +237,14 @@ struct RotaryAxisRows: View {
         Toggle("Rotary axis", isOn: Binding(get: { machine.rotary != nil }, set: { machine.rotary = $0 ? (machine.rotary ?? RotaryAxis()) : nil }))
             .help("A chuck and tailstock that turn the blank while the router cuts it")
         if let axis = machine.rotary {
-            Picker("Axis letter", selection: Binding(get: { axis.letter }, set: { if $0 == .a { machine.rotary?.letter = $0 } })) {
-                ForEach(RotaryAxis.Letter.allCases) { letter in
-                    Text(letter == .a ? "A" : "\(letter.rawValue) (not supported yet)").tag(letter)
-                        .selectionDisabled(letter != .a)
+            Toggle("Turn by hand", isOn: Binding(get: { axis.turnsByHand }, set: { machine.rotary?.turnsByHand = $0 }))
+                .help("Nothing drives the axis: the program stops with the spindle off before each new angle and says which angle to turn the blank to. For controllers without an A axis (Grbl, FluidNC, Carbide Motion, Masso) or a hand-cranked indexer.")
+            if !axis.turnsByHand {
+                Picker("Axis letter", selection: Binding(get: { axis.letter }, set: { if $0 == .a { machine.rotary?.letter = $0 } })) {
+                    ForEach(RotaryAxis.Letter.allCases) { letter in
+                        Text(letter == .a ? "A" : "\(letter.rawValue) (not supported yet)").tag(letter)
+                            .selectionDisabled(letter != .a)
+                    }
                 }
             }
             Picker("Runs along", selection: Binding(get: { axis.alignment }, set: { if $0 == .x { machine.rotary?.alignment = $0 } })) {
@@ -250,11 +254,20 @@ struct RotaryAxisRows: View {
                 }
             }
             Toggle("Reversed", isOn: Binding(get: { axis.reversed }, set: { machine.rotary?.reversed = $0 }))
-                .help("Jog A positive: the top of the blank should roll toward −Y. If it rolls toward +Y, turn this on, or anything around the blank comes out mirrored.")
+                .help(axis.turnsByHand
+                      ? "Turn on when the indexer's angles count up as the top of the blank rolls toward +Y, so each stop asks for the reading on your indexer."
+                      : "Jog A positive: the top of the blank should roll toward −Y. If it rolls toward +Y, turn this on, or anything around the blank comes out mirrored.")
+            if !axis.turnsByHand {
+                OptionalRateField(title: "Turn speed", value: Binding(get: { axis.turnSpeed }, set: { machine.rotary?.turnSpeed = $0 }),
+                                  unit: "°/min", prompt: "Not set",
+                                  help: "How fast the axis turns on a rapid move, for run-time estimates and the simulation (Mach4: Configure ▸ Control ▸ Motors, the A motor's velocity)")
+            }
             OptionalLengthField(title: "Centre height", mm: Binding(get: { axis.centerHeight }, set: { machine.rotary?.centerHeight = $0 }),
                                 units: units, prompt: "Not measured",
                                 help: "Height of the chuck centre above the spoilboard, so NativeCAM can check that a job fits under the Z travel")
-            Text("NativeCAM turns an A axis along X so far. To check Reversed, jog A positive: the top of the blank should roll toward −Y.")
+            Text(axis.turnsByHand
+                 ? "The program stops before each new angle with the spindle off and says which angle to turn the blank to. Angles count up as the top of the blank rolls toward −Y."
+                 : "NativeCAM turns an A axis along X so far. To check Reversed, jog A positive: the top of the blank should roll toward −Y.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -287,6 +300,32 @@ struct OptionalLengthField: View {
     }
 }
 
+/// A number that may be unknown, in a fixed unit: empty shows `prompt`, and clearing the field (or entering 0) sets
+/// it back to nil.
+struct OptionalRateField: View {
+    let title: String
+    @Binding var value: Double?
+    let unit: String
+    var prompt: String = ""
+    var help: String? = nil
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 4) {
+                TextField(title, value: Binding(get: { value }, set: { v in value = v.flatMap { $0 > 0 ? $0 : nil } }),
+                          format: .number.precision(.fractionLength(0...1)), prompt: Text(prompt))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .frame(minWidth: 70)
+                Text(unit).foregroundStyle(.secondary).fixedSize()
+            }
+        } label: {
+            Text(title)
+        }
+        .help(help ?? "")
+    }
+}
+
 // MARK: Wrapped
 
 /// On a wrapped job, in place of index angles: how a toolpath's shapes land on the blank.
@@ -309,8 +348,8 @@ extension OperationKind {
     /// The toolpaths that cut at index angles on a rotary job so far.
     var takesIndexAngles: Bool {
         switch self {
-        case .profile, .pocket, .drill: true
-        case .vcarve, .rough3D, .finish3D: false
+        case .profile, .pocket, .drill, .vcarve: true
+        case .rough3D, .finish3D: false
         }
     }
 }
@@ -423,7 +462,8 @@ struct IndexAnglesSection: View {
     }
 }
 
-/// Cutting length and time for a toolpath that cuts at several index angles: every angle's toolpath added up.
+/// Cutting length and time for a toolpath that cuts at several index angles: every angle's toolpath added up (a
+/// V-carve's flat clearing included).
 struct IndexedResultSection: View {
     let toolpaths: [Toolpath]
     let job: JobResult
@@ -431,7 +471,8 @@ struct IndexedResultSection: View {
     let units: LengthUnit
 
     var body: some View {
-        Section("Result (\(toolpaths.count) angles)") {
+        let angles = Set(toolpaths.map { RotaryIndex.normalized($0.indexAngle ?? 0) }).count
+        Section(angles == 1 ? "Result" : "Result (\(angles) angles)") {
             let length = toolpaths.reduce(0) { $0 + $1.cuttingLength }
             let seconds = toolpaths.reduce(0) { $0 + (job.estimatedSeconds(toolpath: $1.id) ?? $1.estimatedSeconds(rapidRate: rapidRate)) }
             LabeledContent("Cutting length", value: "\(units.format(length, decimals: 1)) \(units.symbol)")
