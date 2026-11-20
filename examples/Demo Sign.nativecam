@@ -92,7 +92,7 @@
         "cutting" : {
           "feedRate" : 5588,
           "plungeRate" : 1270,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 13000,
           "stepdown" : 4.762499999999999,
           "stepoverFraction" : 0.4
         },
@@ -136,7 +136,7 @@
         "cutting" : {
           "feedRate" : 5588,
           "plungeRate" : 1270,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 13000,
           "stepdown" : 4.762499999999999,
           "stepoverFraction" : 0.4
         },
@@ -190,7 +190,7 @@
         "cutting" : {
           "feedRate" : 5588,
           "plungeRate" : 1270,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 13000,
           "stepdown" : 4.762499999999999,
           "stepoverFraction" : 0.4
         },

@@ -43,9 +43,9 @@
       "tool" : {
         "cornerRadius" : 0,
         "cutting" : {
-          "feedRate" : 8001,
+          "feedRate" : 5588,
           "plungeRate" : 1270,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 13000,
           "stepdown" : 4.762499999999999,
           "stepoverFraction" : 0.4
         },
@@ -87,7 +87,7 @@
         "cutting" : {
           "feedRate" : 6350,
           "plungeRate" : 1016,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 15000,
           "stepdown" : 3.175,
           "stepoverFraction" : 0.1
         },
@@ -139,9 +139,9 @@
       "tool" : {
         "cornerRadius" : 0,
         "cutting" : {
-          "feedRate" : 8001,
+          "feedRate" : 5588,
           "plungeRate" : 1270,
-          "spindleRPM" : 18000,
+          "spindleRPM" : 13000,
           "stepdown" : 4.762499999999999,
           "stepoverFraction" : 0.4
         },
