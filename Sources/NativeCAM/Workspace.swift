@@ -122,13 +122,15 @@ final class Workspace {
         externalProgramName = nil
         beginSession(SimulationSession(toolpaths: job.toolpaths, stock: project.stock,
                                        rapidRate: project.machine.rapidRateForEstimates, cellSize: nil,
-                                       durations: job.estimate?.motionSeconds), project: project)
+                                       durations: job.estimate?.motionSeconds,
+                                       turnSpeed: project.machine.rotary?.drivenTurnSpeed), project: project)
     }
 
     func simulateProgram(_ toolpaths: [Toolpath], name: String, project: Project) {
         externalProgramName = name
         beginSession(SimulationSession(toolpaths: toolpaths, stock: project.stock,
-                                       rapidRate: project.machine.rapidRateForEstimates, cellSize: nil), project: project)
+                                       rapidRate: project.machine.rapidRateForEstimates, cellSize: nil,
+                                       turnSpeed: project.machine.rotary?.drivenTurnSpeed), project: project)
     }
 
     private func beginSession(_ s: SimulationSession, project: Project) {

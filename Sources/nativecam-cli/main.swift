@@ -227,7 +227,8 @@ case "sim":
     }
     let cell = option("--cell", in: args).flatMap(Double.init)
     var session = SimulationSession(toolpaths: toolpaths, stock: project.stock,
-                                    rapidRate: project.machine.rapidRateForEstimates, cellSize: cell)
+                                    rapidRate: project.machine.rapidRateForEstimates, cellSize: cell,
+                                    turnSpeed: project.machine.rotary?.drivenTurnSpeed)
     let start = Date()
     session.runToEnd()
     let elapsed = Date().timeIntervalSince(start)

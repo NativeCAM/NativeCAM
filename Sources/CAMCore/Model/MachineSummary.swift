@@ -62,6 +62,17 @@ public extension MachineProfile {
             ? "Dust collector on with M\(d.dustOn) at the start and after each tool change, off with M9 at the end."
             : "No dust collector output.")
         if !d.writesArcs { lines.append("Arcs are written as short lines and comments are left out: \(d.name)'s handling of them isn't documented.") }
+        if let axis = rotary {
+            if axis.turnsByHand {
+                lines.append("Rotary jobs are turned by hand: before each new angle the program lifts to safe Z, stops the spindle "
+                    + "and pauses with M0, and says which angle to turn the blank to.")
+            } else if d.rotaryAxes.contains(RotaryIndex.letter) {
+                lines.append("Rotary jobs turn the blank with G0 A moves at safe Z.")
+            } else {
+                lines.append("\(d.name) has no A axis NativeCAM can write rotary moves for. Turn on Turn by hand under Rotary Axis "
+                    + "to cut rotary jobs with a pause for each turn.")
+            }
+        }
 
         func accel(_ mm: Double) -> String { u == .inch ? String(format: "%.0f in/s²", mm / LengthUnit.mmPerInch) : String(format: "%.0f mm/s²", mm) }
         let source = self.source(of: .accelerationXY)

@@ -105,8 +105,8 @@ Every exported file still goes through the export checks, which use the controll
 
 On export, NativeCAM reads the file it's about to save back and checks it before the save panel appears:
 
-- **Against the controller.** Units set before moving and matching the machine, line length, accepted codes, I/J only on arcs, arc radii within the controller's tolerance, a feed before the first feed move, tool numbers, dwells written so the controller reads the right unit, the spindle on before cutting, a lift to safe Z before the first sideways move after each tool change, and no rotary (A) moves for a controller without a rotary axis.
-- **Against the toolpaths.** Every cutting move, arc direction and centre, feed, dwell, tool and spindle speed is compared with what the toolpaths asked for. This catches post bugs a simulation of the toolpaths can't, such as doubled coordinates or a dwell in the wrong unit.
+- **Against the controller.** Units set before moving and matching the machine, line length, accepted codes, I/J only on arcs, arc radii within the controller's tolerance, a feed before the first feed move, tool numbers, dwells written so the controller reads the right unit, the spindle on before cutting, a lift to safe Z before the first sideways move after each tool change, no rotary (A) moves for a controller without a rotary axis, and on a blank turned by hand, no pause for a turn with the spindle running or the tool below safe Z.
+- **Against the toolpaths.** Every cutting move, arc direction and centre, feed, dwell, tool and spindle speed is compared with what the toolpaths asked for, and on a rotary job, the angle the blank is at (its A position, or the angle the last pause asked for when it's turned by hand). This catches post bugs a simulation of the toolpaths can't, such as doubled coordinates or a dwell in the wrong unit.
 - **Against the machine.** The whole program, retracts and park included, is measured against the machine's travel and Z travel with the tool's stick-out.
 
 Errors ask you to confirm before exporting; the command line refuses to write a failing file without `--force`.
