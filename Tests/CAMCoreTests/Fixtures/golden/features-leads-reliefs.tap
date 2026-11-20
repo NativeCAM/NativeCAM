@@ -18,7 +18,7 @@ G64
 (Change to Tool: T1 1/4in Upcut End Mill)
 T1M6
 M07
-S18000 M03
+S13000 M03
 (Toolpath: Recess  Tool: T1 1/4in Upcut End Mill)
 G00 Z0.3937
 G00 X7.6140 Y3.4912
