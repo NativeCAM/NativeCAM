@@ -42,6 +42,11 @@ final class Workspace {
     private(set) var heightField: HeightFieldSnapshot?
     private var heightVersion = 0
     private var playTask: Task<Void, Never>?
+    /// While simulating a rotary job: the world Y and Z of the blank's axis, and its A angle at the play head.
+    private(set) var rotaryAxis: SIMD2<Float>?
+    private(set) var simAngle: Double = 0
+    /// When each of the timeline's turns of the blank starts, so playback never skips one.
+    private var turnStarts: [Double] = []
 
     // 3D model preview (the models carved into the stock, shown when not simulating)
     private(set) var modelPreview: HeightFieldSnapshot?
@@ -130,6 +135,9 @@ final class Workspace {
         isPlaying = false
         session = s
         simTime = 0
+        simAngle = 0
+        rotaryAxis = project.stock.rotary.map { SIMD2(Float(project.stock.height / 2), Float(-$0.radius)) }
+        turnStarts = s.timeline.steps.filter { $0.turn != nil }.map(\.startTime)
         publishHeights()
         rebuildLines(project)
         isPlaying = true
@@ -141,6 +149,9 @@ final class Workspace {
         externalProgramName = nil
         heightField = nil
         simTime = 0
+        simAngle = 0
+        rotaryAxis = nil
+        turnStarts = []
         rebuildLines(project)
     }
 
@@ -149,6 +160,11 @@ final class Workspace {
         session!.seek(to: t)
         simTime = session!.time
         publishHeights()
+        let angle = session!.timeline.blankAngle(at: simTime) ?? 0
+        if angle != simAngle {
+            simAngle = angle
+            if !rotaryPathLines.isEmpty { publishLines() }
+        }
     }
 
     func jumpToEnd() {
@@ -167,16 +183,20 @@ final class Workspace {
         let tp = s.timeline.toolpaths[state.toolpathIndex]
         let sil = tp.tool.silhouette().map { SIMD2<Float>(Float($0.x), Float($0.y)) }
         let p = state.position
-        return (ToolMarker(tip: SIMD3(Float(p.x), Float(p.y), Float(p.z)), silhouette: sil), tp.name)
+        let name = s.timeline.turn(at: s.time)?.turn.map { "Turning the blank to \(RotaryIndex.label($0.to))" } ?? tp.name
+        return (ToolMarker(tip: SIMD3(Float(p.x), Float(p.y), Float(p.z)), silhouette: sil), name)
     }
 
     private func publishHeights() {
         guard let s = session else { heightField = nil; return }
         let g = s.grid
         heightVersion += 1
+        // A rotary job's faces go one after another, in `faceAngles` order.
+        let faces = rotaryAxis == nil ? 1 : s.faces.count
+        let heights = faces == 1 ? g.heights : (0..<faces).flatMap { s.grid(face: $0).heights }
         heightField = HeightFieldSnapshot(columns: g.columns, rows: g.rows, cellSize: Float(g.cellSize),
                                           origin: SIMD2(Float(g.origin.x), Float(g.origin.y)),
-                                          heights: g.heights, floorZ: g.floorZ, version: heightVersion)
+                                          heights: heights, floorZ: g.floorZ, version: heightVersion, layers: faces)
     }
 
     private func startPlayback() {
@@ -189,7 +209,11 @@ final class Workspace {
                 let now = Date()
                 let dt = now.timeIntervalSince(last)
                 last = now
-                let target = min(self.simDuration, self.simTime + dt * self.playbackSpeed)
+                // Slow down for a turn of a rotary blank so it can be seen at any speed, and never skip one.
+                var speed = self.playbackSpeed
+                if let turn = self.session?.timeline.turn(at: self.simTime) { speed = min(speed, max(1, turn.duration / 0.6)) }
+                var target = min(self.simDuration, self.simTime + dt * speed)
+                if let next = self.turnStarts.first(where: { $0 > self.simTime }), next < target { target = next + 1e-6 }
                 self.seek(to: target)
                 if target >= self.simDuration { self.isPlaying = false }
             }
@@ -213,6 +237,13 @@ final class Workspace {
         scene.heightField = heightField ?? (showModelPreview ? modelPreview : nil)
         scene.tool = simTool?.marker
         scene.showStock = true
+        if let session, heightField != nil, let blank = project.stock.rotary, let axis = rotaryAxis {
+            scene.rotary = RotaryBlankView(square: blank.shape == .squareBar, radius: Float(blank.radius), length: Float(blank.length),
+                                           axis: axis, angle: Float(simAngle), faceAngles: session.faceAngles.map { Float($0) })
+            // The spoilboard is the rotary's centre height below the axis (a guess until that's measured).
+            let below = project.machine.rotary?.centerHeight ?? blank.outerRadius + 0.5.inch
+            scene.stockSize.z = Float(blank.radius + below)
+        }
         return scene
     }
 
@@ -324,6 +355,9 @@ final class Workspace {
 
     private var vectorLines: [LineVertex] = []
     private var pathLines: [LineVertex] = []
+    /// While simulating a rotary job: each toolpath's lines with its index angle, turned with the blank when
+    /// they're published.
+    private var rotaryPathLines: [(angle: Double, lines: [LineVertex])] = []
 
     /// The system accent colour (selection highlight), like every other Mac app.
     static var accent: SIMD4<Float> {
@@ -345,7 +379,8 @@ final class Workspace {
             return Set(op.shapeIDs)
         }()
         let dimmed = isSimulating
-        if showVectors {
+        // A rotary job's vectors are drawn on the flat design sheet, which the turning blank doesn't show.
+        if showVectors && rotaryAxis == nil {
             let accent = Workspace.accent
             for shape in project.shapes {
                 let isSel = selected.contains(shape.id)
@@ -370,6 +405,7 @@ final class Workspace {
 
     func rebuildPathLines(_ project: Project) {
         var v: [LineVertex] = []
+        var turned: [(angle: Double, lines: [LineVertex])] = []
         let dimmed = isSimulating
         let toolpaths = session?.timeline.toolpaths ?? job?.toolpaths ?? []
         if showToolpaths && (!isSimulating || showToolpathsWhileSimulating) {
@@ -379,6 +415,7 @@ final class Workspace {
                 let highlight = selectedOperationID == tp.sourceOperationID
                 if dimmed { color.w = 0.35 } else if !highlight && selectedOperationID != nil { color.w = 0.45 }
                 let rapid = SIMD4<Float>(1, 0.3, 0.3, dimmed ? 0.2 : 0.55)
+                let first = v.count
                 tp.forEachMotion { s, m in
                     guard m.kind != .dwell else { return }
                     if m.kind == .rapid && !showRapids { return }
@@ -390,14 +427,30 @@ final class Workspace {
                         p = q
                     }
                 }
+                if rotaryAxis != nil, v.count > first {
+                    // Each toolpath is in its face's frame: keep it apart so it can turn with the blank.
+                    turned.append((tp.indexAngle ?? 0, Array(v[first...])))
+                    v.removeSubrange(first...)
+                }
             }
         }
+        rotaryPathLines = turned
         pathLines = v
         publishLines()
     }
 
     private func publishLines() {
-        lines = pathLines + vectorLines
+        var turned: [LineVertex] = []
+        if let axis = rotaryAxis {
+            for group in rotaryPathLines {
+                let a = Float((simAngle - group.angle) * .pi / 180), c = cos(a), s = sin(a)
+                for v in group.lines {
+                    let y = v.position.y - axis.x, z = v.position.z - axis.y
+                    turned.append(LineVertex(SIMD3(v.position.x, axis.x + y * c - z * s, axis.y + y * s + z * c), v.color))
+                }
+            }
+        }
+        lines = pathLines + turned + vectorLines
         geometryVersion += 1
     }
 }

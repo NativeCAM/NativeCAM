@@ -74,7 +74,7 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 | Job checks | Cuts into the spoilboard or a clamp, depth beyond flute length, toolpaths outside the work area, rapids through material, out-of-range feeds or RPM, chip loads too thin for the material (with a one-click recommended feed), a run order that cuts a part free too early, and two different bits sharing one tool number (which would skip a tool change and cut with the wrong bit). The exported file is checked too; see [Export checks](controllers.md#export-checks-air-cuts-and-setup-sheets). |
 | Run-time estimate | See [Run-time estimates](machines.md#run-time-estimates). |
 | Tools | Flat, ball, bull nose, V-bit, engraving (tip diameter), surfacing and drill. Flute length, shank, stickout, flute count and direction, feeds and speeds, chip-load calculator checked against chart chip loads for the material type, compression bits whose first pass clears the upcut length, live profile drawing, import from Fusion 360 and Vectric libraries. Saved to `~/Library/Application Support/NativeCAM/tools.json`. |
-| Simulator | A Metal-rendered heightmap carved by the true tool shape (flat, ball, bull nose, V), with through-cuts, a tool marker, play, pause, scrub and speed control, timed like the real job, and detection of rapids through material. It also simulates G-code and ShopBot files from other programs. |
+| Simulator | A Metal-rendered heightmap carved by the true tool shape (flat, ball, bull nose, V), with through-cuts, a tool marker, play, pause, scrub and speed control, timed like the real job, and detection of rapids through material. Rotary jobs are carved face by face on a turning blank. It also simulates G-code and ShopBot files from other programs. |
 
 ## Leads and corners
 
@@ -105,4 +105,4 @@ NativeCAM cuts indexed (3+1) rotary work: the blank turns to a fixed angle, the 
 3. **Zero.** Z zero is on the rotation axis and Y zero on its centreline (on Avid, Rotary tab ▸ Z Axis Touch and Y Axis Touch). X zero is the left end, the middle or the right end of the blank. On a square bar, A zero must put a face square to the spindle. Rotary jobs park over the middle of the blank.
 4. **Index angles.** Profile, pocket and drill toolpaths list the angles the blank turns to, in cutting order, under **Index Angles**, and cut the same shapes at each. **Spread evenly** fills in n faces 360°/n apart. A square bar only takes quarter turns (0°, 90°, 180° and 270°). The blank turns with the tool at safe Z.
 
-**Checks** lists anything the job can't cut. The simulation shows every face on one flat sheet for now.
+**Checks** lists anything the job can't cut. **⌘R** simulates the job on the blank itself: it turns to each angle with the tool at safe Z, as the machine will, and slows down for each turn so you can follow it. Designs stay on the flat sheet, one face of the blank.

@@ -79,6 +79,13 @@ enum DebugSnapshot {
                 write(img, to: out.appendingPathComponent("sim-\(preset.rawValue).png"))
             }
         }
+        // A rotary job half way through its first turn of the blank.
+        if let turn = ws.session?.timeline.steps.first(where: { $0.turn != nil }) {
+            ws.seek(to: turn.startTime + turn.duration / 2)
+            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .iso) {
+                write(img, to: out.appendingPathComponent("sim-turning.png"))
+            }
+        }
         // 3. Toolpaths (no simulation) from the iso view.
         ws.stopSimulation(project)
         if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .iso) {

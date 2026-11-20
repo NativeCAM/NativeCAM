@@ -58,6 +58,14 @@ final class ViewportRenderer {
     private var heightVersion: Int?
     private var heightColumns = 0
     private var heightRows = 0
+    private var heightLayers = 1
+    /// True when `heightTexture` is a 2D array (a rotary job's faces).
+    private var heightIsArray = false
+
+    // Rotary blank surface (in the blank's own frame), keyed by square-ness, radius and length.
+    private var blankKey: SIMD3<Float>?
+    private var blankBuffer: MTLBuffer?
+    private var blankVertexCount = 0
 
     // Tool.
     private var toolSilhouette: [SIMD2<Float>]?
@@ -97,8 +105,10 @@ final class ViewportRenderer {
         }
 
         if let hf = new.heightField {
-            if hf.version != heightVersion || hf.columns != heightColumns || hf.rows != heightRows || heightTexture == nil {
-                uploadHeights(hf)
+            let array = new.rotary != nil
+            if hf.version != heightVersion || hf.columns != heightColumns || hf.rows != heightRows || heightTexture == nil
+                || array != heightIsArray || hf.layers != heightLayers {
+                uploadHeights(hf, array: array)
                 heightVersion = hf.version
             }
         } else if heightTexture != nil {
@@ -106,6 +116,16 @@ final class ViewportRenderer {
             heightVersion = nil
             heightColumns = 0
             heightRows = 0
+        }
+
+        if let r = new.rotary {
+            let key = SIMD3<Float>(r.square ? 1 : 0, r.radius, r.length)
+            if key != blankKey {
+                let mesh = ViewportMeshes.rotaryBlank(square: r.square, radius: r.radius, length: r.length)
+                blankBuffer = makeBuffer(mesh)
+                blankVertexCount = mesh.count
+                blankKey = key
+            }
         }
 
         if let tool = new.tool, tool.silhouette != toolSilhouette {
@@ -164,17 +184,22 @@ final class ViewportRenderer {
         stockEdgeCount = box.edges.count
     }
 
-    private func uploadHeights(_ hf: HeightFieldSnapshot) {
-        let cols = hf.columns, rows = hf.rows
+    /// Uploads the heights as a 2D texture, or as a 2D array with one slice per layer when `array` (a rotary job).
+    private func uploadHeights(_ hf: HeightFieldSnapshot, array: Bool) {
+        let cols = hf.columns, rows = hf.rows, layers = max(1, hf.layers)
         let maxDim = 16384
-        guard cols >= 1, rows >= 1, cols <= maxDim, rows <= maxDim,
-              hf.heights.count >= cols * rows, hf.cellSize.isFinite, hf.cellSize > 0 else {
+        guard cols >= 1, rows >= 1, cols <= maxDim, rows <= maxDim, layers <= 1024, array || layers == 1,
+              hf.heights.count >= cols * rows * layers, hf.cellSize.isFinite, hf.cellSize > 0 else {
             heightTexture = nil
             heightColumns = 0
             heightRows = 0
             return
         }
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float, width: cols, height: rows, mipmapped: false)
+        if array {
+            desc.textureType = .type2DArray
+            desc.arrayLength = layers
+        }
         desc.usage = .shaderRead
         desc.storageMode = device.hasUnifiedMemory ? .shared : .managed
         // A fresh texture per version: the previous one stays alive (retained by in-flight command
@@ -184,13 +209,19 @@ final class ViewportRenderer {
             return
         }
         tex.label = "viewport heights v\(hf.version)"
+        let slice = cols * rows * MemoryLayout<Float>.stride
         hf.heights.withUnsafeBytes { raw in
-            tex.replace(region: MTLRegionMake2D(0, 0, cols, rows), mipmapLevel: 0,
-                        withBytes: raw.baseAddress!, bytesPerRow: cols * MemoryLayout<Float>.stride)
+            for layer in 0..<layers {
+                tex.replace(region: MTLRegionMake2D(0, 0, cols, rows), mipmapLevel: 0, slice: layer,
+                            withBytes: raw.baseAddress! + layer * slice, bytesPerRow: cols * MemoryLayout<Float>.stride,
+                            bytesPerImage: slice)
+            }
         }
         heightTexture = tex
         heightColumns = cols
         heightRows = rows
+        heightLayers = layers
+        heightIsArray = array
     }
 
     private func rebuildTool(_ silhouette: [SIMD2<Float>]) {
@@ -215,8 +246,13 @@ final class ViewportRenderer {
         heightTexture != nil && heightColumns >= 2 && heightRows >= 2 && scene.heightField != nil
     }
 
-    /// Stock box bounds (falls back to a 100 mm square around the origin for empty stock).
+    /// Stock box bounds (falls back to a 100 mm square around the origin for empty stock). A rotary blank's are
+    /// the space it sweeps as it turns.
     var stockBounds: (min: SIMD3<Float>, max: SIMD3<Float>) {
+        if let r = scene.rotary, r.length > 0, r.radius > 0 {
+            let o = r.outerRadius
+            return (SIMD3(0, r.axis.x - o, r.axis.y - o), SIMD3(r.length, r.axis.x + o, r.axis.y + o))
+        }
         let s = scene.stockSize
         let w = ViewportMeshes.finitePositive(s.x), h = ViewportMeshes.finitePositive(s.y), t = ViewportMeshes.finitePositive(s.z)
         if w <= 0 && h <= 0 { return (SIMD3(-50, -50, -max(t, 1)), SIMD3(50, 50, 0)) }
@@ -329,9 +365,40 @@ final class ViewportRenderer {
             }
         }
 
-        // 3. Carved stock: instanced strip grid + four side walls.
+        // 3. Carved stock: instanced strip grid + four side walls, or a rotary blank turned to its angle.
         let carved = heightFieldDrawable
-        if carved, let tex = heightTexture, let hf = scene.heightField {
+        if carved, heightIsArray, let tex = heightTexture, let hf = scene.heightField, let r = scene.rotary {
+            var angles = r.faceAngles.prefix(heightLayers).map { $0 * .pi / 180 }
+            if angles.count < heightLayers { angles += [Float](repeating: 0, count: heightLayers - angles.count) }
+            var ru = ViewportRotaryUniforms(
+                dims: SIMD4(Float(heightColumns), Float(heightRows), hf.cellSize, hf.floorZ),
+                origin: SIMD4(hf.origin.x, hf.origin.y, r.radius, 0.002 + 0.001 * r.radius),
+                axis: SIMD4(r.axis.x, r.axis.y, r.angle * .pi / 180, r.square ? 1 : 0),
+                counts: SIMD4(Float(heightLayers), r.length, 0, 0),
+                topColor: SIMD4(0.80, 0.665, 0.475, 1),
+                cutColor: SIMD4(0.73, 0.575, 0.395, 1),
+                deepColor: SIMD4(0.56, 0.425, 0.28, 1),
+                sideColor: SIMD4(0.71, 0.56, 0.385, 1))
+            enc.setDepthStencilState(p.depthWrite)
+            for stage in 0..<2 {
+                angles.withUnsafeBytes { raw in
+                    if stage == 0 { enc.setVertexBytes(raw.baseAddress!, length: raw.count, index: 3) }
+                    else { enc.setFragmentBytes(raw.baseAddress!, length: raw.count, index: 3) }
+                }
+            }
+            enc.setVertexBytes(&ru, length: MemoryLayout<ViewportRotaryUniforms>.stride, index: 2)
+            enc.setFragmentBytes(&ru, length: MemoryLayout<ViewportRotaryUniforms>.stride, index: 2)
+            enc.setVertexTexture(tex, index: 0)
+            enc.setFragmentTexture(tex, index: 0)
+            enc.setRenderPipelineState(p.rotaryFace)
+            enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 2 * heightColumns,
+                               instanceCount: (heightRows - 1) * heightLayers)
+            if let blank = blankBuffer, blankVertexCount >= 3 {
+                enc.setRenderPipelineState(p.rotaryBlank)
+                enc.setVertexBuffer(blank, offset: 0, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: blankVertexCount)
+            }
+        } else if carved, !heightIsArray, let tex = heightTexture, let hf = scene.heightField {
             let thickness = max(-hf.floorZ, ViewportMeshes.finitePositive(scene.stockSize.z), 0.001)
             var hu = ViewportHeightUniforms(
                 dims: SIMD4(Float(heightColumns), Float(heightRows), hf.cellSize, hf.floorZ),
@@ -483,6 +550,8 @@ private final class Pipelines {
     let meshBlended: MTLRenderPipelineState
     let heightField: MTLRenderPipelineState
     let walls: MTLRenderPipelineState
+    let rotaryFace: MTLRenderPipelineState
+    let rotaryBlank: MTLRenderPipelineState
     let depthWrite: MTLDepthStencilState
     let depthTestNoWrite: MTLDepthStencilState
     let depthAlways: MTLDepthStencilState
@@ -562,6 +631,8 @@ private final class Pipelines {
         meshBlended = try pipeline("mesh blended", "mesh_vertex", "mesh_fragment", meshVD, blended: true)
         heightField = try pipeline("height field", "heightfield_vertex", "heightfield_fragment", nil, blended: false)
         walls = try pipeline("walls", "wall_vertex", "wall_fragment", nil, blended: false)
+        rotaryFace = try pipeline("rotary faces", "rotary_face_vertex", "rotary_face_fragment", nil, blended: false)
+        rotaryBlank = try pipeline("rotary blank", "rotary_blank_vertex", "rotary_blank_fragment", meshVD, blended: false)
 
         func depthState(_ compare: MTLCompareFunction, write: Bool) throws -> MTLDepthStencilState {
             let d = MTLDepthStencilDescriptor()
