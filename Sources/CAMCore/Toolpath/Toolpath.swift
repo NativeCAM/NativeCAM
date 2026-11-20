@@ -23,15 +23,19 @@ public struct Motion: Hashable, Codable, Sendable {
     public var feed: Double
     /// Rotary A position at the end of the move, degrees, unwound (720 is two full turns, not 0); nil when no
     /// rotary axis is involved. Only G-code read back from a file sets it so far: every toolpath generator, the
-    /// simulator and the posts ignore it.
+    /// simulator and the posts ignore it (wrapped toolpaths work out A from Y instead; see `RotaryWrap`).
     public var a: Double?
+    /// The F word of a move read back in inverse-time mode (G93): one over the move's time in minutes. nil for
+    /// ordinary feeds. When it's set, `feed` is only the XYZ distance over that time.
+    public var inverseTime: Double?
 
-    public init(kind: MotionKind, end: Vec3, center: Vec2 = .zero, feed: Double = 0, a: Double? = nil) {
+    public init(kind: MotionKind, end: Vec3, center: Vec2 = .zero, feed: Double = 0, a: Double? = nil, inverseTime: Double? = nil) {
         self.kind = kind
         self.end = end
         self.center = center
         self.feed = feed
         self.a = a
+        self.inverseTime = inverseTime
     }
 
     public static func rapid(_ p: Vec3) -> Motion { Motion(kind: .rapid, end: p) }
@@ -65,12 +69,15 @@ public extension Motion {
         return start.distance(to: end)
     }
 
-    /// Seconds this motion takes (constant-velocity model).
+    /// Seconds this motion takes (constant-velocity model). An inverse-time move takes exactly the time its F word
+    /// gives.
     func duration(from start: Vec3, rapidRate: Double) -> Double {
         switch kind {
         case .dwell: return max(0, feed)
         case .rapid: return length(from: start) / max(rapidRate, 1) * 60
-        default: return length(from: start) / max(feed, 1) * 60
+        default:
+            if let f = inverseTime, f > 0 { return 60 / f }
+            return length(from: start) / max(feed, 1) * 60
         }
     }
 
@@ -112,6 +119,10 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// The inside corners that get (or could get) a relief, for showing and changing them on the canvas; nil when the
     /// operation has no corner reliefs. Posts and checks don't read it.
     public var reliefCorners: [ReliefCorner]?
+    /// On a wrapped rotary job, the diameter the motions wrap around, mm; nil for flat and indexed toolpaths. The
+    /// motions stay on the flat sheet: the posts and checks turn design Y into the A angle and Z into a distance
+    /// from the axis as they write and read the file (`RotaryWrap`).
+    public var wrapDiameter: Double?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

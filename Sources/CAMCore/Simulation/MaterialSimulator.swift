@@ -354,9 +354,12 @@ public struct SimulationSession: Sendable {
     /// the blank at the nominal pace.
     public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, durations: [[Double]]? = nil,
                 turnSpeed: Double? = nil) {
+        // A wrapped job simulates on its unrolled sheet for now, like a flat job: what's cut away at each angle shows at
+        // that height on the sheet.
+        let faced = stock.rotary.map { !$0.isWrapped } ?? false
         timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations,
-                                      turnSpeed: stock.rotary == nil ? nil : turnSpeed.map { $0 / 60 } ?? Self.turnSpeed)
-        guard let blank = stock.rotary else {
+                                      turnSpeed: faced ? turnSpeed.map { $0 / 60 } ?? Self.turnSpeed : nil)
+        guard faced, let blank = stock.rotary else {
             faces = [MaterialSimulator(stock: stock, cellSize: cellSize)]
             faceAngles = [0]
             faceOfToolpath = toolpaths.map { _ in 0 }

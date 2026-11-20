@@ -99,7 +99,8 @@ struct SetupInspector: View {
                 }
                 LengthField(title: "Park Z", mm: $project.stock.homePosition.z, units: units, minimum: 1)
                 if project.stock.rotary != nil {
-                    Text("Rotary jobs park over the middle of the blank, clear of the chuck and tailstock.")
+                    Text("Rotary jobs park over the middle of the blank, clear of the chuck and tailstock."
+                         + (project.stock.rotary?.isWrapped == true ? " Wrapped toolpaths always go up to safe Z between cuts, since the blank turns as the tool moves across." : ""))
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

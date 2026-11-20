@@ -5,7 +5,8 @@ import Foundation
 /// Used to verify our own output (post → parse → compare) and to load `.tap`/`.nc` files from other CAM
 /// programs into the simulator. Coordinates come back in millimetres in the program's work coordinates, and a
 /// rotary A position (once the program moves A) in degrees on each motion. Canned drilling cycles (G73, G81–G83,
-/// G85, G86, G89) are expanded into the plain moves the controller makes, so their holes simulate.
+/// G85, G86, G89) are expanded into the plain moves the controller makes, so their holes simulate. In inverse-time
+/// mode (G93) each feed move keeps its F word as `Motion.inverseTime`, so it's timed exactly as the controller runs it.
 public struct GCodeProgram: Sendable {
     public struct Segment: Sendable {
         public var toolNumber: Int
@@ -77,6 +78,8 @@ public enum GCodeParser {
         var arcIncremental = incrementalArcCenters
         var motionMode = 0
         var feed = 0.0
+        // G93: each feed move's F is one over its time in minutes, and applies to that line only.
+        var inverseTimeMode = false
         var rpm = 0.0
         var tool = 0
         var pos = Vec3.zero
@@ -151,7 +154,9 @@ public enum GCodeParser {
                     // Cancels a cycle; later axis words without a G0/G1 are read as rapids.
                     if Self.isCycle(motionMode) || motionMode == Self.skippedCycle { motionMode = 0 }
                     cycleStartZ = nil
-                case 17, 40, 49, 94, 54, 43, 61, 64: break
+                case 93: inverseTimeMode = true
+                case 94: inverseTimeMode = false
+                case 17, 40, 49, 54, 43, 61, 64: break
                 case 18, 19: warnOnce("Arcs outside the XY plane (G18/G19) aren't simulated.")
                 case 28, 30, 53: warnOnce("Machine-coordinate moves (G28/G30/G53) are skipped in the simulation.")
                 case 73, 81, 82, 83, 85, 86, 89:
@@ -165,7 +170,9 @@ public enum GCodeParser {
                 default: warnOnce("Unsupported G\(g) ignored.")
                 }
             }
-            if let f = values["F"] { feed = units.toMM(f) }
+            // In G93 an F word is the line's own time, not a feed rate that carries on.
+            let inverseTime = inverseTimeMode ? values["F"] : nil
+            if let f = values["F"], !inverseTimeMode { feed = units.toMM(f) }
             if let s = values["S"] { rpm = s }
             if let t = values["T"] { tool = Int(t) }
             if mCodes.contains(6) || (values["T"] != nil && current.motions.isEmpty) {
@@ -270,12 +277,23 @@ public enum GCodeParser {
                 return absolute ? units.toMM(v) : cur + units.toMM(v)
             }
             let target = Vec3(axis("X", pos.x), axis("Y", pos.y), axis("Z", pos.z))
+            if inverseTimeMode, motionMode >= 1, motionMode <= 3, inverseTime == nil {
+                warnOnce("Line \(lineNo): a feed move in inverse-time mode (G93) has no F word, which controllers reject. "
+                    + "It's timed at the last ordinary feed.")
+            }
+            // The XYZ distance over the move's time: what an ordinary feed would have to be (zero for a pure turn).
+            func timedFeed(_ f: Double?) -> Double { f.map { pos.distance(to: target) * $0 } ?? feed }
             switch motionMode {
             case 0:
                 current.motions.append(Motion(kind: .rapid, end: target, a: rotary))
             case 1:
-                current.motions.append(Motion(kind: .feed, end: target, feed: feed, a: rotary))
+                current.motions.append(Motion(kind: .feed, end: target, feed: timedFeed(inverseTime), a: rotary,
+                                              inverseTime: inverseTime))
             case 2, 3:
+                if inverseTimeMode {
+                    warnOnce("Arcs in inverse-time mode (G93) are timed by their F word, but controllers disagree on what it "
+                        + "means for an arc.")
+                }
                 var center: Vec2
                 if let r = values["R"] {
                     center = arcCenterFromRadius(start: pos.xy, end: target.xy, r: units.toMM(r), cw: motionMode == 2)
@@ -284,8 +302,10 @@ public enum GCodeParser {
                     center = arcIncremental ? Vec2(pos.x + i, pos.y + j) : Vec2(i, j)
                 }
                 if values["A"] != nil { warnOnce("A words on arcs (G2/G3) are ignored.") }
-                current.motions.append(Motion(kind: motionMode == 2 ? .arcCW : .arcCCW, end: target, center: center,
-                                              feed: feed, a: rotary))
+                var arc = Motion(kind: motionMode == 2 ? .arcCW : .arcCCW, end: target, center: center, feed: feed, a: rotary,
+                                 inverseTime: inverseTime)
+                if let f = inverseTime { arc.feed = arc.length(from: pos) * f }
+                current.motions.append(arc)
             default:
                 break
             }

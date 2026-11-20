@@ -55,9 +55,13 @@ public enum RotaryIndex {
         }
 
         if !stock.matchesRotaryBlank {
-            issues.append(JobIssue(.error, "The material size doesn't match the rotary blank: on rotary stock the design sheet is "
-                + "one face, \(fmt(blank.length)) long × \(fmt(blank.diameter)) across, \(fmt(blank.radius)) to the axis. "
-                + "Set the blank again to resize it."))
+            issues.append(JobIssue(.error, blank.isWrapped
+                ? "The material size doesn't match the rotary blank: on a wrapped job the design sheet is the blank unrolled, "
+                    + "\(fmt(blank.length)) long × \(fmt(blank.circumference)) round, \(fmt(blank.topRadius)) to the axis. "
+                    + "Set the blank again to resize it."
+                : "The material size doesn't match the rotary blank: on rotary stock the design sheet is "
+                    + "one face, \(fmt(blank.length)) long × \(fmt(blank.diameter)) across, \(fmt(blank.radius)) to the axis. "
+                    + "Set the blank again to resize it."))
         }
         // The machine has to be able to turn the blank, and the post has to be able to say so: with A moves, or
         // with a stop (M0) for each turn when the blank is turned by hand.
@@ -101,6 +105,11 @@ public enum RotaryIndex {
         if project.shapes.contains(where: { $0.keepOutHeight != nil }) {
             issues.append(JobIssue(.error, "Clamps and keep-out zones aren't supported on rotary stock: they're drawn on the "
                 + "flat sheet and would apply to every face."))
+        }
+
+        if blank.isWrapped {
+            issues += wrappedIssues(project, toolpaths: toolpaths)
+            return issues + closingNotes(machine, manual: false)
         }
 
         for op in ops {
@@ -152,6 +161,12 @@ public enum RotaryIndex {
             }
         }
 
+        return issues + closingNotes(machine, manual: manual)
+    }
+
+    /// The notes every rotary job ends with: how a blank turned by hand is asked for, and the centre height.
+    static func closingNotes(_ machine: MachineProfile, manual: Bool) -> [JobIssue] {
+        var issues: [JobIssue] = []
         if manual {
             issues.append(JobIssue(.info, "The blank is turned by hand: the program stops with the spindle off before each new "
                 + "angle and says which angle to turn it to."))
@@ -162,6 +177,70 @@ public enum RotaryIndex {
         }
         return issues
     }
+
+    /// Wrapped jobs: what the blank, the controller and each operation need for designs wrapped around the blank.
+    static func wrappedIssues(_ project: Project, toolpaths: [Toolpath]) -> [JobIssue] {
+        guard let blank = project.stock.rotary else { return [] }
+        let u = project.displayUnits
+        func fmt(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
+        var issues: [JobIssue] = []
+        if blank.shape == .squareBar {
+            issues.append(JobIssue(.error, "Wrapped designs need a round blank: a square bar's faces aren't at the wrap diameter, "
+                + "so cuts would come out deeper in the middle of each face than at its edges. Use a round blank, or lay the "
+                + "design out on faces."))
+        }
+        let wrap = blank.wrapDiameterOrBlank
+        if wrap > blank.diameter + 1e-6 {
+            issues.append(JobIssue(.error, "The wrap diameter (\(fmt(wrap))) is bigger than the blank (\(fmt(blank.diameter))), so "
+                + "the shallow cuts would be in the air. Set it to the blank's diameter or less."))
+        } else if wrap < blank.diameter - 1e-6 {
+            issues.append(JobIssue(.warning, "Designs wrap at \(fmt(wrap)), smaller than the \(fmt(blank.diameter)) blank, so every "
+                + "cut starts \(fmt((blank.diameter - wrap) / 2)) below the blank's surface. Turn the blank down to \(fmt(wrap)) "
+                + "first."))
+        }
+        if project.machine.rotary?.turnsByHand == true {
+            issues.append(JobIssue(.error, "Wrapped designs need a rotary axis the controller drives: the blank turns while the "
+                + "tool cuts, which can't be done by hand. Turn off Turn by hand, or lay the design out on faces."))
+        } else if project.machine.customPost == nil, let dialect = Dialect.for(project.machine), dialect.rotaryAxes.contains(letter),
+           RotaryWrap.feedMode(dialect) == nil {
+            issues.append(JobIssue(.error, "\(dialect.name) has no inverse-time feed (G93), and what F means there when the "
+                + "rotary axis turns isn't documented, so NativeCAM can't give wrapped cuts the right feed. Use faces (indexed) "
+                + "for this controller."))
+        }
+        for op in project.operations where op.enabled {
+            if op.indexAngles != nil {
+                issues.append(JobIssue(.error, "Has index angles, but on a wrapped job each shape's place on the sheet sets the "
+                    + "angle it's cut at. Clear the angles.", operation: op.name))
+            }
+            switch op.kind {
+            case .pocket: issues.append(JobIssue(.error, "Pockets aren't supported on wrapped rotary jobs yet.", operation: op.name))
+            case .vcarve: issues.append(JobIssue(.error, "V-carving isn't supported on wrapped rotary jobs yet.", operation: op.name))
+            case .rough3D, .finish3D:
+                issues.append(JobIssue(.error, "3D toolpaths aren't supported on rotary stock yet.", operation: op.name))
+            default: break
+            }
+        }
+        // A wrapped design is true to size only at the wrap diameter; deeper in, the same angle spans less.
+        // A radial hole is a hole at any depth, so drilling is left out.
+        let radius = blank.topRadius
+        var reported = Set(project.operations.filter { if case .drill = $0.kind { true } else { false } }.map(\.id))
+        for tp in toolpaths where tp.wrapDiameter != nil && !reported.contains(tp.sourceOperationID) {
+            guard let e = tp.cuttingExtents else { continue }
+            let depth = -e.min.z
+            guard radius > 0, depth > Self.distortionWarning * radius else { continue }
+            reported.insert(tp.sourceOperationID)
+            let shrink = Int((min(depth / radius, 1) * 100).rounded())
+            issues.append(JobIssue(.warning, "Cuts \(fmt(depth)) deep into a \(fmt(radius)) wrap radius. A wrapped design is true "
+                + "to size only at the wrap diameter: at the bottom of this cut it comes out \(shrink)% narrower around the "
+                + "blank.", operation: tp.name))
+        }
+        issues.append(JobIssue(.info, "Before the first wrapped cut, jog the rotary axis positive: the top of the blank should "
+            + "roll toward −Y. If it rolls toward +Y, tick Reversed, or wrapped designs come out mirrored."))
+        return issues
+    }
+
+    /// Depth, as a fraction of the wrap radius, past which a wrapped cut is warned about (research §5.3).
+    static let distortionWarning = 0.1
 
     /// How far across the face (from its top line, in Y) the cutter reaches into the surface. A V-bit is only as
     /// wide as it is deep, so it's measured at each point of the cut rather than at the bit's full diameter.
@@ -235,16 +314,26 @@ struct RotaryOutput {
         }
     }
 
-    /// Header comments for the blank and the zeros, in place of the flat job's material and zero lines.
-    static func header(_ stock: Stock, units: LengthUnit, num: (Double) -> String, avid: Bool, axis: RotaryAxis? = nil) -> [String] {
+    /// Header comments for the blank and the zeros, in place of the flat job's material and zero lines. A wrapped
+    /// job also says how the sheet wraps and how its rotary moves are fed (`feeds`).
+    static func header(_ stock: Stock, units: LengthUnit, num: (Double) -> String, avid: Bool, axis: RotaryAxis? = nil,
+                       feeds: RotaryWrap.FeedMode? = nil) -> [String] {
         guard let blank = stock.rotary else { return [] }
         let shape = blank.shape == .cylinder ? "round, D=\(num(blank.diameter))" : "square bar, \(num(blank.diameter)) across"
         var lines = [
             "Material: \(stock.materialName) rotary blank, \(shape), L=\(num(blank.length)) \(units.symbol)",
             "Z ZERO = CENTRE OF ROTATION" + (avid ? " (Avid: Rotary tab > Z Axis Touch)" : ""),
             "Y ZERO = AXIS CENTRELINE   X ZERO = \(xZero(stock).uppercased())",
-            "Raise the tool clear of the chuck and tailstock before Cycle Start",
         ]
+        if blank.isWrapped {
+            lines.append("Wrapped: sheet Y wraps around D=\(num(blank.wrapDiameterOrBlank)), A = Y x 360 / (pi x D), A0 = middle of the sheet")
+            switch feeds {
+            case .inverseTime?: lines.append("Feeds: G93 inverse time on moves that turn A, G94 otherwise")
+            case .perMinute?: lines.append("Feeds: worked out per move for this controller's rotary feed rule")
+            case nil: break
+            }
+        }
+        lines.append("Raise the tool clear of the chuck and tailstock before Cycle Start")
         if let axis, axis.turnsByHand {
             lines += [
                 "TURN THE BLANK BY HAND AT EACH STOP (M0)",

@@ -23,6 +23,17 @@ public enum ZZero: String, Codable, Sendable, CaseIterable, Identifiable {
     public var label: String { self == .materialTop ? "Material top" : "Spoilboard" }
 }
 
+/// How designs map onto a rotary blank.
+public enum RotaryLayout: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// Indexed (3+1): the design sheet is one flat face, and the blank turns to fixed angles between cuts.
+    case faces
+    /// Wrapped: the design sheet is the blank's surface unrolled, and design Y turns into the A angle as the tool
+    /// cuts, so A moves together with X and Z.
+    case wrapped
+    public var id: String { rawValue }
+    public var label: String { self == .faces ? "On faces" : "Wrapped around" }
+}
+
 /// A blank turned on a rotary axis: a round dowel or a square bar held in the chuck, with its rotation axis along
 /// machine X.
 ///
@@ -41,12 +52,33 @@ public struct RotaryStock: Hashable, Codable, Sendable {
     public var diameter: Double
     /// Length along the rotation axis (machine X), mm.
     public var length: Double
+    /// How designs map onto the blank (nil = on faces, as in every file before wrapped jobs).
+    public var layout: RotaryLayout?
+    /// Wrapped jobs: the diameter the flat design wraps around, where it comes out true to size, mm. nil = the
+    /// blank's diameter; set it to the finished size when the blank is rounded down first.
+    public var wrapDiameter: Double?
 
-    public init(shape: Shape = .cylinder, diameter: Double = 2.inch, length: Double = 12.inch) {
+    public init(shape: Shape = .cylinder, diameter: Double = 2.inch, length: Double = 12.inch, layout: RotaryLayout? = nil,
+                wrapDiameter: Double? = nil) {
         self.shape = shape
         self.diameter = diameter
         self.length = length
+        self.layout = layout
+        self.wrapDiameter = wrapDiameter
     }
+
+    /// True when designs wrap around the blank rather than sit on its faces.
+    public var isWrapped: Bool { layout == .wrapped }
+
+    /// The diameter a wrapped design is drawn at: `wrapDiameter`, or the blank's own diameter.
+    public var wrapDiameterOrBlank: Double { wrapDiameter.flatMap { $0 > 0 ? $0 : nil } ?? diameter }
+
+    /// Distance from the axis to Z = 0 of the design sheet, mm: the wrap radius on a wrapped job, the top of a face
+    /// (the blank's radius) on a faces job.
+    public var topRadius: Double { isWrapped ? wrapDiameterOrBlank / 2 : radius }
+
+    /// Height of a wrapped job's unrolled sheet: once around the blank at the wrap diameter, mm.
+    public var circumference: Double { .pi * wrapDiameterOrBlank }
 
     /// Distance from the axis to the nearest point of the surface (the middle of a face on a square bar), mm.
     public var radius: Double { diameter / 2 }
@@ -67,10 +99,15 @@ public struct RotaryStock: Hashable, Codable, Sendable {
 /// The blank being cut. Design coordinates have (0,0) at the material's lower-left corner;
 /// toolpath Z = 0 is the material's top surface and Z = -thickness is its bottom.
 ///
-/// On rotary stock the design sheet is one face of the blank as the spindle sees it: X runs along the rotation axis
-/// (0 to the blank's length), Y across the face (0 to its diameter, with the axis under y = diameter / 2), and Z = 0
-/// is the top of the face, a radius above the axis. Indexed toolpaths cut that sheet with the blank turned to each
-/// of their angles. `setRotary(_:)` keeps width, height and thickness matched to the blank.
+/// On rotary stock laid out on faces, the design sheet is one face of the blank as the spindle sees it: X runs along
+/// the rotation axis (0 to the blank's length), Y across the face (0 to its diameter, with the axis under
+/// y = diameter / 2), and Z = 0 is the top of the face, a radius above the axis. Indexed toolpaths cut that sheet with
+/// the blank turned to each of their angles.
+///
+/// On a wrapped job the sheet is the blank's surface unrolled: X along the axis, Y once around the blank at the wrap
+/// diameter (0 to π × D), and Z = 0 at the wrap diameter. The line across the middle of the sheet is the top of the
+/// blank at A0, and the seam is along its top and bottom edges. `setRotary(_:)` keeps width, height and thickness
+/// matched to the blank.
 public struct Stock: Hashable, Codable, Sendable {
     /// X size, mm.
     public var width: Double
@@ -103,8 +140,12 @@ public struct Stock: Hashable, Codable, Sendable {
     public var safeDistance: Double { linkSafeDistance ?? 0.2.inch }
 
     /// The project file format this stock needs. Rotary stock is format 3: every build that reads format 2 would
-    /// drop it and post the job as a flat sheet.
-    public var requiredFormatVersion: Int { rotary == nil ? 1 : 3 }
+    /// drop it and post the job as a flat sheet. A wrapped layout is format 5: an older build would read the unrolled
+    /// sheet as one face and cut it indexed.
+    public var requiredFormatVersion: Int {
+        guard let rotary else { return 1 }
+        return rotary.isWrapped ? 5 : 3
+    }
 
     public init(width: Double = 24.inch, height: Double = 18.inch, thickness: Double = 0.75.inch,
                 materialName: String = "Plywood", xyOrigin: XYOrigin = .lowerLeft, zZero: ZZero = .materialTop,
@@ -132,29 +173,35 @@ public struct Stock: Hashable, Codable, Sendable {
         return rotary == nil ? Vec3(homePosition.xy, z) : Vec3(width / 2, height / 2, z)
     }
 
-    /// Turns the job into a rotary one on `blank` (or back to a flat sheet with nil). The design sheet becomes one
-    /// face of the blank (width = length, height = diameter, thickness = radius, so a cut to the full thickness
-    /// reaches the axis), and safe Z rises if it wouldn't clear the blank's corners as it turns.
+    /// Turns the job into a rotary one on `blank` (or back to a flat sheet with nil). On faces, the design sheet
+    /// becomes one face of the blank (width = length, height = diameter, thickness = radius, so a cut to the full
+    /// thickness reaches the axis). Wrapped, it becomes the surface unrolled at the wrap diameter (height =
+    /// circumference, thickness = wrap radius). Safe Z rises if it wouldn't clear the blank's corners as it turns.
     public mutating func setRotary(_ blank: RotaryStock?) {
         rotary = blank
         guard let blank else { return }
         width = blank.length
-        height = blank.diameter
-        thickness = blank.radius
+        height = blank.isWrapped ? blank.circumference : blank.diameter
+        thickness = blank.topRadius
         if let least = minimumRotaryClearance { clearanceHeight = max(clearanceHeight, least) }
     }
 
-    /// The lowest safe Z for a rotary job, above the face top: the blank turns at safe Z, so the tool has to clear
-    /// its corners (a square bar's reach past its faces) by the link safe distance. Nil on a flat sheet.
+    /// Distance from the rotation axis to Z = 0 of the design sheet on rotary stock (see `RotaryStock.topRadius`);
+    /// nil on a flat sheet.
+    public var topRadius: Double? { rotary?.topRadius }
+
+    /// The lowest safe Z for a rotary job, above the sheet's Z = 0: the blank turns at safe Z, so the tool has to
+    /// clear its corners (a square bar's reach past its faces, or a blank wider than the wrap diameter) by the link
+    /// safe distance. Nil on a flat sheet.
     public var minimumRotaryClearance: Double? {
-        rotary.map { $0.outerRadius - $0.radius + safeDistance }
+        rotary.map { $0.outerRadius - $0.topRadius + safeDistance }
     }
 
-    /// True when width, height and thickness describe one face of the rotary blank (always true on a flat sheet).
+    /// True when width, height and thickness describe the rotary blank's design sheet (always true on a flat sheet).
     public var matchesRotaryBlank: Bool {
         guard let r = rotary else { return true }
         func same(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= 1e-6 * max(1, abs(b)) }
-        return same(width, r.length) && same(height, r.diameter) && same(thickness, r.radius)
+        return same(width, r.length) && same(height, r.isWrapped ? r.circumference : r.diameter) && same(thickness, r.topRadius)
     }
 
     /// Design-space point that the machine's X0 Y0 corresponds to. On rotary stock Y zero is always the axis
@@ -177,17 +224,19 @@ public struct Stock: Hashable, Codable, Sendable {
     }
 
     /// Converts a toolpath point (design XY, Z relative to material top) into work coordinates (G54). Rotary jobs
-    /// zero Z on the rotation axis whatever `zZero` says, so work Z is the toolpath Z plus the blank's radius.
+    /// zero Z on the rotation axis whatever `zZero` says, so work Z is the toolpath Z plus the sheet's top radius
+    /// (the blank's radius on faces, the wrap radius when wrapped). On a wrapped job Y is still the sheet's: the
+    /// posts turn it into an A angle (`RotaryWrap`) and keep the tool over the axis.
     public func toWork(_ p: Vec3) -> Vec3 {
         let o = originPoint
-        let z = rotary.map { p.z + $0.radius } ?? (zZero == .materialTop ? p.z : p.z + thickness)
+        let z = rotary.map { p.z + $0.topRadius } ?? (zZero == .materialTop ? p.z : p.z + thickness)
         return Vec3(p.x - o.x, p.y - o.y, z)
     }
 
     /// Inverse of `toWork`.
     public func fromWork(_ p: Vec3) -> Vec3 {
         let o = originPoint
-        let z = rotary.map { p.z - $0.radius } ?? (zZero == .materialTop ? p.z : p.z - thickness)
+        let z = rotary.map { p.z - $0.topRadius } ?? (zZero == .materialTop ? p.z : p.z - thickness)
         return Vec3(p.x + o.x, p.y + o.y, z)
     }
 

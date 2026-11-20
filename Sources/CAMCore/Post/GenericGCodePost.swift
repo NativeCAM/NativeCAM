@@ -92,7 +92,8 @@ public struct GenericGCodePost: PostProcessor {
         }
         let rotary = RotaryOutput(project)
         if rotary != nil {
-            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: false, axis: machine.rotary) { w.comment(line) }
+            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: false, axis: machine.rotary,
+                                            feeds: RotaryWrap.feedMode(dialect)) { w.comment(line) }
         } else {
             w.comment("Material: \(stock.materialName) X\(num(stock.width)) Y\(num(stock.height)) Z\(num(stock.thickness)) \(units.symbol)")
             w.comment("Z zero: \(stock.zZero.label)  XY zero: \(stock.xyOrigin.label)")
@@ -146,6 +147,19 @@ public struct GenericGCodePost: PostProcessor {
             let safe = workZ(stock.clearanceHeight)
             w.line("G0 Z\(fmt(round(safe)))")
             state.z = round(safe)
+            // Wrapped: the tool stays over the axis and the blank turns under it as it cuts.
+            if let rotary, tp.wrapDiameter != nil {
+                guard let writer = wrappedWriter(rotary) else {
+                    // The job checks report this as an error; never write the sheet's Y as if it were flat.
+                    w.comment("SKIPPED: \(dialect.name) can't be given the right feed for wrapped moves")
+                    continue
+                }
+                for part in [writer.approach(tp, state: &state), writer.motions(tp, state: &state)] {
+                    for line in part.lines { w.line(line) }
+                    if part.turned { turned = true }
+                }
+                continue
+            }
             let start = stock.toWork(tp.start)
             w.line("G0 X\(fmt(round(start.x))) Y\(fmt(round(start.y)))")
             state.x = round(start.x)
@@ -277,6 +291,14 @@ public struct GenericGCodePost: PostProcessor {
         }
     }
 
+    /// Writes wrapped toolpaths in this dialect's number formats; nil when the controller can't be given the
+    /// right feed for them (the job checks report it).
+    private func wrappedWriter(_ rotary: RotaryOutput) -> WrappedWriter? {
+        guard let feeds = RotaryWrap.feedMode(dialect) else { return nil }
+        return WrappedWriter(stock: stock, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
+                             feeds: feeds, rapidWord: "G0", feedWord: "G1", dwell: { dwell($0) })
+    }
+
     // MARK: Numbers
 
     private var decimals: Int { dialect.coordinateDecimals(units) }
@@ -298,7 +320,7 @@ public struct GenericGCodePost: PostProcessor {
     private func num(_ mm: Double) -> String { fmt(round(mm)) }
     private func workZ(_ zAboveTop: Double) -> Double { stock.toWork(Vec3(0, 0, zAboveTop)).z }
 
-    struct ModalState {
+    struct ModalState: WrapModalState {
         var x: Double?
         var y: Double?
         var z: Double?

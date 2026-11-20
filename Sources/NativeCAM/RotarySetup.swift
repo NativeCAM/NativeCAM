@@ -1,9 +1,9 @@
 import CAMCore
 import SwiftUI
 
-// Controls for indexed (3+1) rotary jobs: the blank in Job Setup, the machine's rotary axis, and each toolpath's
-// index angles. The engine reports every setup it can't cut (`RotaryIndex.issues`); these controls only make the
-// valid choices the easy ones.
+// Controls for rotary jobs: the blank in Job Setup (indexed on faces, or wrapped around), the machine's rotary axis,
+// and each toolpath's index angles. The engine reports every setup it can't cut (`RotaryIndex.issues`); these
+// controls only make the valid choices the easy ones.
 
 // MARK: Rotary blank
 
@@ -28,7 +28,7 @@ struct RotaryBlankRows: View {
                 for i in project.operations.indices { project.operations[i].indexAngles = nil }
             }
         }))
-        .help("Turn the blank on the machine's rotary axis and cut its faces one at a time (indexed, 3+1)")
+        .help("Turn the blank on the machine's rotary axis: cut its faces one at a time (indexed, 3+1), or wrap designs around it")
         if let blank = project.stock.rotary {
             Picker("Shape", selection: value(\.shape)) {
                 ForEach(RotaryStock.Shape.allCases) { Text($0.label).tag($0) }
@@ -38,6 +38,23 @@ struct RotaryBlankRows: View {
                         help: blank.shape == .cylinder ? "Measure the blank with calipers" : "Width of the bar from one face to the opposite face",
                         minimum: 1)
             LengthField(title: "Length", mm: value(\.length), units: units, help: "Along the rotation axis (machine X)", minimum: 1)
+            Picker("Designs", selection: Binding(get: { blank.layout ?? .faces }, set: { layout in
+                guard var b = project.stock.rotary else { return }
+                b.layout = layout == .faces ? nil : layout
+                project.stock.setRotary(b)
+                // On a wrapped job each shape's place on the sheet sets its angle; index angles don't apply.
+                if layout == .wrapped { for i in project.operations.indices { project.operations[i].indexAngles = nil } }
+            })) {
+                ForEach(RotaryLayout.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .help("On faces: the blank turns to fixed angles between cuts. Wrapped around: the sheet wraps around a round blank, "
+                + "which turns as the tool cuts (G93 inverse-time feeds).")
+            if blank.isWrapped {
+                OptionalLengthField(title: "Wrap diameter", mm: value(\.wrapDiameter), units: units,
+                                    prompt: units.fromMM(blank.diameter).formatted(.number.precision(.fractionLength(0...units.displayDecimals))),
+                                    help: "Where wrapped designs come out true to size: the blank's diameter, or the finished size if it's turned down first")
+            }
             if project.machine.rotary == nil {
                 HStack(alignment: .firstTextBaseline) {
                     Label("This machine has no rotary axis set up.", systemImage: "exclamationmark.triangle")
@@ -77,7 +94,9 @@ struct RotarySheetRows: View {
                 Button("Fit to Blank") { stock.setRotary(stock.rotary) }.controlSize(.small)
             }
         }
-        Text("The design sheet is one face of the blank: X along the axis, Y across the face with the axis under its middle, and the thickness down to the axis. Each toolpath cuts it at its index angles.")
+        Text(stock.rotary?.isWrapped == true
+             ? "The design sheet is the blank unrolled at the wrap diameter: X along the axis, Y once around it, and the thickness down to the axis. The middle of the sheet is the top of the blank at A0; its top and bottom edges meet at the seam, and shapes past them carry on round."
+             : "The design sheet is one face of the blank: X along the axis, Y across the face with the axis under its middle, and the thickness down to the axis. Each toolpath cuts it at its index angles.")
             .font(.caption).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -302,6 +321,22 @@ struct OptionalRateField: View {
             Text(title)
         }
         .help(help ?? "")
+    }
+}
+
+// MARK: Wrapped
+
+/// On a wrapped job, in place of index angles: how a toolpath's shapes land on the blank.
+struct WrapNoteSection: View {
+    let blank: RotaryStock
+    let units: LengthUnit
+
+    var body: some View {
+        Section("Rotary") {
+            Text("Wraps around the blank at \(units.format(blank.wrapDiameterOrBlank)) \(units.symbol): each shape is cut at the angle its height on the sheet gives, with the middle of the sheet on top at A0.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

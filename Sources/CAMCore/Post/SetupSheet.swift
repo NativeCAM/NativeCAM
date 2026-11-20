@@ -21,12 +21,19 @@ public enum SetupSheet {
         if let blank = stock.rotary {
             let avid = machine.isLegacyAvidMach4 || machine.controller?.family == .centroid
             let shape = blank.shape == .cylinder ? "round, \(len(blank.diameter)) diameter" : "square bar, \(len(blank.diameter)) across"
+            func rotaryRow(_ blank: RotaryStock) -> String {
+                let letter = esc(machine.rotary?.letter.rawValue ?? "A")
+                guard blank.isWrapped else {
+                    return "<dt>Rotary</dt><dd>\(esc(RotaryOutput.setupNote(machine))) Raise the tool clear of the chuck and tailstock before starting.</dd>"
+                }
+                return "<dt>Rotary</dt><dd>Designs wrap around \(len(blank.wrapDiameterOrBlank)): the middle of the sheet is the top of the blank at \(letter)0, and \(letter) turns while the tool cuts. Raise the tool clear of the chuck and tailstock before starting.</dd>"
+            }
             setupRows = """
             <dt>Material</dt><dd>\(esc(stock.materialName)) rotary blank: \(shape), \(len(blank.length)) long</dd>
             <dt>XY zero</dt><dd>X at the \(RotaryOutput.xZero(stock)), Y on the rotation axis centreline</dd>
             <dt>Z zero</dt><dd class="error">On the rotation axis\(avid ? " (Avid: Rotary tab ▸ Z Axis Touch)" : ""), not the top of the blank</dd>
-            <dt>Rotary</dt><dd>\(esc(RotaryOutput.setupNote(machine))) Raise the tool clear of the chuck and tailstock before starting.</dd>
-            <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the top face (\(len(blank.radius + stock.clearanceHeight)) from the axis)</dd>
+            \(rotaryRow(blank))
+            <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the \(blank.isWrapped ? "wrap diameter" : "top face") (\(len(blank.topRadius + stock.clearanceHeight)) from the axis)</dd>
             """
         } else {
             setupRows = """
@@ -38,7 +45,7 @@ public enum SetupSheet {
         }
         let zeroZ = stock.rotary == nil ? "zero Z (\(esc(stock.zZero.label.lowercased())))" : "zero Z on the rotation axis"
         let rezeroZ = stock.rotary == nil ? "re-zero Z with the touch plate" : "re-zero Z on the rotation axis"
-        let angleColumn = stock.rotary != nil
+        let angleColumn = stock.rotary.map { !$0.isWrapped } ?? false
 
         var h = """
         <!doctype html>

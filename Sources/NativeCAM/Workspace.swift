@@ -138,7 +138,8 @@ final class Workspace {
         session = s
         simTime = 0
         simAngle = 0
-        rotaryAxis = project.stock.rotary.map { SIMD2(Float(project.stock.height / 2), Float(-$0.radius)) }
+        // A wrapped job simulates on its unrolled sheet for now, drawn flat.
+        rotaryAxis = project.stock.rotary.flatMap { $0.isWrapped ? nil : SIMD2(Float(project.stock.height / 2), Float(-$0.radius)) }
         turnStarts = s.timeline.steps.filter { $0.turn != nil }.map(\.startTime)
         publishHeights()
         rebuildLines(project)

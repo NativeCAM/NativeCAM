@@ -81,16 +81,18 @@ public enum CAMEngine {
             return s.polylines(tolerance: 0.1).filter(\.isClosed).map { KeepOut(outline: $0, height: h) }
         }.flatMap { $0 }
         let clearanceZ = max(stock.clearanceHeight, stock.plungeHeight)
+        // Wrapped rotary jobs cut each operation once on the unrolled sheet; the posts wrap it around the blank.
+        let wrap = stock.rotary.flatMap { $0.isWrapped ? $0.wrapDiameterOrBlank : nil }
         for op in project.operations where op.enabled && (operationIDs?.contains(op.id) ?? true) {
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
             if shapes.isEmpty {
                 issues.append(JobIssue(.warning, "No shapes selected.", operation: op.name))
                 continue
             }
-            // Flat jobs cut once; rotary jobs once per index angle, each on its own face model. Every angle is
-            // generated first, then cut toolpath by toolpath: a V-carve's flat clearing at every angle, then its V-bit
-            // at every angle, so the job changes tools once rather than at every face.
-            let angles: [Double?] = stock.rotary == nil ? [nil] : op.rotaryAngles
+            // Flat jobs cut once; rotary jobs once per index angle, each on its own face model (wrapped jobs once, on the
+            // unrolled sheet). Every angle is generated first, then cut toolpath by toolpath: a V-carve's flat clearing
+            // at every angle, then its V-bit at every angle, so the job changes tools once rather than at every face.
+            let angles: [Double?] = stock.rotary == nil || wrap != nil ? [nil] : op.rotaryAngles
             func faceKey(_ angle: Double?) -> Double { angle.map(RotaryIndex.normalized) ?? 0 }
             var perAngle: [[Toolpath]] = []
             for (position, angle) in angles.enumerated() {
@@ -120,7 +122,9 @@ public enum CAMEngine {
                     let face = faceKey(angle)
                     var model = models.removeValue(forKey: face) ?? newModel()
                     defer { models[face] = model }
-                    if stock.retract == .minimum {
+                    // Wrapped toolpaths link through safe Z: the blank turns as the tool moves across the sheet, and
+                    // only safe Z is sure to clear it (and a square bar's corners) all the way round.
+                    if stock.retract == .minimum && wrap == nil {
                         let settings = LinkOptimizer.Settings(safeDistance: stock.safeDistance, clearanceZ: clearanceZ,
                                                               stayDownLimit: max(3 * tp.tool.diameter, 10), floorZ: -stock.thickness,
                                                               keepOuts: keepOuts)
@@ -129,7 +133,9 @@ public enum CAMEngine {
                         tp.forEachMotion { s, m in model.apply(m, from: s, tool: tp.tool) }
                     }
                     issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
-                    if project.machine.outputArcs {
+                    if let wrap {
+                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, tolerance: ctx.flattenTolerance)
+                    } else if project.machine.outputArcs {
                         tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
                     }
                     issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
@@ -320,7 +326,7 @@ public enum CAMEngine {
         let deepest = -ext.min.z
         if let blank = stock.rotary {
             // Cutting past the axis is fine (a hole through a dowel); past the far side the tool is in the air.
-            let past = deepest - blank.diameter
+            let past = deepest - (blank.topRadius + blank.radius)
             if past > 1 {
                 issues.append(JobIssue(.warning, "Cuts \(fmt(past)) past the far side of the blank.", operation: tp.name))
             } else if past > 1e-6 {
@@ -345,16 +351,19 @@ public enum CAMEngine {
             issues.append(JobIssue(.error, "Cuts past an end of the blank, where the chuck or tailstock is. Keep the cutter "
                 + "inside the blank's length, clear of the chuck jaws.", operation: tp.name))
         }
-        // Outside the stock in XY (allow the tool radius for outside profiles).
+        // Outside the stock in XY (allow the tool radius for outside profiles). A wrapped sheet's Y goes round the
+        // blank, so past its top or bottom edge a cut just carries on round.
+        let wrapped = tp.wrapDiameter != nil
         let margin = tp.tool.radius + 0.01
         let sb = stock.bounds.insetBy(-margin)
-        if ext.min.x < sb.min.x || ext.min.y < sb.min.y || ext.max.x > sb.max.x || ext.max.y > sb.max.y {
+        if ext.min.x < sb.min.x || ext.max.x > sb.max.x || (!wrapped && (ext.min.y < sb.min.y || ext.max.y > sb.max.y)) {
             issues.append(JobIssue(.warning, "Toolpath extends beyond the material edges.", operation: tp.name))
         }
-        // Machine travel (relative to the work origin, assuming the material sits inside the work area).
+        // Machine travel (relative to the work origin, assuming the material sits inside the work area). A wrapped
+        // toolpath doesn't move Y.
         let lo = stock.toWork(Vec3(ext.min.x, ext.min.y, ext.min.z))
         let hi = stock.toWork(Vec3(ext.max.x, ext.max.y, ext.max.z))
-        if hi.x - lo.x > machine.travel.x || hi.y - lo.y > machine.travel.y {
+        if hi.x - lo.x > machine.travel.x || (!wrapped && hi.y - lo.y > machine.travel.y) {
             issues.append(JobIssue(.error, "Toolpath is larger than the \(machine.displayName) work area.", operation: tp.name))
         }
         if let blank = stock.rotary {
