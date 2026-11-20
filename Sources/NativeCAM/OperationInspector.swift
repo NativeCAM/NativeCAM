@@ -39,7 +39,7 @@ struct OperationInspector: View {
                     LabeledContent("Cutting length", value: "\(units.format(tps.reduce(0) { $0 + $1.cuttingLength }, decimals: 1)) \(units.symbol)")
                     LabeledContent("Estimated time", value: formatDuration(seconds.reduce(0, +)))
                     ForEach(Array(tps.enumerated()), id: \.element.id) { i, tp in
-                        LabeledContent("   T\(tp.tool.number) \(tp.tool.name)", value: formatDuration(seconds[i]))
+                        LabeledContent("   \(tp.tile.map { "Tile \($0 + 1) · " } ?? "")T\(tp.tool.number) \(tp.tool.name)", value: formatDuration(seconds[i]))
                     }
                     if let deepest = tps.compactMap({ $0.cuttingExtents.map { -$0.min.z } }).max() {
                         LabeledContent("Deepest cut", value: "\(units.format(deepest)) \(units.symbol)")

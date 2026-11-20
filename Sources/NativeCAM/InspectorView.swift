@@ -105,10 +105,162 @@ struct SetupInspector: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            TilingSection(project: $project)
             SavedMachineSection(machine: $project.machine)
             MachineSection(machine: $project.machine, units: units)
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Cutting a job bigger than the machine's travel in tiles, with registration holes for dowels (Vectric's Toolpath
+/// Tiling Manager, in Job Setup).
+struct TilingSection: View {
+    @Binding var project: Project
+
+    var units: LengthUnit { project.displayUnits }
+
+    private var tiling: Binding<TilingSettings> {
+        Binding(get: { project.tiling ?? TilingSettings() }, set: { project.tiling = $0 })
+    }
+
+    var body: some View {
+        Section {
+            if project.stock.rotary != nil {
+                Text("Rotary jobs can't be tiled: the blank can't move through the machine.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Toggle("Cut in tiles", isOn: tiling.enabled)
+                    .help("Split a job bigger than the machine's travel into tiles, cut one after another as the material moves")
+                if tiling.wrappedValue.enabled { settings }
+            }
+        } header: {
+            Text("Tiling")
+        } footer: {
+            if project.stock.rotary == nil, tiling.wrappedValue.enabled {
+                Text(summary).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var settings: some View {
+        let t = tiling.wrappedValue
+        Picker("Tiles", selection: tiling.mode) {
+            ForEach(TilingSettings.Mode.allCases) { Text($0.label).tag($0) }
+        }
+        .help("Feed-through: the material slides through the machine (open front and back) one tile at a time. Individual tiles: separate boards, or a board moved both ways.")
+        if t.mode.tilesX {
+            AutomaticLengthRow(title: t.mode == .grid ? "Tile width" : "Tile length (move)", value: tiling.tileWidth,
+                               automatic: TileLayout.automaticPitch(project, alongX: true), units: units,
+                               help: "How far apart tiles are along X: how far the material moves. Automatic is the X travel less the overlap, the largest bit and a margin.")
+        }
+        if t.mode.tilesY {
+            AutomaticLengthRow(title: t.mode == .grid ? "Tile height" : "Tile length (move)", value: tiling.tileHeight,
+                               automatic: TileLayout.automaticPitch(project, alongX: false), units: units,
+                               help: "How far apart tiles are along Y: how far the material moves. Automatic is the Y travel less the overlap, the largest bit and a margin.")
+        }
+        AutomaticLengthRow(title: "Overlap", value: tiling.overlap, automatic: automaticOverlap, units: units,
+                           help: "How far each tile reaches past its tile lines, so a cut that crosses one runs on before it breaks. At least the largest bit's radius; automatic adds 1/8 in.")
+        Picker("Short tile", selection: tiling.smallestFirst) {
+            Text("Last").tag(false)
+            Text("First").tag(true)
+        }
+        .help("Where the remainder tile goes when the material isn't a whole number of tiles long")
+        if t.mode.isFeedThrough {
+            Toggle("Registration holes", isOn: Binding(get: { t.registration?.enabled == true }, set: { on in
+                var r = tiling.wrappedValue.registration ?? RegistrationHoles()
+                r.enabled = on
+                tiling.wrappedValue.registration = r
+            }))
+            .help("Drill dowel holes into the spoilboard and through the material one tile apart, so each move lands exactly")
+            if let reg = t.registration, reg.enabled { registration(reg) }
+        }
+    }
+
+    @ViewBuilder
+    private func registration(_ reg: RegistrationHoles) -> some View {
+        let set: (RegistrationHoles) -> Void = { tiling.wrappedValue.registration = $0 }
+        LengthField(title: "Dowel diameter", mm: Binding(get: { reg.diameter }, set: { var r = reg; r.diameter = $0; set(r) }),
+                    units: units, help: "The hole size: the dowel or pin you'll register with.", minimum: 1)
+        LengthField(title: "In from the edges", mm: Binding(get: { reg.edgeOffset }, set: { var r = reg; r.edgeOffset = $0; set(r) }),
+                    units: units, help: "How far the pair of holes is in from each side of the material. Keep them in waste, clear of the design.",
+                    minimum: 0)
+        LengthField(title: "Into the spoilboard", mm: Binding(get: { reg.spoilboardDepth }, set: { var r = reg; r.spoilboardDepth = $0; set(r) }),
+                    units: units, help: "How deep the holes go into the spoilboard below the material.", minimum: 1)
+        let tools = jobTools.filter { RegistrationHoles.canDrill($0) }
+        Picker("Bit", selection: Binding(get: { reg.tool?.id }, set: { id in
+            var r = reg
+            r.tool = id.flatMap { id in tools.first { $0.id == id } }
+            set(r)
+        })) {
+            Text(reg.tool == nil ? "Automatic (\(reg.resolvedTool(in: project).map { "T\($0.number) \($0.name)" } ?? "none fits"))" : "Automatic")
+                .tag(UUID?.none)
+            ForEach(tools) { tool in Text("T\(tool.number) \(tool.name)").tag(UUID?.some(tool.id)) }
+        }
+        .help("The bit that drills the holes, cut first in each tile. Automatic picks the job's largest straight bit that fits the hole.")
+    }
+
+    /// The bits the job's enabled toolpaths use, once each.
+    private var jobTools: [Tool] {
+        var out: [Tool] = []
+        for op in project.operations where op.enabled {
+            for t in [op.clearanceTool, op.tool].compactMap({ $0 }) where !out.contains(where: { $0.isSameBit(as: t) && $0.number == t.number }) {
+                out.append(t)
+            }
+        }
+        if let chosen = project.tiling?.registration?.tool, !out.contains(where: { $0.id == chosen.id }) { out.append(chosen) }
+        return out
+    }
+
+    private var automaticOverlap: Double {
+        var p = project
+        p.tiling?.overlap = nil
+        return TileLayout.overlap(p)
+    }
+
+    private var summary: String {
+        guard let layout = TileLayout(project) else {
+            return "The material fits in one tile at this size, so the job is cut as usual."
+        }
+        let u = units
+        func len(_ mm: Double) -> String { "\(u.format(mm, decimals: u == .inch ? 3 : 1)) \(u.symbol)" }
+        var s: String
+        switch layout.mode {
+        case .feedThroughY: s = "\(layout.count) tiles; the material moves \(len(layout.pitch.y)) along Y between them."
+        case .feedThroughX: s = "\(layout.count) tiles; the material moves \(len(layout.pitch.x)) along X between them."
+        case .grid: s = "\(layout.count) tiles, \(layout.columns) across and \(layout.rows) up."
+        }
+        s += " Tile lines are yellow on the canvas, overlaps red. Export saves a file per tile and a setup sheet page for each, with where to move the material"
+        s += layout.registration == nil ? "." : " and where the dowels go."
+        return s
+    }
+}
+
+/// A length that's worked out automatically unless one is typed in.
+struct AutomaticLengthRow: View {
+    let title: String
+    @Binding var value: Double?
+    let automatic: Double
+    let units: LengthUnit
+    var help: String? = nil
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 6) {
+                if value == nil {
+                    Text("\(units.format(automatic, decimals: units == .inch ? 3 : 1)) \(units.symbol)").foregroundStyle(.secondary)
+                } else {
+                    TextField(title, value: Binding(get: { units.fromMM(value ?? automatic) }, set: { value = max(0.1, units.toMM($0)) }),
+                              format: .number.precision(.fractionLength(0...units.displayDecimals)))
+                        .labelsHidden().multilineTextAlignment(.trailing).frame(minWidth: 70)
+                    Text(units.symbol).foregroundStyle(.secondary).frame(width: 24, alignment: .leading)
+                }
+                Toggle("Auto", isOn: Binding(get: { value == nil }, set: { value = $0 ? nil : automatic }))
+                    .toggleStyle(.checkbox)
+            }
+        }
+        .help(help ?? "")
     }
 }
 

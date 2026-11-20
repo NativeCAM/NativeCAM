@@ -123,6 +123,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// motions stay on the flat sheet: the posts and checks turn design Y into the A angle and Z into a distance
     /// from the axis as they write and read the file (`RotaryWrap`).
     public var wrapDiameter: Double?
+    /// On a tiled job, the tile (from 0, in run order) whose file this toolpath is cut in; its motions stay in job
+    /// coordinates (see `TiledJob`). nil when the job isn't tiled.
+    public var tile: Int?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

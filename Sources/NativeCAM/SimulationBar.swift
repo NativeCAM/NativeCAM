@@ -35,6 +35,19 @@ struct SimulationBar: View {
                     ForEach([1.0, 5, 20, 50, 200, 1000], id: \.self) { Text("\(Int($0))×").tag($0) }
                 }
                 .labelsHidden().frame(width: 80)
+                if let count = workspace.tileCount {
+                    Menu {
+                        ForEach(0..<count, id: \.self) { k in
+                            Button("Start of Tile \(k + 1)") { workspace.seek(toTile: k) }
+                        }
+                        Divider()
+                        Button("All Tiles Cut") { workspace.seek(toTile: count) }
+                    } label: {
+                        Label("Tiles", systemImage: "square.split.2x1")
+                    }
+                    .fixedSize()
+                    .help("The simulation cuts the tiles one after another with the material in place; jump to any tile")
+                }
                 if let tool = workspace.simTool {
                     Text(tool.toolpathName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }

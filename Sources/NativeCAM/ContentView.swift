@@ -341,28 +341,24 @@ struct ContentView: View {
     }
 
     /// Posts the job (raised for an air cut when `airCut` is set), checks the files NativeCAM is about to save, and
-    /// saves them: one file, or one per tool when the controller can't stop for a tool change.
+    /// saves them: one file, or one per tool when the controller can't stop for a tool change; on a tiled job, that for
+    /// each tile, with a setup sheet beside them.
     private func export(airCut height: Double?) {
         guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
-        let output: (files: [PostedFile], project: Project, post: any PostProcessor)
-        if let height {
-            guard let air = AirCut.files(project, toolpaths: job.toolpaths, height: height) else { return noPost() }
-            output = air
-        } else {
-            guard let post = PostProcessors.post(for: project) else { return noPost() }
-            output = (post.files(job.toolpaths), project, post)
-        }
+        guard let output = JobExport.files(project, job: job, airCut: height) else { return noPost() }
         let post = output.post
         // Problems in the job, then in each file itself: read back against the controller and the toolpaths.
         let jobErrors = job.issues.filter { $0.severity == .error }.map { "• \($0.operation.map { "\($0): " } ?? "")\($0.message)" }
         var fileLines: [String] = []
         var fileErrors = false
+        var allChecks: [GCodeCheck.Issue] = []
         for file in output.files {
-            let checks = GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: output.project, dialect: post.dialect)
-                .filter { $0.severity != .info }
-            fileErrors = fileErrors || checks.contains { $0.severity == .error }
+            let checks = GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: file.project, dialect: post.dialect)
+            allChecks += checks
+            let shown = checks.filter { $0.severity != .info }
+            fileErrors = fileErrors || shown.contains { $0.severity == .error }
             let label = output.files.count > 1 ? "G-code\(file.suffix ?? "")" : "G-code"
-            fileLines += checks.map { "• \(label): \($0.text)" }
+            fileLines += shown.map { "• \(label): \($0.text)" }
         }
         if !jobErrors.isEmpty || !fileLines.isEmpty {
             var lines = jobErrors + fileLines
@@ -387,7 +383,10 @@ struct ContentView: View {
         panel.allowedContentTypes = [UTType(filenameExtension: post.fileExtension, conformingTo: .plainText) ?? .plainText]
         let base = project.name.isEmpty ? "Untitled" : project.name
         panel.nameFieldStringValue = base + (height == nil ? "" : " (air cut)") + "." + post.fileExtension
-        if output.files.count > 1 {
+        if let tiled = job.tiling {
+            panel.message = "Saves \(output.files.count) files, one \(output.files.count > tiled.layout.count ? "per tool in each tile" : "per tile"), "
+                + "named after this one, and a setup sheet with a page for each tile."
+        } else if output.files.count > 1 {
             panel.message = "\(post.name) can't stop for a tool change, so each tool gets its own file "
                 + "(\(output.files.count) files, named after this one). Re-zero Z before running each."
         } else {
@@ -398,12 +397,19 @@ struct ContentView: View {
             if output.files.count == 1 {
                 try output.files[0].gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
             } else {
-                // "Sign.nc" becomes "Sign 1 of 2 - T5.nc", "Sign 2 of 2 - T1.nc" (the air-cut marker is in the suffix).
+                // "Sign.nc" becomes "Sign 1 of 2 - T5.nc", "Sign 2 of 2 - T1.nc", or "Sign - tile 1 of 2.nc" (the air-cut
+                // marker is in the suffix).
                 var stem = url.deletingPathExtension().lastPathComponent
                 if height != nil, stem.hasSuffix(" (air cut)") { stem = String(stem.dropLast(" (air cut)".count)) }
-                for file in output.files {
-                    let target = url.deletingLastPathComponent().appendingPathComponent(stem + (file.suffix ?? "") + "." + post.fileExtension)
-                    try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: target)
+                let names = JobExport.fileNames(output.files, base: stem + "." + post.fileExtension, fileExtension: post.fileExtension)
+                let folder = url.deletingLastPathComponent()
+                for (file, name) in zip(output.files, names) {
+                    try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: folder.appendingPathComponent(name))
+                }
+                // A tiled job's setup sheet says where to move the material and the dowels before each file.
+                if job.tiling != nil {
+                    let sheet = SetupSheet.html(project: project, job: job, gcodeFile: stem + "." + post.fileExtension, checks: allChecks)
+                    try Data(sheet.utf8).write(to: folder.appendingPathComponent(stem + " setup sheet.html"))
                 }
             }
         } catch {
@@ -420,9 +426,9 @@ struct ContentView: View {
     private func exportSetupSheet() {
         guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
         var checks: [GCodeCheck.Issue] = []
-        if let post = PostProcessors.post(for: project) {
-            for file in post.files(job.toolpaths) {
-                checks += GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: project, dialect: post.dialect)
+        if let output = JobExport.files(project, job: job) {
+            for file in output.files {
+                checks += GCodeCheck.run(file.gcode, toolpaths: file.toolpaths, project: file.project, dialect: output.post.dialect)
             }
         }
         let panel = NSSavePanel()

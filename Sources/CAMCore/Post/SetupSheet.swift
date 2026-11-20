@@ -38,6 +38,15 @@ public enum SetupSheet {
             \(rotaryRow(blank))
             <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the \(blank.isWrapped ? "wrap diameter" : "top face") (\(len(blank.topRadius + stock.clearanceHeight)) from the axis)</dd>
             """
+        } else if let tiled = job.tiling {
+            let layout = tiled.layout
+            setupRows = """
+            <dt>Material</dt><dd>\(esc(stock.materialName)): \(len(stock.width)) × \(len(stock.height)) × \(len(stock.thickness))</dd>
+            <dt>Tiles</dt><dd>\(layout.count), \(esc(layout.mode == .grid ? "individual tiles" : "fed through in \(layout.mode == .feedThroughX ? "X" : "Y")")): \(esc(Self.tileSummary(layout, len: len))). Each tile reaches \(len(layout.overlap)) past its tile lines. A page for each follows.</dd>
+            <dt>XY zero</dt><dd>\(esc(stock.xyOrigin.label)) of the tile, \(len(layout.pitch.x)) × \(len(layout.pitch.y)): the same place on the machine for every tile</dd>
+            <dt>Z zero</dt><dd>\(esc(stock.zZero.label))</dd>
+            <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the material</dd>
+            """
         } else {
             setupRows = """
             <dt>Material</dt><dd>\(esc(stock.materialName)): \(len(stock.width)) × \(len(stock.height)) × \(len(stock.thickness))</dd>
@@ -60,8 +69,10 @@ public enum SetupSheet {
         table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #ddd; vertical-align: top; }
         th { font-weight: 600; background: #f4f4f4; } td.num { text-align: right; font-variant-numeric: tabular-nums; }
         dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; margin: 0; } dt { color: #555; } dd { margin: 0; }
-        .change td { background: #fff7e0; } .error { color: #b00020; } .warning { color: #8a5a00; }
-        @media print { body { margin: 0; } h2 { break-after: avoid; } tr { break-inside: avoid; } }
+        .change td { background: #fff7e0; } tr.tilerow td { background: #e8f1ff; } .error { color: #b00020; } .warning { color: #8a5a00; }
+        section.tile { break-before: page; margin-top: 28px; border-top: 2px solid #ccc; padding-top: 6px; }
+        svg.preview { width: 100%; max-height: 520px; border: 1px solid #ddd; background: #fafafa; margin-top: 10px; }
+        @media print { body { margin: 0; } h2 { break-after: avoid; } tr { break-inside: avoid; } section.tile { border-top: none; margin-top: 0; } }
         </style></head><body>
         <h1>\(esc(project.name))</h1>
         <div class="sub">Setup sheet · \(esc(df.string(from: date)))\(gcodeFile.map { " · " + esc($0) } ?? "")</div>
@@ -74,7 +85,7 @@ public enum SetupSheet {
         <dt>Run time</dt><dd>About \(time(job.estimatedSeconds))</dd>
 
         """
-        if let ext = extents(job.toolpaths) {
+        if job.tiling == nil, let ext = extents(job.toolpaths) {
             let lo = stock.toWork(ext.min), hi = stock.toWork(ext.max)
             h += "<dt>Cutting extents</dt><dd>X \(len(lo.x)) to \(len(hi.x)), Y \(len(lo.y)) to \(len(hi.y)), "
                 + "Z \(len(lo.z)) to \(len(hi.z)) (work coordinates)</dd>\n"
@@ -83,7 +94,11 @@ public enum SetupSheet {
 
         // Tools in the order they go into the spindle.
         var order: [Tool] = []
-        for tp in job.toolpaths where !tp.isEmpty && order.last?.number != tp.tool.number { order.append(tp.tool) }
+        for tp in job.toolpaths where !tp.isEmpty && order.last?.number != tp.tool.number {
+            // A tiled job lists each bit once: every tile's file goes through them again.
+            if job.tiling != nil, order.contains(where: { $0.number == tp.tool.number && $0.isSameBit(as: tp.tool) }) { continue }
+            order.append(tp.tool)
+        }
         h += "<h2>Tools</h2>\n<table><tr><th>#</th><th>Tool</th><th>Type</th><th class=\"num\">Diameter</th><th class=\"num\">Cutting length</th><th class=\"num\">Stick-out</th></tr>\n"
         for (i, t) in order.enumerated() {
             var type = t.shape.label
@@ -115,10 +130,25 @@ public enum SetupSheet {
         h += "<h2>Run order</h2>\n<table><tr><th>#</th><th>Toolpath</th><th>Tool</th>\(angleColumn ? "<th class=\"num\">Angle</th>" : "")<th class=\"num\">RPM</th><th class=\"num\">Feed</th><th class=\"num\">Depth</th><th class=\"num\">Time</th></tr>\n"
         var current: Int?
         var step = 0
+        var lastTile: Int?
+        let export = job.tiling == nil ? nil : JobExport.files(project, job: job, date: date)
+        let names = export.map { JobExport.fileNames($0.files, base: gcodeFile ?? ((project.name.isEmpty ? "Untitled" : project.name) + "." + $0.post.fileExtension), fileExtension: $0.post.fileExtension) } ?? []
+        func files(ofTile t: Int) -> [String] {
+            guard let export else { return [] }
+            return zip(export.files, names).filter { $0.0.tile == t }.map(\.1)
+        }
         // A blank turned by hand: the program stops before each new angle, as the post writes it.
         let rotary = RotaryOutput(project)
         var dial: Double?
         for tp in job.toolpaths where !tp.isEmpty {
+            if let t = tp.tile, t != lastTile, let tiled = job.tiling {
+                // Each tile is its own file, which starts by loading its first tool.
+                lastTile = t
+                current = nil
+                let file = files(ofTile: t).map(esc).joined(separator: ", ")
+                h += "<tr class=\"tilerow\"><td></td><td colspan=\"\(angleColumn ? 7 : 6)\"><b>Tile \(t + 1) of \(tiled.layout.count)</b>: "
+                    + "\(esc(Self.moveText(tiled.layout, to: t, stock: stock, len: len)))\(file.isEmpty ? "" : " Run \(file).")</td></tr>\n"
+            }
             if current != tp.tool.number {
                 let what: String
                 switch machine.toolChange {
@@ -258,8 +288,175 @@ public enum SetupSheet {
             for i in fileChecks { h += "<li class=\"\(i.severity.rawValue)\">G-code: \(esc(i.text))</li>\n" }
             h += "</ul>\n"
         }
+        // A page for each tile: what to do before running its file, and what it cuts.
+        if let tiled = job.tiling {
+            for tile in tiled.layout.tiles {
+                h += tilePage(project: project, job: job, tiled: tiled, tile: tile, files: files(ofTile: tile.index), len: len, time: time)
+            }
+        }
+
         h += "</body></html>\n"
         return h
+    }
+
+    // MARK: Tiles
+
+    /// How the tiles are laid out, in words.
+    static func tileSummary(_ layout: TileLayout, len: (Double) -> String) -> String {
+        switch layout.mode {
+        case .feedThroughY: "the material moves \(len(layout.pitch.y)) along Y between tiles"
+        case .feedThroughX: "the material moves \(len(layout.pitch.x)) along X between tiles"
+        case .grid: "\(layout.columns) across and \(layout.rows) up, \(len(layout.pitch.x)) × \(len(layout.pitch.y)) apart"
+        }
+    }
+
+    /// What to do with the material before tile `index`.
+    static func moveText(_ layout: TileLayout, to index: Int, stock: Stock, len: (Double) -> String) -> String {
+        guard index > 0 else {
+            // Where the XY zero is on the material: the tile frame's corner (or centre), which is off the material when
+            // the short tile comes first.
+            let zero = layout.tileStock(stock).originPoint + layout.tiles[0].offset
+            if zero.x.magnitude < 1e-6 && zero.y.magnitude < 1e-6 {
+                return "Set the XY zero at the material's lower-left corner and keep it for every tile."
+            }
+            let note = layout.tiles[0].offset.y < -1e-6 || layout.tiles[0].offset.x < -1e-6
+                ? " The short tile comes first, so the tile's frame starts before the material." : ""
+            return "Set the XY zero at X \(len(zero.x)), Y \(len(zero.y)) from the material's lower-left corner (the "
+                + "\(stock.xyOrigin.label.lowercased()) of the tile) and keep it for every tile.\(note)"
+        }
+        let d = layout.move(to: index)
+        var parts: [String] = []
+        if d.y.magnitude > 1e-6 { parts.append("\(len(d.y.magnitude)) toward Y\(d.y > 0 ? "−" : "+")") }
+        if d.x.magnitude > 1e-6 { parts.append("\(len(d.x.magnitude)) toward X\(d.x > 0 ? "−" : "+")") }
+        return "Move the material \(parts.joined(separator: " and ")); keep the XY zero."
+    }
+
+    /// One tile's page: the file, the move, the dowels, what it cuts and a picture of it.
+    static func tilePage(project: Project, job: JobResult, tiled: TiledJob, tile: TileLayout.Tile, files: [String],
+                         len: (Double) -> String, time: (Double) -> String) -> String {
+        let layout = tiled.layout, stock = project.stock
+        let tileStock = layout.tileStock(stock)
+        func work(_ p: Vec2) -> String {
+            let w = tileStock.toWork(Vec3(p, 0))
+            return "X \(len(w.x)), Y \(len(w.y))"
+        }
+        let k = tile.index
+        let tps = tiled.tiles[k].filter { !$0.isEmpty }
+        var h = "<section class=\"tile\">\n<h2>Tile \(k + 1) of \(layout.count)</h2>\n<dl>\n"
+        if !files.isEmpty {
+            h += "<dt>File\(files.count > 1 ? "s" : "")</dt><dd>\(files.map(esc).joined(separator: "<br>"))</dd>\n"
+        }
+        h += "<dt>Before it</dt><dd>\(esc(moveText(layout, to: k, stock: stock, len: len)))</dd>\n"
+        if let reg = layout.registration {
+            let dowels = reg.dowels[k], drilled = reg.drilled[k]
+            if !dowels.isEmpty {
+                h += "<dt>Dowels</dt><dd>Line the holes tile \(k) drilled up over the spoilboard holes and drop a \(len(2 * reg.radius)) "
+                    + "dowel through each, at \(dowels.map(work).joined(separator: " and ")). Clamp the material, then tap the dowels "
+                    + "flush or pull them out before starting.</dd>\n"
+            }
+            if !drilled.isEmpty {
+                let spoil = Set(reg.spoilboard.map { "\($0.x),\($0.y)" })
+                let fixed = drilled.filter { spoil.contains("\($0.x),\($0.y)") }, next = drilled.filter { !spoil.contains("\($0.x),\($0.y)") }
+                var what: [String] = []
+                if !fixed.isEmpty { what.append("the spoilboard holes in front of the material at \(fixed.map(work).joined(separator: " and "))") }
+                if !next.isEmpty { what.append("the holes for tile \(k + 2)'s dowels at \(next.map(work).joined(separator: " and "))") }
+                h += "<dt>Drills</dt><dd>\(what.joined(separator: ", then ").prefix(1).uppercased() + what.joined(separator: ", then ").dropFirst()), "
+                    + "\(len(reg.depth)) deep, before it cuts.</dd>\n"
+            }
+        }
+        let core = tile.core
+        h += "<dt>Cuts</dt><dd>Its share of the material, X \(len(core.min.x)) to \(len(core.max.x)), Y \(len(core.min.y)) to \(len(core.max.y)) "
+            + "from the material's lower-left corner, and up to \(len(layout.overlap)) past its tile lines.</dd>\n"
+        if let ext = extents(tps) {
+            let lo = tileStock.toWork(ext.min - Vec3(tile.offset, 0)), hi = tileStock.toWork(ext.max - Vec3(tile.offset, 0))
+            h += "<dt>Cutting extents</dt><dd>X \(len(lo.x)) to \(len(hi.x)), Y \(len(lo.y)) to \(len(hi.y)), Z \(len(lo.z)) to \(len(hi.z)) "
+                + "(work coordinates)</dd>\n"
+        }
+        let seconds = tps.reduce(0.0) { $0 + (job.estimatedSeconds(toolpath: $1.id) ?? $1.estimatedSeconds(rapidRate: project.machine.rapidRateForEstimates)) }
+        h += "<dt>Run time</dt><dd>About \(time(seconds))</dd>\n</dl>\n"
+        h += "<table><tr><th>#</th><th>Toolpath</th><th>Tool</th><th class=\"num\">Time</th></tr>\n"
+        for (i, tp) in tps.enumerated() {
+            let t = job.estimatedSeconds(toolpath: tp.id).map(time) ?? "–"
+            h += "<tr><td>\(i + 1)</td><td>\(esc(tp.name))</td><td>T\(tp.tool.number) \(esc(tp.tool.name))</td><td class=\"num\">\(t)</td></tr>\n"
+        }
+        h += "</table>\n"
+        h += preview(project: project, tiled: tiled, tile: tile)
+        h += "</section>\n"
+        return h
+    }
+
+    /// The whole material from above, with this tile's share and cuts picked out, the overlap bands, the dowels and the
+    /// holes it drills, and its XY zero.
+    static func preview(project: Project, tiled: TiledJob, tile: TileLayout.Tile) -> String {
+        let layout = tiled.layout, stock = project.stock
+        let o = layout.overlap
+        let pad = max(stock.width, stock.height) * 0.03
+        var lo = Vec2(min(0, tile.frame.min.x) - pad, min(0, tile.frame.min.y) - pad)
+        var hi = Vec2(max(stock.width, tile.frame.max.x) + pad, max(stock.height, tile.frame.max.y) + pad)
+        if let reg = layout.registration {
+            for p in reg.spoilboard.map({ $0 + layout.tiles[0].offset }) {
+                lo = Vec2(min(lo.x, p.x - pad), min(lo.y, p.y - pad))
+                hi = Vec2(max(hi.x, p.x + pad), max(hi.y, p.y + pad))
+            }
+        }
+        let size = hi - lo
+        let stroke = max(size.x, size.y) / 500
+        func n(_ v: Double) -> String { String(format: "%.2f", v) }
+        // SVG's Y runs down: flip it so the material's lower-left is at the bottom left.
+        func y(_ v: Double) -> Double { hi.y - v + lo.y }
+        func rect(_ r: Rect2, _ style: String) -> String {
+            "<rect x=\"\(n(r.min.x))\" y=\"\(n(y(r.max.y)))\" width=\"\(n(r.width))\" height=\"\(n(r.height))\" \(style)/>"
+        }
+        var s = "<svg class=\"preview\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"\(n(lo.x)) \(n(lo.y)) \(n(size.x)) \(n(size.y))\">\n"
+        s += rect(stock.bounds, "fill=\"#f1ebdd\" stroke=\"#8a7f6a\" stroke-width=\"\(n(stroke))\"") + "\n"
+        s += rect(tile.core, "fill=\"#d6e6ff\" stroke=\"#1e66d0\" stroke-width=\"\(n(stroke * 1.5))\"") + "\n"
+        for x in layout.seamsX {
+            s += rect(Rect2(min: Vec2(x - o, 0), max: Vec2(x + o, stock.height)), "fill=\"#ff3b30\" fill-opacity=\"0.18\"") + "\n"
+        }
+        for v in layout.seamsY {
+            s += rect(Rect2(min: Vec2(0, v - o), max: Vec2(stock.width, v + o)), "fill=\"#ff3b30\" fill-opacity=\"0.18\"") + "\n"
+        }
+        func path(_ tps: [Toolpath], step: Double, _ style: String) -> String {
+            var d = ""
+            for tp in tps {
+                var last: Vec2?
+                tp.forEachMotion { start, m in
+                    guard m.kind != .dwell else { return }
+                    if m.kind == .rapid || m.end.z >= 0 { last = nil; return }
+                    if last == nil { d += "M\(n(start.xy.x)) \(n(y(start.xy.y)))"; last = start.xy }
+                    for q in m.samples(from: start, maxStep: step) where q.xy.distance(to: last!) >= step {
+                        d += "L\(n(q.x)) \(n(y(q.y)))"
+                        last = q.xy
+                    }
+                }
+            }
+            return d.isEmpty ? "" : "<path d=\"\(d)\" fill=\"none\" \(style)/>\n"
+        }
+        let step = max(1.0, max(size.x, size.y) / 800)
+        let others = tiled.tiles.enumerated().filter { $0.offset != tile.index }.flatMap(\.element)
+        s += path(others, step: step * 2, "stroke=\"#9a9a9a\" stroke-width=\"\(n(stroke))\"")
+        s += path(tiled.tiles[tile.index], step: step, "stroke=\"#0b4fb3\" stroke-width=\"\(n(stroke * 1.5))\"")
+        for x in layout.seamsX {
+            s += "<line x1=\"\(n(x))\" y1=\"\(n(y(0)))\" x2=\"\(n(x))\" y2=\"\(n(y(stock.height)))\" stroke=\"#d4a000\" stroke-width=\"\(n(stroke * 1.5))\"/>\n"
+        }
+        for v in layout.seamsY {
+            s += "<line x1=\"0\" y1=\"\(n(y(v)))\" x2=\"\(n(stock.width))\" y2=\"\(n(y(v)))\" stroke=\"#d4a000\" stroke-width=\"\(n(stroke * 1.5))\"/>\n"
+        }
+        if let reg = layout.registration {
+            let r = max(reg.radius, stroke * 3)
+            for p in reg.dowels[tile.index].map({ $0 + tile.offset }) {
+                s += "<circle cx=\"\(n(p.x))\" cy=\"\(n(y(p.y)))\" r=\"\(n(r))\" fill=\"#222\"/>\n"
+            }
+            for p in reg.drilled[tile.index].map({ $0 + tile.offset }) {
+                s += "<circle cx=\"\(n(p.x))\" cy=\"\(n(y(p.y)))\" r=\"\(n(r))\" fill=\"none\" stroke=\"#c0392b\" stroke-width=\"\(n(stroke * 1.5))\"/>\n"
+            }
+        }
+        // The XY zero: where the tile's frame puts the stock's origin.
+        let zero = layout.tileStock(stock).originPoint + tile.offset
+        let arm = max(size.x, size.y) / 60
+        s += "<path d=\"M\(n(zero.x - arm)) \(n(y(zero.y)))L\(n(zero.x + arm)) \(n(y(zero.y)))M\(n(zero.x)) \(n(y(zero.y - arm)))L\(n(zero.x)) \(n(y(zero.y + arm)))\" stroke=\"#000\" stroke-width=\"\(n(stroke * 2))\"/>\n"
+        s += "</svg>\n"
+        return s
     }
 
     static func esc(_ s: String) -> String {
