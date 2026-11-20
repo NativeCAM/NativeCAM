@@ -149,11 +149,40 @@ public struct CornerReliefSettings: Hashable, Codable, Sendable {
     public var tBoneSide: TBoneSide
     /// Corners up to this angle (degrees, measured across the cut-away area; a square corner is 90) are relieved.
     public var maxCornerAngle: Double
+    /// Corners given their own relief on the canvas; nil = every corner follows the settings above.
+    public var overrides: [CornerOverride]?
 
-    public init(style: CornerReliefStyle = .dogbone, tBoneSide: TBoneSide = .longer, maxCornerAngle: Double = 120) {
+    public init(style: CornerReliefStyle = .dogbone, tBoneSide: TBoneSide = .longer, maxCornerAngle: Double = 120,
+                overrides: [CornerOverride]? = nil) {
         self.style = style
         self.tBoneSide = tBoneSide
         self.maxCornerAngle = maxCornerAngle
+        self.overrides = overrides
+    }
+}
+
+/// One corner's own relief, in place of the toolpath's setting there. The corner is found by its shape and its place
+/// in that shape's own coordinates (before the shape's position, rotation and scale), so moving, turning or scaling
+/// the shape keeps the choice; changing the shape's geometry so the corner moves doesn't.
+public struct CornerOverride: Hashable, Codable, Sendable {
+    public enum Choice: Hashable, Codable, Sendable {
+        /// Leave this corner as the bit cuts it.
+        case asCut
+        case dogbone
+        /// A T-bone whose notch goes into the wall running at this angle (degrees in the shape's own coordinates,
+        /// 0–180; the direction of travel doesn't matter).
+        case tBone(wallAngle: Double)
+    }
+
+    public var shapeID: UUID
+    /// The drawn corner in the shape's own coordinates, mm.
+    public var point: Vec2
+    public var choice: Choice
+
+    public init(shapeID: UUID, point: Vec2, choice: Choice) {
+        self.shapeID = shapeID
+        self.point = point
+        self.choice = choice
     }
 }
 

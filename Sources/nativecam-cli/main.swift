@@ -200,17 +200,20 @@ case "tools":
     }
 
 case "sim":
-    guard args.count >= 2 else { fail("usage: nativecam-cli sim <project|tap> [--png out.png]") }
+    guard args.count >= 2 else { fail("usage: nativecam-cli sim <project|tap|nc|sbp> [--png out.png]") }
     let path = args[1]
     var project: Project
     var toolpaths: [Toolpath]
-    if path.hasSuffix(".tap") || path.hasSuffix(".nc") || path.hasSuffix(".gcode") {
+    let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+    if ["tap", "nc", "gcode", "ngc", "cnc", "txt", "sbp"].contains(ext) {
         project = Project()
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) ?? String(contentsOfFile: path, encoding: .ascii) else {
+        // Files from older CAM programs aren't always UTF-8; Latin-1 reads any bytes.
+        guard let text = (try? String(contentsOfFile: path, encoding: .utf8))
+            ?? (try? String(contentsOfFile: path, encoding: .isoLatin1)) else {
             fail("Can't read \(path)")
         }
         do {
-            let program = try GCodeParser.parse(text)
+            let program = ext == "sbp" ? OpenSBPParser.parse(text) : try GCodeParser.parse(text)
             program.warnings.forEach { print("[warning] \($0)") }
             toolpaths = program.toolpaths(tools: ToolLibrary.starter.tools, stock: project.stock,
                                           fallback: ToolLibrary.starter.tools[0])

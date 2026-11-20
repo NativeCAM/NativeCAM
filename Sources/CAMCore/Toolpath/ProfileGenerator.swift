@@ -54,21 +54,26 @@ enum ProfileGenerator {
 
         // Climb keeps the finished wall on the tool's right, so the waste is on its left.
         let wasteOnLeft = params.direction == .climb
+        var reliefCorners: [ReliefCorner]?
         if let relief = params.cornerRelief {
             if params.side == .on {
                 warnings.append("Corner reliefs need an inside or outside cut; they were skipped.")
             } else {
                 let design = CornerRelief.Design(regions.flatMap(\.loops))
+                let index = CornerRelief.ShapeIndex(shapes, tolerance: context.flattenTolerance)
+                var matched = Set<Int>()
                 var blocked = 0
+                var marks: [ReliefCorner] = []
                 for i in contours.indices where contours[i].closed {
-                    let plan = CornerRelief.plan(contours[i].loop, wasteOnLeft: wasteOnLeft, design: design, offset: offset, settings: relief)
-                    contours[i].reliefs = plan.reliefs
-                    blocked += plan.blocked
+                    let found = CornerRelief.corners(contours[i].loop, wasteOnLeft: wasteOnLeft, design: design, offset: offset,
+                                                     maxCornerAngle: relief.maxCornerAngle)
+                    let chosen = CornerRelief.choose(found, settings: relief, shapes: index, matched: &matched)
+                    contours[i].reliefs = chosen.reliefs
+                    blocked += chosen.blocked
+                    marks += chosen.corners
                 }
-                if blocked > 0 {
-                    warnings.append(blocked == 1 ? "1 corner wasn't relieved: its relief would cut into nearby geometry."
-                        : "\(blocked) corners weren't relieved: their reliefs would cut into nearby geometry.")
-                }
+                reliefCorners = marks
+                warnings += CornerRelief.warnings(blocked: blocked, unmatched: (relief.overrides?.count ?? 0) - matched.count)
             }
         }
 
@@ -181,7 +186,9 @@ enum ProfileGenerator {
         if params.tabs.enabled && params.side == .on {
             warnings.append("Tabs are only applied to inside/outside profiles.")
         }
-        return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+        var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+        toolpath.reliefCorners = reliefCorners
+        return toolpath
     }
 
     private static func cutClosed(_ loop: Polyline, levels: [Double], params: ProfileParams, tool: Tool,

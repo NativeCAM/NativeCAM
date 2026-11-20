@@ -34,9 +34,9 @@ import Testing
     /// A hand-written one-page PDF (612 x 792 pt) whose content stream is `content`. `extraObjects` are numbered
     /// from 5 (1 catalog, 2 page tree, 3 page, 4 content stream). Lets tests use operators CoreGraphics never writes.
     static func rawPDF(_ content: String, resources: String = "<< >>", pageExtras: String = "",
-                       extraObjects: [String] = []) -> Data {
+                       catalogExtras: String = "", extraObjects: [String] = []) -> Data {
         let objects = [
-            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Catalog /Pages 2 0 R \(catalogExtras) >>",
             "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources \(resources) /Contents 4 0 R \(pageExtras) >>",
             stream(content),
@@ -189,6 +189,152 @@ import Testing
         let line = try #require(r.openPolylines.first)
         #expect(line.count == 2)
         #expect(Self.nearPt(line.bounds, 100, 100, 300, 100))
+    }
+
+    // MARK: Clipping masks
+
+    @Test func clipTrimsAFillToTheMask() throws {
+        let data = Self.rawPDF("q 0 0 150 150 re W n 100 100 100 100 re f Q")
+        let r = try PDFImporter.importPDF(data: data)
+        let loop = try #require(r.closedPolylines.first)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(loop.bounds, 100, 100, 150, 150, 1e-3))
+        #expect(r.warnings.contains { $0.contains("trimmed 1 path") })
+    }
+
+    @Test func clipTrimsAStrokeToTheMask() throws {
+        let data = Self.rawPDF("q 100 0 100 792 re W n 0 300 m 400 300 l S Q")
+        let r = try PDFImporter.importPDF(data: data)
+        let line = try #require(r.openPolylines.first)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(line.bounds, 100, 300, 200, 300, 1e-3))
+    }
+
+    @Test func artworkTheMaskHidesIsLeftOut() throws {
+        let data = Self.rawPDF("q 0 0 50 50 re W n 100 100 10 10 re f 200 200 m 300 200 l S Q 400 400 10 10 re f")
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(r.polylines[0].bounds, 400, 400, 410, 410))
+        #expect(r.warnings.contains { $0.contains("left out 2 paths it hides completely") })
+    }
+
+    @Test func pathsInsideTheMaskKeepTheirExactPoints() throws {
+        // A triangular (not rectangular) clip that doesn't touch the square goes through Clipper; the square must
+        // still come back with its own coordinates, not Clipper's rounded ones.
+        let data = Self.rawPDF("0 0 m 500 0 l 0 500 l h W n 10.123456 10.654321 20 20 re f")
+        let r = try PDFImporter.importPDF(data: data)
+        let loop = try #require(r.closedPolylines.first)
+        #expect(Self.hasVertices(loop, [Vec2(10.123456, 10.654321) * Self.mm, Vec2(30.123456, 30.654321) * Self.mm], 1e-12))
+        #expect(!r.warnings.contains { $0.contains("clipping") })
+    }
+
+    @Test func graphicsStateRestoreEndsTheClip() throws {
+        let data = Self.rawPDF("q 0 0 50 50 re W n Q 100 100 10 10 re f")
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(r.polylines[0].bounds, 100, 100, 110, 110))
+    }
+
+    @Test func nestedClipsIntersect() throws {
+        let data = Self.rawPDF("q 0 0 200 200 re W n 100 0 300 300 re W n 0 50 400 10 re f Q")
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(r.polylines[0].bounds, 100, 50, 200, 60, 1e-3))
+    }
+
+    @Test func evenOddClipLeavesAHole() throws {
+        // A frame (outer square minus inner square under W*) cuts a strip across it into two pieces.
+        let data = Self.rawPDF("q 0 0 300 300 re 100 100 100 100 re W* n 0 150 300 10 re f Q")
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.closedPolylines.count == 2)
+        #expect(r.closedPolylines.contains { Self.nearPt($0.bounds, 0, 150, 100, 160, 1e-3) })
+        #expect(r.closedPolylines.contains { Self.nearPt($0.bounds, 200, 150, 300, 160, 1e-3) })
+    }
+
+    @Test func formBoundingBoxClips() throws {
+        let data = Self.rawPDF(
+            "q 1 0 0 1 100 100 cm /F Do Q",
+            resources: "<< /XObject << /F 5 0 R >> >>",
+            extraObjects: [Self.stream("0 0 100 100 re f", dict: "/Type /XObject /Subtype /Form /BBox [0 0 50 50]")])
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(r.polylines[0].bounds, 100, 100, 150, 150, 1e-3))
+    }
+
+    @Test func coreGraphicsClipMasksAreApplied() throws {
+        let data = Self.makePDF { ctx in
+            ctx.saveGState()
+            ctx.addEllipse(in: CGRect(x: 100, y: 100, width: 200, height: 200))
+            ctx.clip()
+            ctx.fill(CGRect(x: 200, y: 0, width: 400, height: 792))
+            ctx.restoreGState()
+        }
+        let r = try PDFImporter.importPDF(data: data)
+        let half = try #require(r.closedPolylines.first)
+        #expect(r.polylines.count == 1)
+        // The right half of the circle: x from the centre line to the edge, full height.
+        #expect(Self.nearPt(half.bounds, 200, 100, 300, 300, 0.05))
+        #expect(Self.near(half.area, Double.pi * 100 * 100 / 2 * Self.mm * Self.mm, 2))
+    }
+
+    // MARK: Layers
+
+    static let layerCatalog = "/OCProperties << /OCGs [5 0 R 6 0 R] /D << /OFF [6 0 R] >> >>"
+    static let layerObjects = ["<< /Type /OCG /Name (Cut lines) >>", "<< /Type /OCG /Name (Guides) >>"]
+
+    @Test func hiddenLayersAreLeftOut() throws {
+        let data = Self.rawPDF(
+            "/OC /L1 BDC 10 10 100 100 re f EMC /OC /L2 BDC 200 200 50 50 re f 300 300 m 400 300 l S EMC "
+                + "/P << /MCID 0 >> BDC 500 500 10 10 re f EMC",
+            resources: "<< /Properties << /L1 5 0 R /L2 6 0 R >> >>",
+            catalogExtras: Self.layerCatalog, extraObjects: Self.layerObjects)
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.polylines.count == 2)
+        #expect(r.polylines.contains { Self.nearPt($0.bounds, 10, 10, 110, 110) })
+        #expect(r.polylines.contains { Self.nearPt($0.bounds, 500, 500, 510, 510) })
+        #expect(r.warnings.contains { $0.contains("2 paths on hidden layer “Guides”") })
+    }
+
+    @Test func hiddenLayerClipsStillApply() throws {
+        // Graphics state set inside hidden content (here a clip) still applies after it, as in a viewer.
+        let data = Self.rawPDF(
+            "/OC /L2 BDC 0 0 50 50 re W n EMC 0 0 100 100 re f",
+            resources: "<< /Properties << /L2 6 0 R >> >>",
+            catalogExtras: Self.layerCatalog, extraObjects: Self.layerObjects)
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(r.polylines[0].bounds, 0, 0, 50, 50, 1e-3))
+    }
+
+    @Test func formsOnHiddenLayersAreLeftOut() throws {
+        let data = Self.rawPDF(
+            "/F Do 300 300 10 10 re f",
+            resources: "<< /XObject << /F 7 0 R >> >>",
+            catalogExtras: Self.layerCatalog,
+            extraObjects: Self.layerObjects + [
+                Self.stream("0 0 100 100 re f", dict: "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /OC 6 0 R"),
+            ])
+        let r = try PDFImporter.importPDF(data: data)
+        #expect(r.polylines.count == 1)
+        #expect(Self.nearPt(r.polylines[0].bounds, 300, 300, 310, 310))
+        #expect(r.warnings.contains { $0.contains("Guides") })
+    }
+
+    @Test func membershipDictionariesAndBaseStateOff() throws {
+        // BaseState OFF shows only the groups listed in /ON. An OCMD (AnyOn by default) shows its content when
+        // any of its groups is on; AllOn needs every one.
+        let data = Self.rawPDF(
+            "/OC /A BDC 10 10 10 10 re f EMC /OC /B BDC 30 10 10 10 re f EMC "
+                + "/OC /AnyOn BDC 50 10 10 10 re f EMC /OC /AllOn BDC 70 10 10 10 re f EMC",
+            resources: "<< /Properties << /A 5 0 R /B 6 0 R /AnyOn 7 0 R /AllOn 8 0 R >> >>",
+            catalogExtras: "/OCProperties << /OCGs [5 0 R 6 0 R] /D << /BaseState /OFF /ON [5 0 R] >> >>",
+            extraObjects: Self.layerObjects + [
+                "<< /Type /OCMD /OCGs [5 0 R 6 0 R] >>",
+                "<< /Type /OCMD /OCGs [5 0 R 6 0 R] /P /AllOn >>",
+            ])
+        let r = try PDFImporter.importPDF(data: data)
+        let xs = Set(r.polylines.map { Int(($0.bounds.min.x / Self.mm).rounded()) })
+        #expect(xs == [10, 50])
     }
 
     @Test func fillAndStrokeOfTheSamePathCollapse() throws {
