@@ -231,7 +231,15 @@ case "sim":
     let grid = session.grid
     print(String(format: "Simulated %d steps on a %dx%d grid (%.2f mm cells) in %.2fs",
                  session.timeline.steps.count, grid.columns, grid.rows, grid.cellSize, elapsed))
-    print(String(format: "Removed %.1f cm³ of material; job time %@", grid.removedVolume / 1000, formatTime(session.timeline.duration)))
+    if project.stock.rotary == nil {
+        print(String(format: "Removed %.1f cm³ of material; job time %@", grid.removedVolume / 1000, formatTime(session.timeline.duration)))
+    } else {
+        // Each face of a rotary blank is simulated in its own frame; their removals overlap, so they aren't added up.
+        print("Rotary blank, job time \(formatTime(session.timeline.duration)):")
+        for (i, angle) in session.faceAngles.enumerated() {
+            print(String(format: "  Face at %@: removed %.1f cm³ below the face", RotaryIndex.label(angle), session.grid(face: i).removedVolume / 1000))
+        }
+    }
     if !session.rapidCollisions.isEmpty {
         print("[error] \(session.rapidCollisions.count) rapid move(s) cut through material")
     }

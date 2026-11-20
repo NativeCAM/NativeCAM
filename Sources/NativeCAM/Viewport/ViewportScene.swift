@@ -22,6 +22,10 @@ struct ViewportScene {
     /// Material-removal simulation result. When non-nil the carved stock is drawn instead of the stock box.
     var heightField: HeightFieldSnapshot? = nil
 
+    /// Set while simulating a rotary job: the height field's layers are its faces, and the blank is drawn turned
+    /// round its axis instead of as a flat block.
+    var rotary: RotaryBlankView? = nil
+
     /// Tool drawn at its current simulated position (nil hides it).
     var tool: ToolMarker? = nil
 
@@ -53,6 +57,27 @@ struct HeightFieldSnapshot {
     var floorZ: Float
     /// Bumped whenever `heights` changes.
     var version: Int
+    /// Grids stacked in `heights`, one after another: a rotary job's faces. 1 otherwise.
+    var layers: Int = 1
+}
+
+/// A rotary blank as the simulation draws it. Its faces are the height field's layers, each in its own face's
+/// frame (world coordinates as they are with the blank turned to that face's angle); the blank is drawn turned to
+/// `angle`, with each face's carving turned with it.
+struct RotaryBlankView {
+    var square: Bool
+    /// Axis to the faces of a square bar, or to the surface of a round blank, mm.
+    var radius: Float
+    var length: Float
+    /// World Y and Z of the rotation axis (it runs along X).
+    var axis: SIMD2<Float>
+    /// The blank's A angle now, degrees, right-hand rule about +X.
+    var angle: Float
+    /// Index angle of each height-field layer, degrees.
+    var faceAngles: [Float]
+
+    /// Axis to the farthest point of the blank (a square bar's corners).
+    var outerRadius: Float { square ? radius * Float(2).squareRoot() : radius }
 }
 
 struct ToolMarker {

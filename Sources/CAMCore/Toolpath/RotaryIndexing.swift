@@ -131,7 +131,6 @@ public enum RotaryIndex {
             issues.append(JobIssue(.info, "Measure the rotary's centre height above the spoilboard so NativeCAM can check that the "
                 + "job fits under the Z travel."))
         }
-        issues.append(JobIssue(.warning, "The simulation shows every face on one flat sheet; it doesn't turn the blank yet."))
         return issues
     }
 }

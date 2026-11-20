@@ -223,30 +223,76 @@ public struct SimulationTimeline: Sendable {
         public var motion: Motion
         public var startTime: Double
         public var duration: Double
+        /// On a rotary job, the blank's A angle during this step (degrees, as the post writes it); 0 on a flat job.
+        public var angle: Double = 0
+        /// Set on a step that turns the blank from one A angle to the next, with the tool waiting at safe Z over the
+        /// next cut; its motion is a dwell there.
+        public var turn: Turn?
+    }
+
+    /// A turn of the rotary axis between toolpaths, in degrees as the post writes them (so 270 to 0 turns back
+    /// 270°, the way the controller does, not on by 90°).
+    public struct Turn: Sendable, Equatable {
+        public var from: Double
+        public var to: Double
     }
 
     public let toolpaths: [Toolpath]
     public private(set) var steps: [Step] = []
     public let duration: Double
+    /// True when the timeline turns the blank between toolpaths (a rotary job).
+    public let turnsBlank: Bool
 
     /// `durations`, when given (e.g. `CycleTimeEstimate.motionSeconds`), sets each motion's playback time so the
     /// simulation runs at the machine's real pace; otherwise motions take distance ÷ feed.
-    public init(toolpaths: [Toolpath], rapidRate: Double, durations: [[Double]]? = nil) {
+    ///
+    /// `turnSpeed` (degrees per second) makes it a rotary timeline: the blank starts at A0, turns to each
+    /// toolpath's index angle before it cuts (with the tool over its start, as the post does), and turns back to
+    /// A0 at the end. Turns take at least a quarter of a second.
+    public init(toolpaths: [Toolpath], rapidRate: Double, durations: [[Double]]? = nil, turnSpeed: Double? = nil) {
         self.toolpaths = toolpaths
         var t = 0.0
         var steps: [Step] = []
+        var a = 0.0
+        func turn(to angle: Double, toolpath i: Int, at p: Vec3) {
+            guard let speed = turnSpeed, angle != a else { return }
+            let d = max(0.25, abs(angle - a) / max(speed, 1))
+            steps.append(Step(toolpathIndex: i, start: p, motion: Motion(kind: .dwell, end: p, feed: d), startTime: t, duration: d,
+                              angle: angle, turn: Turn(from: a, to: angle)))
+            t += d
+            a = angle
+        }
         for (i, tp) in toolpaths.enumerated() {
+            turn(to: tp.indexAngle ?? 0, toolpath: i, at: tp.start)
             var k = 0
             tp.forEachMotion { s, m in
                 var d = m.duration(from: s, rapidRate: rapidRate)
                 if let dur = durations, i < dur.count, k < dur[i].count { d = dur[i][k] }
                 k += 1
-                steps.append(Step(toolpathIndex: i, start: s, motion: m, startTime: t, duration: d))
+                steps.append(Step(toolpathIndex: i, start: s, motion: m, startTime: t, duration: d, angle: a))
                 t += d
             }
         }
+        if let last = toolpaths.indices.last { turn(to: 0, toolpath: last, at: toolpaths[last].motions.last?.end ?? toolpaths[last].start) }
         self.steps = steps
         duration = t
+        turnsBlank = turnSpeed != nil
+    }
+
+    /// The blank's A angle at time `t` (degrees), part way through a turn when one is under way. nil on a flat job.
+    public func blankAngle(at t: Double) -> Double? {
+        guard turnsBlank else { return nil }
+        guard let i = stepIndex(at: t) else { return 0 }
+        let s = steps[i]
+        guard let turn = s.turn else { return s.angle }
+        let f = s.duration > 0 ? max(0, min(1, (t - s.startTime) / s.duration)) : 1
+        return turn.from + (turn.to - turn.from) * f
+    }
+
+    /// The turn under way at time `t`, if the blank is turning then.
+    public func turn(at t: Double) -> Step? {
+        guard turnsBlank, let i = stepIndex(at: t), steps[i].turn != nil, t < steps[i].startTime + steps[i].duration else { return nil }
+        return steps[i]
     }
 
     /// Index of the step active at time `t` (binary search).
@@ -278,40 +324,85 @@ public struct SimulationTimeline: Sendable {
 
 /// Playback session: keeps the simulated material in sync with a play head.
 ///
-/// Completed moves are carved into `simulator`; the move in progress is carved into a throw-away copy, so the
+/// Completed moves are carved into the simulators; the move in progress is carved into a throw-away copy, so the
 /// displayed material depends only on the play-head time, not on how the user scrubbed to it.
+///
+/// A flat job has one simulator. A rotary job has one per face (each distinct index angle), carved in that face's
+/// frame: every indexed cut is a top-down cut into the face under the spindle, so each face's height grid is
+/// exact, and the material left is the blank minus what every face removed. The face grids reach down to the far
+/// side of the blank, so holes drilled past the axis show.
 public struct SimulationSession: Sendable {
     public let timeline: SimulationTimeline
-    /// Material after every fully completed move.
-    public private(set) var simulator: MaterialSimulator
+    /// Material after every fully completed move, one simulator per face (`faceAngles`).
+    public private(set) var faces: [MaterialSimulator]
+    /// Each face's index angle, normalized to 0 ≤ angle < 360 (degrees), in the order the job first cuts them.
+    /// [0] on a flat job.
+    public let faceAngles: [Double]
+    /// The face each toolpath cuts.
+    private let faceOfToolpath: [Int]
     /// Committed material plus the partially completed current move (nil when the play head is on a step boundary).
-    private var display: MaterialSimulator?
+    private var display: (face: Int, simulator: MaterialSimulator)?
     public private(set) var time: Double = 0
-    /// Steps fully applied to `simulator`.
+    /// Steps fully applied to `faces`.
     private var appliedSteps = 0
 
+    /// The pace the simulation turns a rotary blank at, degrees per second. A nominal speed: the run-time
+    /// estimate doesn't count turns yet.
+    public static let turnSpeed = 90.0
+
     public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, durations: [[Double]]? = nil) {
-        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations)
-        simulator = MaterialSimulator(stock: stock, cellSize: cellSize)
+        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations,
+                                      turnSpeed: stock.rotary == nil ? nil : Self.turnSpeed)
+        guard let blank = stock.rotary else {
+            faces = [MaterialSimulator(stock: stock, cellSize: cellSize)]
+            faceAngles = [0]
+            faceOfToolpath = toolpaths.map { _ in 0 }
+            return
+        }
+        var angles: [Double] = []
+        var faceOf: [Int] = []
+        for tp in toolpaths {
+            let a = RotaryIndex.normalized(tp.indexAngle ?? 0)
+            if let i = angles.firstIndex(of: a) { faceOf.append(i) } else { faceOf.append(angles.count); angles.append(a) }
+        }
+        if angles.isEmpty { angles = [0] }
+        var faceStock = stock
+        faceStock.thickness = blank.radius + blank.outerRadius
+        // Share one flat job's cell budget between the faces.
+        let cell = cellSize ?? max(0.2, (max(stock.width * stock.height, 1) * Double(angles.count) / 2_500_000).squareRoot())
+        faces = angles.map { _ in MaterialSimulator(stock: faceStock, cellSize: cell) }
+        faceAngles = angles
+        faceOfToolpath = faceOf
     }
 
-    /// Material as it looks at the play head.
-    public var grid: HeightGrid { (display ?? simulator).grid }
+    /// Material on face `face` as it looks at the play head.
+    public func grid(face: Int) -> HeightGrid {
+        if let display, display.face == face { return display.simulator.grid }
+        return faces[face].grid
+    }
+
+    /// Material as it looks at the play head: on a rotary job, the face being cut.
+    public var grid: HeightGrid { grid(face: toolState.map { faceOfToolpath[$0.toolpathIndex] } ?? 0) }
 
     /// Rapid moves that hit material up to the play head.
-    public var rapidCollisions: [Vec3] { (display ?? simulator).rapidCollisions }
+    public var rapidCollisions: [Vec3] {
+        faces.indices.flatMap { i in display?.face == i ? display!.simulator.rapidCollisions : faces[i].rapidCollisions }
+    }
+
+    /// The face the toolpath at `index` cuts.
+    public func face(ofToolpath index: Int) -> Int { faceOfToolpath[index] }
 
     /// Moves the play head, carving forward incrementally or replaying from the start when going back.
     public mutating func seek(to tIn: Double) {
         let t = max(0, min(timeline.duration, tIn))
         if t < time {
-            simulator.reset()
+            for i in faces.indices { faces[i].reset() }
             appliedSteps = 0
         }
         let steps = timeline.steps
         while appliedSteps < steps.count, steps[appliedSteps].startTime + steps[appliedSteps].duration <= t {
             let s = steps[appliedSteps]
-            simulator.apply(s.motion, from: s.start, tool: timeline.toolpaths[s.toolpathIndex].tool, fraction: 1)
+            faces[faceOfToolpath[s.toolpathIndex]].apply(s.motion, from: s.start, tool: timeline.toolpaths[s.toolpathIndex].tool, fraction: 1)
             appliedSteps += 1
         }
         display = nil
@@ -319,9 +410,10 @@ public struct SimulationSession: Sendable {
             let s = steps[appliedSteps]
             let f = s.duration > 0 ? (t - s.startTime) / s.duration : 0
             if f > 0 {
-                var d = simulator
+                let face = faceOfToolpath[s.toolpathIndex]
+                var d = faces[face]
                 d.apply(s.motion, from: s.start, tool: timeline.toolpaths[s.toolpathIndex].tool, fraction: f)
-                display = d
+                display = (face, d)
             }
         }
         time = t

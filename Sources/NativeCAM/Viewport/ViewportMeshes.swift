@@ -45,6 +45,21 @@ struct ViewportHeightUniforms {
     var sideColor: SIMD4<Float>
 }
 
+struct ViewportRotaryUniforms {
+    /// x: columns, y: rows, z: cell size (mm), w: floorZ of the face grids.
+    var dims: SIMD4<Float>
+    /// xy: world XY of cell (0, 0)'s centre, z: axis to the faces (mm), w: epsilon (mm).
+    var origin: SIMD4<Float>
+    /// xy: world Y and Z of the rotation axis, z: the blank's angle now (radians), w: 1 for a square bar.
+    var axis: SIMD4<Float>
+    /// x: number of faces.
+    var counts: SIMD4<Float>
+    var topColor: SIMD4<Float>
+    var cutColor: SIMD4<Float>
+    var deepColor: SIMD4<Float>
+    var sideColor: SIMD4<Float>
+}
+
 struct ViewportBackgroundUniforms {
     var top: SIMD4<Float>
     var bottom: SIMD4<Float>
@@ -175,6 +190,39 @@ enum ViewportMeshes {
             }
         }
         return (faces, edges)
+    }
+
+    /// The uncut surface of a rotary blank in its own frame: x along the axis from 0 to `length`, y and z across it
+    /// from the axis, with 0° (straight up, +Z) square to a face of a square bar. Ends are closed with flat caps.
+    /// The shader cuts away whatever the faces' height fields removed.
+    static func rotaryBlank(square: Bool, radius r: Float, length l: Float, segments: Int = 160) -> [ViewportMeshVertex] {
+        guard r > 0, l > 0 else { return [] }
+        // Points round the cross-section, counter-clockwise seen from +X, each with its outward normal.
+        var ring: [(p: SIMD2<Float>, n: SIMD2<Float>)] = []
+        if square {
+            let corners: [SIMD2<Float>] = [SIMD2(r, r), SIMD2(-r, r), SIMD2(-r, -r), SIMD2(r, -r)]
+            for k in 0..<4 {
+                let a = corners[k], b = corners[(k + 1) % 4]
+                let n = simd_normalize((a + b) / 2)
+                ring += [(a, n), (b, n)]
+            }
+        } else {
+            for j in 0..<segments {
+                let a0 = Float(j) / Float(segments) * 2 * .pi, a1 = Float(j + 1) / Float(segments) * 2 * .pi
+                ring += [(SIMD2(cos(a0), sin(a0)) * r, SIMD2(cos(a0), sin(a0))), (SIMD2(cos(a1), sin(a1)) * r, SIMD2(cos(a1), sin(a1)))]
+            }
+        }
+        var out: [ViewportMeshVertex] = []
+        func v(_ x: Float, _ p: SIMD2<Float>, _ n: SIMD3<Float>) -> ViewportMeshVertex { ViewportMeshVertex(SIMD3(x, p.x, p.y), n) }
+        for k in stride(from: 0, to: ring.count, by: 2) {
+            let (a, na) = ring[k], (b, nb) = ring[k + 1]
+            let n0 = SIMD3(0, na.x, na.y), n1 = SIMD3(0, nb.x, nb.y)
+            out += [v(0, a, n0), v(l, a, n0), v(l, b, n1), v(0, a, n0), v(l, b, n1), v(0, b, n1)]
+            // End caps: fans from the axis.
+            out += [v(0, .zero, SIMD3(-1, 0, 0)), v(0, b, SIMD3(-1, 0, 0)), v(0, a, SIMD3(-1, 0, 0))]
+            out += [v(l, .zero, SIMD3(1, 0, 0)), v(l, a, SIMD3(1, 0, 0)), v(l, b, SIMD3(1, 0, 0))]
+        }
+        return out
     }
 
     /// Revolve a right-half silhouette (radius, height above tip) about +Z into a lit triangle list.
