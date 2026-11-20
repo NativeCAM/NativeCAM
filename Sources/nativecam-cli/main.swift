@@ -109,9 +109,10 @@ case "post":
     let jobErrors = job.issues.filter { $0.severity == .error }.count
     let fileErrors = checks.filter { $0.severity == .error }.count
     if jobErrors + fileErrors > 0 {
-        let reason = [jobErrors > 0 ? "the job has \(jobErrors) error\(jobErrors == 1 ? "" : "s")" : nil,
-                      fileErrors > 0 ? "the G-code failed \(fileErrors) check\(fileErrors == 1 ? "" : "s")" : nil]
-            .compactMap { $0 }.joined(separator: " and ")
+        var reasons: [String] = []
+        if jobErrors > 0 { reasons.append("the job has \(jobErrors) error\(jobErrors == 1 ? "" : "s")") }
+        if fileErrors > 0 { reasons.append("the G-code failed \(fileErrors) check\(fileErrors == 1 ? "" : "s")") }
+        let reason = reasons.joined(separator: " and ")
         guard args.contains("--force") else {
             fail("Not written: \(reason). Fix the errors above, or pass --force to write it anyway.")
         }

@@ -513,7 +513,8 @@ struct InlayTests {
 
     @Test(arguments: [0.15, 0.2, 0.22, 0.25, 0.3])
     func deepPlugsNeverRapidSidewaysBelowTheSurface(inches: Double) throws {
-        for (text, clearance) in [(false, Self.eighth), (false, nil), (true, Self.eighth), (true, nil)] {
+        let cases: [(text: Bool, clearance: Tool?)] = [(false, Self.eighth), (false, nil), (true, Self.eighth), (true, nil)]
+        for (text, clearance) in cases {
             let project = Self.deepPlug(pocketDepth: inches.inch, clearance: clearance, text: text)
             let job = CAMEngine.generate(project)
             let label = "\(text ? "JOY" : "L"), P = \(inches) in, \(clearance == nil ? "V-bit alone" : "with the 1/8\" end mill")"
