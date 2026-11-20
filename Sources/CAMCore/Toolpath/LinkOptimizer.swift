@@ -71,15 +71,16 @@ enum LinkOptimizer {
             let travels = !from.xy.isApprox(runEnd.xy, tolerance: 1e-6)
             let entryFloor = Double(maxHeight(model.grid, around: runEnd.xy, radius: reach))
             // Over a floor this job already cut, rapid down to 1 mm above it (its height is known exactly);
-            // over uncut material keep the configured plunge height (the sheet may be bowed).
-            let entryZ = entryFloor < -0.05 ? max(target.z, min(runEnd.z, entryFloor + 1.0)) : runEnd.z
+            // over uncut material keep the configured plunge height (the sheet may be bowed). Past the edge of the model
+            // nothing is known (the board may be bigger than drawn, and the spoilboard is under it): keep it too.
+            let entryZ = entryFloor.isFinite && entryFloor < -0.05 ? max(target.z, min(runEnd.z, entryFloor + 1.0)) : runEnd.z
 
             if travels {
                 let corridor = corridorHeights(model.grid, from: from.xy, to: runEnd.xy, radius: reach)
                 let crossesClamp = settings.keepOuts.contains { crosses($0, from: from.xy, to: runEnd.xy, radius: tool.radius) }
                 // Stay down: same depth, short, already cleared to this depth, not through a kerf, not near clamps.
                 if abs(from.z - target.z) < 1e-6, from.xy.distance(to: target.xy) <= settings.stayDownLimit,
-                   Double(corridor.max) <= target.z + 0.01, Double(corridor.min) > settings.floorZ + 0.05, !crossesClamp {
+                   corridor.max.isFinite, Double(corridor.max) <= target.z + 0.01, Double(corridor.min) > settings.floorZ + 0.05, !crossesClamp {
                     emit(.feed(target, tool.cutting.feedRate))
                     i = j + 1
                     continue
