@@ -27,7 +27,7 @@ Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative
 
 ## Tests
 
-Run the test suite (344 tests in 40 suites, using Swift Testing):
+Run the test suite (369 tests in 41 suites, using Swift Testing):
 
 ```bash
 scripts/test.sh

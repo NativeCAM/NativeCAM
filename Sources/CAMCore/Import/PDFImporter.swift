@@ -5,10 +5,12 @@ import Foundation
 /// polylines in millimetres, Y up, with the origin at the lower-left corner of the page's crop box.
 ///
 /// Uses CoreGraphics' PDF parser and interprets the page's content stream: graphics state (`q`/`Q`/`cm`), path
-/// construction (`m l c v y h re`), painting (`S s f F f* B B* b b*`; `n` discards, so clipping paths are not
-/// imported) and Form XObjects (`Do`, recursively; Illustrator and CoreGraphics both nest artwork in forms).
-/// Live text, raster images and shadings are skipped with a warning. Page `/Rotate` and `/UserUnit` are honoured,
-/// so the geometry matches what a PDF viewer shows. Clipping is not applied: clipped artwork imports whole.
+/// construction (`m l c v y h re`), painting (`S s f F f* B B* b b*`; `n` discards, so clipping paths themselves are
+/// not imported), clipping (`W`/`W*` and each form's `/BBox`) and Form XObjects (`Do`, recursively; Illustrator and
+/// CoreGraphics both nest artwork in forms). Clipping masks trim what they cover, as a viewer shows it, and artwork
+/// on layers (optional content) hidden in the document's default view is left out. Live text, raster images and
+/// shadings are skipped with a warning. Page `/Rotate` and `/UserUnit` are honoured, so the geometry matches what a
+/// PDF viewer shows.
 public enum PDFImporter {
     /// Millimetres per PDF point (1/72 inch).
     public static let millimetresPerPoint = 25.4 / 72
@@ -35,7 +37,7 @@ public enum PDFImporter {
         let userUnit = pageUserUnit(page)
         let mmPerUnit = millimetresPerPoint * userUnit
         let scanner = PDFContentScanner(device: pageTransform(page, mmPerUnit: mmPerUnit), tolerance: tol,
-                                        pageResources: pageResources(page))
+                                        pageResources: pageResources(page), layers: PDFLayers(document))
         scanner.scan(page)
 
         let tolJoin = PathChainer.joinTolerance(for: tol)
@@ -162,6 +164,75 @@ public enum PDFImporter {
     }
 }
 
+// MARK: - Layers (optional content)
+
+/// The document's layers (optional content groups) and which of them its default view hides.
+struct PDFLayers {
+    private var baseStateOn = true
+    private var off: [CGPDFDictionaryRef] = []
+    private var on: [CGPDFDictionaryRef] = []
+
+    init() {}
+
+    /// Reads `/OCProperties /D` from the catalog: `/BaseState`, then the `/OFF` and `/ON` lists.
+    init(_ document: CGPDFDocument) {
+        var properties: CGPDFDictionaryRef?
+        var config: CGPDFDictionaryRef?
+        guard let catalog = document.catalog, CGPDFDictionaryGetDictionary(catalog, "OCProperties", &properties),
+              let properties, CGPDFDictionaryGetDictionary(properties, "D", &config), let config else { return }
+        var base: UnsafePointer<CChar>?
+        if CGPDFDictionaryGetName(config, "BaseState", &base), let base { baseStateOn = String(cString: base) != "OFF" }
+        off = Self.dictionaries(config, "OFF")
+        on = Self.dictionaries(config, "ON")
+    }
+
+    static func dictionaries(_ dict: CGPDFDictionaryRef, _ key: String) -> [CGPDFDictionaryRef] {
+        var single: CGPDFDictionaryRef?
+        if CGPDFDictionaryGetDictionary(dict, key, &single), let single { return [single] }
+        var array: CGPDFArrayRef?
+        guard CGPDFDictionaryGetArray(dict, key, &array), let array else { return [] }
+        return (0..<CGPDFArrayGetCount(array)).compactMap { i in
+            var d: CGPDFDictionaryRef?
+            return CGPDFArrayGetDictionary(array, i, &d) ? d : nil
+        }
+    }
+
+    private func groupIsOn(_ group: CGPDFDictionaryRef) -> Bool {
+        baseStateOn ? !off.contains(group) : on.contains(group)
+    }
+
+    /// Groups that keep content marked with `dict` (an optional content group or membership dictionary) hidden;
+    /// empty when the content is visible.
+    func hidingGroups(_ dict: CGPDFDictionaryRef) -> [CGPDFDictionaryRef] {
+        var type: UnsafePointer<CChar>?
+        guard CGPDFDictionaryGetName(dict, "Type", &type), let type, String(cString: type) == "OCMD" else {
+            return groupIsOn(dict) ? [] : [dict]
+        }
+        let groups = Self.dictionaries(dict, "OCGs")
+        guard !groups.isEmpty else { return [] }
+        let offGroups = groups.filter { !groupIsOn($0) }
+        var policy: UnsafePointer<CChar>?
+        let visible: Bool
+        switch CGPDFDictionaryGetName(dict, "P", &policy) ? policy.map { String(cString: $0) } : nil {
+        case "AllOn": visible = offGroups.isEmpty
+        case "AnyOff": visible = !offGroups.isEmpty
+        case "AllOff": visible = offGroups.count == groups.count
+        default: visible = offGroups.count < groups.count // AnyOn
+        }
+        return visible ? [] : (offGroups.isEmpty ? groups : offGroups)
+    }
+
+    /// A layer's display name.
+    static func name(of group: CGPDFDictionaryRef) -> String {
+        var s: CGPDFStringRef?
+        if CGPDFDictionaryGetString(group, "Name", &s), let s, let text = CGPDFStringCopyTextString(s) as String?,
+           !text.isEmpty {
+            return text
+        }
+        return "unnamed layer"
+    }
+}
+
 // MARK: - Content stream interpreter
 
 /// Interprets PDF content streams through `CGPDFScanner`, collecting painted paths in mm.
@@ -171,6 +242,9 @@ final class PDFContentScanner {
         /// User space → page space.
         var ctm: Transform2D = .identity
         var textRenderMode = 0
+        /// What the clipping path leaves visible, in mm, as clean loops; nil when nothing clips, empty when
+        /// nothing is visible.
+        var clip: [Polyline]?
     }
 
     struct Subpath {
@@ -182,6 +256,7 @@ final class PDFContentScanner {
     let device: Transform2D
     let tolerance: Double
     let pageResources: CGPDFDictionaryRef?
+    let layers: PDFLayers
 
     private(set) var closed: [Polyline] = []
     private(set) var open: [Polyline] = []
@@ -193,6 +268,10 @@ final class PDFContentScanner {
     private var current: [Vec2] = []
     /// Where a segment operator without a preceding `m` starts (the start of the last closed subpath).
     private var reopenPoint: Vec2?
+    /// Set by `W`/`W*`: the path being built also becomes the clipping path once it is painted (or ended by `n`).
+    private var pendingClip: Clipper.FillRule?
+    /// Open marked-content sequences (`BMC`/`BDC` … `EMC`): the hidden layer's name, or nil when visible.
+    private var markedContent: [String?] = []
 
     private var table: CGPDFOperatorTableRef?
     /// Form XObject streams being scanned (recursion guard).
@@ -206,12 +285,20 @@ final class PDFContentScanner {
     private var visibleTextCount = 0
     private var imageCount = 0
     private var textSample = ""
+    private var hiddenPaths = 0
+    private var hiddenLayers: [String] = []
+    private var trimmedPaths = 0
+    private var maskedPaths = 0
 
-    init(device: Transform2D, tolerance: Double, pageResources: CGPDFDictionaryRef?) {
+    init(device: Transform2D, tolerance: Double, pageResources: CGPDFDictionaryRef?, layers: PDFLayers = PDFLayers()) {
         self.device = device
         self.tolerance = tolerance
         self.pageResources = pageResources
+        self.layers = layers
     }
+
+    /// The hidden layer the current content is on, if any.
+    private var hidingLayer: String? { markedContent.lazy.compactMap { $0 }.first }
 
     /// True when the page's text is Illustrator's "saved without PDF content" placeholder message.
     var textLooksLikeIllustratorPlaceholder: Bool {
@@ -226,6 +313,19 @@ final class PDFContentScanner {
         }
         if imageCount > 0 {
             out.append("Skipped \(imageCount) raster image\(imageCount == 1 ? "" : "s"); only vector paths can be imported.")
+        }
+        if hiddenPaths > 0 {
+            out.append("Left out \(hiddenPaths) path\(hiddenPaths == 1 ? "" : "s") on hidden layer"
+                + "\(hiddenLayers.count == 1 ? "" : "s") \(hiddenLayers.map { "“\($0)”" }.joined(separator: ", ")); "
+                + "show the layer before exporting to include them.")
+        }
+        if trimmedPaths + maskedPaths > 0 {
+            var parts: [String] = []
+            if trimmedPaths > 0 { parts.append("trimmed \(trimmedPaths) path\(trimmedPaths == 1 ? "" : "s") to the mask") }
+            if maskedPaths > 0 {
+                parts.append("left out \(maskedPaths) path\(maskedPaths == 1 ? "" : "s") it hides completely")
+            }
+            out.append("Applied the PDF's clipping masks: " + parts.joined(separator: " and ") + ".")
         }
         return out
     }
@@ -263,6 +363,18 @@ final class PDFContentScanner {
     func concat(_ m: Transform2D) { state.ctm = m.then(state.ctm) }
 
     func setTextRenderMode(_ mode: Int) { state.textRenderMode = mode }
+
+    func setClip(evenOdd: Bool) { pendingClip = evenOdd ? .evenOdd : .nonZero }
+
+    // MARK: Layers
+
+    /// `BMC` (no properties) or `BDC`; `optionalContent` is the properties dictionary of a `/OC` sequence.
+    func beginMarkedContent(optionalContent: CGPDFDictionaryRef?) {
+        let hiding = optionalContent.map { layers.hidingGroups($0) } ?? []
+        markedContent.append(hiding.isEmpty ? nil : hiding.map(PDFLayers.name(of:)).joined(separator: " + "))
+    }
+
+    func endMarkedContent() { _ = markedContent.popLast() }
 
     // MARK: Path construction
 
@@ -317,7 +429,7 @@ final class PDFContentScanner {
     // MARK: Painting
 
     /// Ends the path object. Filled subpaths are implicitly closed; `n` (no fill, no stroke) discards the path,
-    /// which is how clipping paths (`W n`) end, so they are never emitted.
+    /// which is how clipping paths (`W n`) end, so they are never emitted. A pending `W`/`W*` then narrows the clip.
     func paint(close: Bool, fill: Bool, stroke: Bool) {
         if close { closePath() }
         finishSubpath()
@@ -326,22 +438,95 @@ final class PDFContentScanner {
                 let isClosed = sp.closed || fill
                 var pts = sp.points
                 if isClosed, pts.count >= 3, pts[pts.count - 1].isApprox(pts[0], tolerance: 1e-9) { pts.removeLast() }
+                let poly: Polyline
                 if isClosed && pts.count >= 3 {
-                    closed.append(Polyline(pts, closed: true))
+                    poly = Polyline(pts, closed: true)
                 } else if pts.count >= 2 {
-                    open.append(Polyline(pts, closed: false))
+                    poly = Polyline(pts, closed: false)
+                } else {
+                    continue
                 }
+                if let layer = hidingLayer {
+                    hiddenPaths += 1
+                    if !hiddenLayers.contains(layer) { hiddenLayers.append(layer) }
+                    continue
+                }
+                emitClipped(poly, filled: fill)
             }
+        }
+        if let rule = pendingClip {
+            narrowClip(subpaths.map { Polyline($0.points, closed: true) }, rule: rule)
+            pendingClip = nil
         }
         subpaths = []
         current = []
         reopenPoint = nil
     }
 
+    private func add(_ poly: Polyline) {
+        if poly.isClosed { closed.append(poly) } else { open.append(poly) }
+    }
+
+    /// Adds a painted path trimmed to the clip. A fill keeps the part of its area inside the clip; a stroke keeps
+    /// the stretches of line inside it. Paths the clip doesn't touch keep their exact points.
+    private func emitClipped(_ poly: Polyline, filled: Bool) {
+        guard let clip = state.clip else { return add(poly) }
+        guard !clip.isEmpty else { maskedPaths += 1; return }
+        if let r = Self.rectangle(clip), Self.rect(r, contains: poly.bounds) { return add(poly) }
+        // Clipper works on a 0.1 µm grid, so an untouched path comes back that much off its own size.
+        let grid = 2 / Clipper.scale
+        if filled && poly.isClosed {
+            let pieces = Clipper.intersection([poly], clip)
+            guard !pieces.isEmpty else { maskedPaths += 1; return }
+            if pieces.count == 1, abs(pieces[0].area - poly.area) <= poly.length * grid + 1e-9 { return add(poly) }
+            trimmedPaths += 1
+            pieces.forEach(add)
+        } else {
+            let line = poly.isClosed ? Polyline(poly.points + [poly.points[0]], closed: false) : poly
+            let pieces = Clipper.clipOpen([line], to: clip)
+            guard !pieces.isEmpty else { maskedPaths += 1; return }
+            if pieces.count == 1, abs(pieces[0].length - line.length) <= Double(line.count) * grid + 1e-9 {
+                return add(poly)
+            }
+            trimmedPaths += 1
+            pieces.forEach(add)
+        }
+    }
+
+    /// Intersects the clip with `loops` (filled by `rule`), as `W n` does.
+    private func narrowClip(_ loops: [Polyline], rule: Clipper.FillRule) {
+        let shapes = loops.filter { $0.count >= 3 }
+        let region = shapes.isEmpty ? [] : Clipper.union(shapes, fill: rule)
+        guard let existing = state.clip else { state.clip = region; return }
+        guard !existing.isEmpty, !region.isEmpty else { state.clip = []; return }
+        let existingBounds = existing.reduce(Rect2.empty) { $0.union($1.bounds) }
+        let regionBounds = region.reduce(Rect2.empty) { $0.union($1.bounds) }
+        if let r = Self.rectangle(region), Self.rect(r, contains: existingBounds) { return }
+        if let e = Self.rectangle(existing), Self.rect(e, contains: regionBounds) { state.clip = region; return }
+        state.clip = Clipper.intersection(existing, region)
+    }
+
+    /// The rectangle a clip region is, when it is one axis-aligned rectangle.
+    static func rectangle(_ loops: [Polyline]) -> Rect2? {
+        guard loops.count == 1, loops[0].count == 4 else { return nil }
+        let p = loops[0].points
+        for i in 0..<4 {
+            let a = p[i], b = p[(i + 1) % 4]
+            guard abs(a.x - b.x) <= 1e-9 || abs(a.y - b.y) <= 1e-9 else { return nil }
+        }
+        return loops[0].bounds
+    }
+
+    static func rect(_ outer: Rect2, contains inner: Rect2, tolerance: Double = 1e-6) -> Bool {
+        inner.min.x >= outer.min.x - tolerance && inner.min.y >= outer.min.y - tolerance
+            && inner.max.x <= outer.max.x + tolerance && inner.max.y <= outer.max.y + tolerance
+    }
+
     // MARK: Text and images
 
     func showText(_ strings: [CGPDFStringRef]) {
         guard state.textRenderMode != 3 && state.textRenderMode != 7 else { return } // invisible / clip-only text
+        guard hidingLayer == nil else { return }
         visibleTextCount += 1
         guard textSample.count < 4096 else { return }
         for s in strings {
@@ -349,7 +534,7 @@ final class PDFContentScanner {
         }
     }
 
-    func sawInlineImage() { imageCount += 1 }
+    func sawInlineImage() { if hidingLayer == nil { imageCount += 1 } }
 
     // MARK: XObjects
 
@@ -364,10 +549,15 @@ final class PDFContentScanner {
         }
         var subtype: UnsafePointer<CChar>?
         _ = CGPDFDictionaryGetName(dict, "Subtype", &subtype)
+        // An XObject can be on a layer of its own.
+        var optionalContent: CGPDFDictionaryRef?
+        let hiding = CGPDFDictionaryGetDictionary(dict, "OC", &optionalContent) ? optionalContent.map {
+            layers.hidingGroups($0)
+        } ?? [] : []
         switch subtype.map({ String(cString: $0) }) {
         case "Form": break
         case "Image":
-            imageCount += 1
+            if hiding.isEmpty && hidingLayer == nil { imageCount += 1 }
             return
         default:
             return
@@ -396,11 +586,16 @@ final class PDFContentScanner {
         let resources = CGPDFDictionaryGetDictionary(dict, "Resources", &ownResources) ? ownResources! :
             (pageResources ?? dict)
 
-        // `Do` behaves like q, cm /Matrix, <form content>, Q, and appears only outside path objects.
-        let savedPath = (subpaths, current, reopenPoint)
-        subpaths = []; current = []; reopenPoint = nil
-        let savedState = state, savedDepth = stateStack.count
+        // `Do` behaves like q, cm /Matrix, clip to /BBox, <form content>, Q, and appears only outside path objects.
+        let savedPath = (subpaths, current, reopenPoint, pendingClip)
+        subpaths = []; current = []; reopenPoint = nil; pendingClip = nil
+        let savedState = state, savedDepth = stateStack.count, savedMarks = markedContent.count
         concat(matrix)
+        if let box = Self.formBBox(dict) {
+            narrowClip([Polyline([map(box.min.x, box.min.y), map(box.max.x, box.min.y), map(box.max.x, box.max.y),
+                                  map(box.min.x, box.max.y)], closed: true)], rule: .nonZero)
+        }
+        if !hiding.isEmpty { markedContent.append(hiding.map(PDFLayers.name(of:)).joined(separator: " + ")) }
         activeForms.append(stream)
 
         let formStream = CGPDFContentStreamCreateWithStream(stream, resources, cs)
@@ -413,8 +608,20 @@ final class PDFContentScanner {
 
         activeForms.removeLast()
         stateStack.removeSubrange(min(savedDepth, stateStack.count)...)
+        markedContent.removeSubrange(min(savedMarks, markedContent.count)...)
         state = savedState
-        (subpaths, current, reopenPoint) = savedPath
+        (subpaths, current, reopenPoint, pendingClip) = savedPath
+    }
+
+    /// A form's `/BBox` in form space, nil when missing or empty (lenient: an empty box would hide the whole form).
+    static func formBBox(_ dict: CGPDFDictionaryRef) -> Rect2? {
+        var array: CGPDFArrayRef?
+        guard CGPDFDictionaryGetArray(dict, "BBox", &array), let array, CGPDFArrayGetCount(array) == 4 else { return nil }
+        var v = [CGPDFReal](repeating: 0, count: 4)
+        guard (0..<4).allSatisfy({ CGPDFArrayGetNumber(array, $0, &v[$0]) && v[$0].isFinite }) else { return nil }
+        let r = Rect2(min: Vec2(Double(min(v[0], v[2])), Double(min(v[1], v[3]))),
+                      max: Vec2(Double(max(v[0], v[2])), Double(max(v[1], v[3]))))
+        return r.width > 0 && r.height > 0 ? r : nil
     }
 
     // MARK: Operator table
@@ -457,7 +664,11 @@ final class PDFContentScanner {
             c.rectangle(v[0], v[1], v[2], v[3])
         }
 
-        // Painting. `W`/`W*` need no handling: the clip path is emitted only if the operator after it paints it.
+        // Clipping: the path becomes the clip once the next painting operator (usually `n`) ends it.
+        CGPDFOperatorTableSetCallback(t, "W") { _, info in scannerContext(info)?.setClip(evenOdd: false) }
+        CGPDFOperatorTableSetCallback(t, "W*") { _, info in scannerContext(info)?.setClip(evenOdd: true) }
+
+        // Painting.
         CGPDFOperatorTableSetCallback(t, "S") { _, info in scannerContext(info)?.paint(close: false, fill: false, stroke: true) }
         CGPDFOperatorTableSetCallback(t, "s") { _, info in scannerContext(info)?.paint(close: true, fill: false, stroke: true) }
         for op in ["f", "F", "f*"] {
@@ -478,6 +689,32 @@ final class PDFContentScanner {
             c.drawXObject(named: name, scanner: s)
         }
         CGPDFOperatorTableSetCallback(t, "EI") { _, info in scannerContext(info)?.sawInlineImage() }
+
+        // Marked content: `/OC` sequences put artwork on a layer.
+        CGPDFOperatorTableSetCallback(t, "BMC") { s, info in
+            var tag: UnsafePointer<CChar>?
+            _ = CGPDFScannerPopName(s, &tag)
+            scannerContext(info)?.beginMarkedContent(optionalContent: nil)
+        }
+        CGPDFOperatorTableSetCallback(t, "BDC") { s, info in
+            guard let c = scannerContext(info) else { return }
+            var properties: CGPDFDictionaryRef?
+            var object: CGPDFObjectRef?
+            if CGPDFScannerPopObject(s, &object), let object {
+                var name: UnsafePointer<CChar>?
+                if CGPDFObjectGetValue(object, .name, &name), let name {
+                    if let resource = CGPDFContentStreamGetResource(CGPDFScannerGetContentStream(s), "Properties", name) {
+                        _ = CGPDFObjectGetValue(resource, .dictionary, &properties)
+                    }
+                } else {
+                    _ = CGPDFObjectGetValue(object, .dictionary, &properties)
+                }
+            }
+            var tag: UnsafePointer<CChar>?
+            let isOptionalContent = CGPDFScannerPopName(s, &tag) && tag.map { String(cString: $0) } == "OC"
+            c.beginMarkedContent(optionalContent: isOptionalContent ? properties : nil)
+        }
+        CGPDFOperatorTableSetCallback(t, "EMC") { _, info in scannerContext(info)?.endMarkedContent() }
 
         // Text (skipped, but noted).
         CGPDFOperatorTableSetCallback(t, "Tr") { s, info in
