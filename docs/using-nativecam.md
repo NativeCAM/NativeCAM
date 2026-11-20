@@ -132,6 +132,17 @@ Without a clearance tool the V-bit clears the flat areas itself, in rings close 
 
 NativeCAM cuts rotary work two ways. **On faces** (indexed, 3+1), the blank turns to a fixed angle, the router cuts the face on top, then the blank turns to the next angle. **Wrapped around**, the design sheet wraps around a round blank, and the blank turns while the router cuts: text and patterns around a rolling pin, flutes, spirals. On either layout, **3D rotary finishing** turns a 3D model (a table leg, a baluster, a chess piece) all the way round as the blank turns. **File ▸ New Demo Rotary Project (3D)** opens a chess pawn ready to cut.
 
+<table>
+  <tr>
+    <td width="50%"><img src="images/rotary-pawn-model.png" alt="The demo pawn laid along the rotary axis on a round blank, with its rounding and 3D rotary finishing toolpaths wrapped round it"></td>
+    <td width="50%"><img src="images/rotary-pawn-simulated.png" alt="The demo pawn simulated after rounding and 3D rotary finishing"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>A model on the blank, with its toolpaths</sub></td>
+    <td align="center"><sub>Finished in the simulation</sub></td>
+  </tr>
+</table>
+
 1. **Machine.** Turn on **Rotary axis** under **Material & Machine ▸ Rotary Axis**, or in the setup step of **Set Up a Machine…**. NativeCAM drives an A axis along X so far. Measure the **Centre height** (the chuck centre above the spoilboard) so the job can be checked against the Z travel. To check **Reversed**, jog A positive: the top of the blank should roll toward −Y. Get this right before a wrapped job, or wrapped designs come out mirrored. Set the **Turn speed** (degrees per minute; on Mach4, Configure ▸ Control ▸ Motors, the A motor's velocity) and the run-time estimate and the simulation time each turn with it; until then they assume 90° a second.
    - **Turn by hand.** For a machine that can't drive the axis (Grbl, FluidNC, Carbide Motion and Masso have no A axis in NativeCAM), or a hand-cranked indexer, turn on **Turn by hand**. Before each new angle the program lifts to safe Z, stops the spindle and pauses (`M0`) with a comment such as "Turn the blank to 90°, then Cycle Start"; Cycle Start (or Resume in your sender) starts the spindle again and carries on. Every file starts with a pause that asks for its first angle, so a job split into one file per tool never assumes where the last file left the blank. Angles count up as the top of the blank rolls toward −Y; if your indexer counts the other way, turn on **Reversed** and each pause asks for your indexer's reading. Each turn by hand counts as 30 seconds in the run-time estimate. Wrapped jobs need a driven axis.
 2. **Blank.** Turn on **Material ▸ Rotary blank**, then set the shape (round or square bar), the diameter or the size across the faces, and the length. Then choose how designs sit on it under **Designs**:
