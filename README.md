@@ -13,6 +13,7 @@
   <img src="https://img.shields.io/badge/output-G--code%20%26%20OpenSBP-2a6fdb" alt="Output: G-code and OpenSBP">
   <img src="https://img.shields.io/badge/status-v0.1%20early-orange" alt="Status: v0.1">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
+  <a href="https://github.com/NativeCAM/NativeCAM/actions/workflows/tests.yml"><img src="https://github.com/NativeCAM/NativeCAM/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests"></a>
 </p>
 
 Design or import your artwork, set up the material and bits, generate 2.5D and 3D toolpaths, watch the material-removal simulation, and export the file your controller reads: Avid's Mach4 profile, Grbl and its relatives (grblHAL, FluidNC, Carbide Motion), LinuxCNC, Masso, Centroid CNC12, Buildbotics, RichAuto or ShopBot, or any controller through your own Vectric post. Every file is checked against the controller and read back against the toolpaths before it's saved.

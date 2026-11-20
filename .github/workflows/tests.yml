@@ -1,0 +1,46 @@
+# Runs the test suite and builds every target on each pull request and each push to main.
+# The same commands work locally: scripts/test.sh, then swift build.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same branch or pull request cancels the run still going for the older one.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and build (macOS, Apple silicon)
+    # The Apple-silicon macOS 26 image with Xcode 26, the same toolchain generation the app is developed with.
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show the toolchain
+        run: |
+          xcode-select -p
+          swift --version
+
+      - name: Run the tests
+        run: scripts/test.sh
+
+      - name: Build the app and the command-line tool
+        run: swift build
+
+      # A golden-file mismatch leaves the new output in .build/golden-actual; keep it to compare.
+      - name: Save golden-file mismatches
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actual
+          path: .build/golden-actual
+          if-no-files-found: ignore
