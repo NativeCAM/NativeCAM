@@ -35,9 +35,9 @@ public enum ShapeKind: Hashable, Codable, Sendable {
     /// Spiral lines for a wrapped rotary job (a rope or barley twist): see `SpiralSpec`.
     case spiral(SpiralSpec)
 
-    /// The project file format a shape of this kind needs: spirals are format 4 (older builds can't read them).
+    /// The project file format a shape of this kind needs: spirals are format 5 (older builds can't read them).
     public var requiredFormatVersion: Int {
-        if case .spiral = self { return 4 }
+        if case .spiral = self { return 5 }
         return 1
     }
 

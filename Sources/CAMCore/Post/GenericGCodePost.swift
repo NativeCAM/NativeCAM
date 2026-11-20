@@ -92,7 +92,7 @@ public struct GenericGCodePost: PostProcessor {
         }
         let rotary = RotaryOutput(project)
         if rotary != nil {
-            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: false,
+            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: false, axis: machine.rotary,
                                             feeds: RotaryWrap.feedMode(dialect)) { w.comment(line) }
         } else {
             w.comment("Material: \(stock.materialName) X\(num(stock.width)) Y\(num(stock.height)) Z\(num(stock.thickness)) \(units.symbol)")
@@ -113,6 +113,8 @@ public struct GenericGCodePost: PostProcessor {
         var currentRPM: Double?
         var state = ModalState()
         var turned = false
+        // On a blank turned by hand, the angle the operator was last asked for; nil until the first stop.
+        var dial: Double?
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
             if toolChanged {
@@ -120,6 +122,19 @@ public struct GenericGCodePost: PostProcessor {
                 state = ModalState()
                 currentTool = tp.tool.number
                 currentRPM = nil
+            }
+            // Turned by hand: stop with the tool at safe Z and the spindle off, and say which angle to turn the blank
+            // to. The first toolpath of each file always asks, so a file never assumes where the blank was left.
+            if let rotary, rotary.manual, let angle = tp.indexAngle, dial != rotary.position(angle) {
+                if currentRPM != nil {
+                    let safe = round(workZ(stock.clearanceHeight))
+                    if state.z != safe { w.line("G0 Z\(fmt(safe))") }
+                    w.line("M5")
+                    currentRPM = nil
+                }
+                w.comment(rotary.turnMessage(angle, resume: "resume"))
+                w.line("M0")
+                dial = rotary.position(angle)
             }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             if currentRPM != rpm || toolChanged {
@@ -150,7 +165,7 @@ public struct GenericGCodePost: PostProcessor {
             state.x = round(start.x)
             state.y = round(start.y)
             // Rotary: turn the blank at safe Z, over the start of the cut, whenever the angle isn't known to be right.
-            if let rotary, let angle = tp.indexAngle, state.a != rotary.value(angle) {
+            if let rotary, !rotary.manual, let angle = tp.indexAngle, state.a != rotary.value(angle) {
                 w.line("G0 \(rotary.word(angle))")
                 state.a = rotary.value(angle)
                 turned = true
