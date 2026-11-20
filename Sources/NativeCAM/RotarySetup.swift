@@ -27,6 +27,7 @@ struct RotaryBlankRows: View {
                 project.stock.setRotary(nil)
                 for i in project.operations.indices { project.operations[i].indexAngles = nil }
             }
+            project.placeModelsOnBlank()
         }))
         .help("Turn the blank on the machine's rotary axis: cut its faces one at a time (indexed, 3+1), or wrap designs around it")
         if let blank = project.stock.rotary {
@@ -43,6 +44,7 @@ struct RotaryBlankRows: View {
                 b.layout = layout == .faces ? nil : layout
                 project.stock.setRotary(b)
                 project.fitSpiralsToSheet()
+                project.placeModelsOnBlank()
                 // On a wrapped job each shape's place on the sheet sets its angle; index angles don't apply.
                 if layout == .wrapped { for i in project.operations.indices { project.operations[i].indexAngles = nil } }
             })) {
@@ -75,6 +77,7 @@ struct RotaryBlankRows: View {
             blank[keyPath: key] = v
             project.stock.setRotary(blank)
             project.fitSpiralsToSheet()
+            project.placeModelsOnBlank()
         })
     }
 }
@@ -349,7 +352,7 @@ extension OperationKind {
     var takesIndexAngles: Bool {
         switch self {
         case .profile, .pocket, .drill, .vcarve: true
-        case .rough3D, .finish3D, .rounding: false
+        case .rough3D, .finish3D, .rounding, .rotaryFinish: false
         }
     }
 }

@@ -7,7 +7,7 @@
 (Y ZERO = AXIS CENTRELINE   X ZERO = LEFT END OF THE BLANK)
 (Feeds: G93 inverse time on moves that turn A, G94 otherwise)
 (Raise the tool clear of the chuck and tailstock before Cycle Start)
-(Program extents: X3.175 to X56.825  Y0.000 to Y6537.605  Z15.000 to Z23.753)
+(Program extents: X3.175 to X56.825  A0.000 to A24971.811  Z15.000 to Z23.753)
 (Safe Z = 30.435)
 (Tools used:)
 (  T1 1/4in Upcut End Mill - D6.350 End Mill)

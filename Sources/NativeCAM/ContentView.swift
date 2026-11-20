@@ -265,6 +265,8 @@ struct ContentView: View {
                     warnings.append(contentsOf: result.warnings.map { "\(url.lastPathComponent): \($0)" })
                     let shape = ShapeFactory.model(result, name: name, stock: project.stock)
                     document.project.shapes.append(shape)
+                    // On a rotary blank it lies along the axis, scaled to fit.
+                    document.project.placeModelsOnBlank()
                     added.append(shape.id)
                 } else {
                     let result = try VectorImporter.importFile(at: url, tolerance: 0.01)

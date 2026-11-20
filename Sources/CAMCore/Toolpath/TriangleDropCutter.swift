@@ -47,9 +47,10 @@ struct TriangleDropCutter: Sendable {
         i = 0
         var t: Int32 = 0
         while i + 8 < triangles.count {
-            let xs = [triangles[i], triangles[i + 3], triangles[i + 6]], ys = [triangles[i + 1], triangles[i + 4], triangles[i + 7]]
-            let c0 = Int((xs.min()! - lo.x) / binSize), c1 = Int((xs.max()! - lo.x) / binSize)
-            let r0 = Int((ys.min()! - lo.y) / binSize), r1 = Int((ys.max()! - lo.y) / binSize)
+            let x0 = min(triangles[i], triangles[i + 3], triangles[i + 6]), x1 = max(triangles[i], triangles[i + 3], triangles[i + 6])
+            let y0 = min(triangles[i + 1], triangles[i + 4], triangles[i + 7]), y1 = max(triangles[i + 1], triangles[i + 4], triangles[i + 7])
+            let c0 = Int((x0 - lo.x) / binSize), c1 = Int((x1 - lo.x) / binSize)
+            let r0 = Int((y0 - lo.y) / binSize), r1 = Int((y1 - lo.y) / binSize)
             for r in max(0, r0)...min(binRows - 1, r1) {
                 for c in max(0, c0)...min(binCols - 1, c1) { b[r * binCols + c].append(t) }
             }
@@ -82,12 +83,20 @@ struct TriangleDropCutter: Sendable {
         return SIMD3(tri[i], tri[i + 1], tri[i + 2])
     }
 
+    private func ballDrop(_ t: Int, _ p: Vec2) -> Double {
+        Self.ballTip(vertex(t, 0), vertex(t, 1), vertex(t, 2), p, radius: radius, allowance: allowance)
+    }
+
+    private func flatDrop(_ t: Int, _ p: Vec2) -> Double {
+        Self.flatTip(vertex(t, 0), vertex(t, 1), vertex(t, 2), p, radius: radius, allowance: allowance)
+    }
+
     // MARK: Ball
 
-    /// Ball of radius R + allowance; returns the tip Z (centre Z − R).
-    private func ballDrop(_ t: Int, _ p: Vec2) -> Double {
+    /// Tip Z of a ball of radius `radius` + `allowance` dropped at `p` onto the triangle a, b, c (its centre Z −
+    /// `radius`), or -infinity when the ball misses it. Shared with `RotaryDropCutter`.
+    static func ballTip(_ a: SIMD3<Double>, _ b: SIMD3<Double>, _ c: SIMD3<Double>, _ p: Vec2, radius: Double, allowance: Double) -> Double {
         let R = radius + allowance
-        let a = vertex(t, 0), b = vertex(t, 1), c = vertex(t, 2)
         var best = -Double.infinity
         // Facet: centre sits R along the (upward) normal from the plane, contact point inside the triangle.
         var n = simd_cross(b - a, c - a)
@@ -102,19 +111,22 @@ struct TriangleDropCutter: Sendable {
             }
         }
         // Vertices.
-        for v in [a, b, c] {
+        @inline(__always) func vertex(_ v: SIMD3<Double>) {
             let dx = p.x - v.x, dy = p.y - v.y
             let d2 = dx * dx + dy * dy
             if d2 <= R * R { best = max(best, v.z + (R * R - d2).squareRoot()) }
         }
+        vertex(a)
+        vertex(b)
+        vertex(c)
         // Edges.
-        for (u, w) in [(a, b), (b, c), (c, a)] {
-            if let zc = ballEdge(u, w, p, R) { best = max(best, zc) }
-        }
+        if let zc = ballEdge(a, b, p, R) { best = max(best, zc) }
+        if let zc = ballEdge(b, c, p, R) { best = max(best, zc) }
+        if let zc = ballEdge(c, a, p, R) { best = max(best, zc) }
         return best.isFinite ? best - radius : best
     }
 
-    private func ballEdge(_ v1: SIMD3<Double>, _ v2: SIMD3<Double>, _ p: Vec2, _ R: Double) -> Double? {
+    private static func ballEdge(_ v1: SIMD3<Double>, _ v2: SIMD3<Double>, _ p: Vec2, _ R: Double) -> Double? {
         let d = v2 - v1
         let L2 = simd_length_squared(d)
         let dxy2 = d.x * d.x + d.y * d.y
@@ -134,10 +146,10 @@ struct TriangleDropCutter: Sendable {
 
     // MARK: Flat
 
-    /// Flat-bottomed cylinder: highest surface point under the disc of radius R (surface raised by the allowance).
-    private func flatDrop(_ t: Int, _ p: Vec2) -> Double {
-        let R = radius
-        let a = vertex(t, 0), b = vertex(t, 1), c = vertex(t, 2)
+    /// Tip Z of a flat-bottomed cylinder of radius `radius` dropped at `p` onto the triangle a, b, c: the highest
+    /// surface point under the disc, raised by `allowance`; -infinity when the disc misses it. Shared with
+    /// `RotaryDropCutter`.
+    static func flatTip(_ a: SIMD3<Double>, _ b: SIMD3<Double>, _ c: SIMD3<Double>, _ p: Vec2, radius R: Double, allowance: Double) -> Double {
         var best = -Double.infinity
         // Facet: a plane's highest point over the disc is on the rim, in the uphill direction.
         let n = simd_cross(b - a, c - a)
@@ -150,25 +162,33 @@ struct TriangleDropCutter: Sendable {
             }
         }
         // Vertices under the disc.
-        for v in [a, b, c] where (v.x - p.x) * (v.x - p.x) + (v.y - p.y) * (v.y - p.y) <= R * R { best = max(best, v.z) }
+        @inline(__always) func vertex(_ v: SIMD3<Double>) {
+            if (v.x - p.x) * (v.x - p.x) + (v.y - p.y) * (v.y - p.y) <= R * R { best = max(best, v.z) }
+        }
+        vertex(a)
+        vertex(b)
+        vertex(c)
         // Edges: the part of each edge inside the disc; Z is linear along it, so check the clipped ends.
-        for (u, w) in [(a, b), (b, c), (c, a)] {
+        @inline(__always) func edge(_ u: SIMD3<Double>, _ w: SIMD3<Double>) {
             let dx = w.x - u.x, dy = w.y - u.y
             let A = dx * dx + dy * dy
-            guard A > 1e-18 else { continue }
+            guard A > 1e-18 else { return }
             let fx = u.x - p.x, fy = u.y - p.y
             let B = 2 * (fx * dx + fy * dy), C = fx * fx + fy * fy - R * R
             let disc = B * B - 4 * A * C
-            guard disc >= 0 else { continue }
+            guard disc >= 0 else { return }
             let s = disc.squareRoot()
             let t0 = max(0, (-B - s) / (2 * A)), t1 = min(1, (-B + s) / (2 * A))
-            guard t0 <= t1 else { continue }
+            guard t0 <= t1 else { return }
             best = max(best, u.z + (w.z - u.z) * t0, u.z + (w.z - u.z) * t1)
         }
+        edge(a, b)
+        edge(b, c)
+        edge(c, a)
         return best.isFinite ? best + allowance : best
     }
 
-    @inline(__always) private func insideXY(_ q: SIMD3<Double>, _ a: SIMD3<Double>, _ b: SIMD3<Double>, _ c: SIMD3<Double>) -> Bool {
+    @inline(__always) static func insideXY(_ q: SIMD3<Double>, _ a: SIMD3<Double>, _ b: SIMD3<Double>, _ c: SIMD3<Double>) -> Bool {
         let d1 = (b.x - a.x) * (q.y - a.y) - (b.y - a.y) * (q.x - a.x)
         let d2 = (c.x - b.x) * (q.y - b.y) - (c.y - b.y) * (q.x - b.x)
         let d3 = (a.x - c.x) * (q.y - c.y) - (a.y - c.y) * (q.x - c.x)

@@ -149,6 +149,7 @@ struct SidebarView: View {
         case .rough3D: "square.stack.3d.down.right"
         case .finish3D: "mountain.2"
         case .rounding: "cylinder"
+        case .rotaryFinish: "rotate.3d"
         }
     }
 
@@ -232,8 +233,13 @@ struct AddOperationMenu: View {
             Button("Drill") { add(.drill) }
             Button("V-carve") { add(.vcarve) }
             Divider()
-            Button("3D Roughing") { add(.rough3D) }
-            Button("3D Finishing") { add(.finish3D) }
+            if project.stock.rotary == nil {
+                Button("3D Roughing") { add(.rough3D) }
+                Button("3D Finishing") { add(.finish3D) }
+            } else {
+                Button("3D Rotary Finishing") { add(.rotaryFinish) }
+                    .help("Finish a 3D model on the blank all the way round as it turns: a ball nose follows it in a spiral, rings or passes along the blank")
+            }
         }
         .disabled(selected.isEmpty)
         if project.stock.rotary != nil {
@@ -247,7 +253,7 @@ struct AddOperationMenu: View {
         }
     }
 
-    enum Kind { case profile, pocket, drill, vcarve, rough3D, finish3D, rounding }
+    enum Kind { case profile, pocket, drill, vcarve, rough3D, finish3D, rounding, rotaryFinish }
 
     private func add(_ kind: Kind) {
         let shapes = kind == .rounding ? [] : workspace.selectedShapeIDs
@@ -346,6 +352,11 @@ enum ShapeFactory {
             return CAMOperation(name: "3D Finishing", kind: .finish3D(Finish3DParams(boundary: boundary)), shapeIDs: ids, tool: ball)
         case .rounding:
             return CAMOperation(name: "Rounding", kind: .rounding(RoundingParams()), shapeIDs: [], tool: endMill)
+        case .rotaryFinish:
+            let ball = pick({ $0.shape == .ballNose }, 7)
+            let models = shapes.filter { project.shape(id: $0)?.modelSpec != nil }
+            return CAMOperation(name: "3D Rotary Finishing", kind: .rotaryFinish(RotaryFinishParams()),
+                                shapeIDs: models.isEmpty ? shapes : models, tool: ball)
         }
     }
 

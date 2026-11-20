@@ -11,7 +11,7 @@ struct InspectorView: View {
             if let id = workspace.selectedOperationID, let index = project.operations.firstIndex(where: { $0.id == id }) {
                 OperationInspector(op: $project.operations[index], project: project, workspace: workspace)
             } else if workspace.selectedShapeIDs.count == 1, let index = project.shapes.firstIndex(where: { $0.id == workspace.selectedShapeIDs[0] }) {
-                ShapeInspector(shape: $project.shapes[index], units: project.displayUnits)
+                ShapeInspector(shape: $project.shapes[index], units: project.displayUnits, stock: project.stock)
             } else if workspace.selectedShapeIDs.count > 1 {
                 MultiShapeInspector(count: workspace.selectedShapeIDs.count)
             } else {
@@ -299,6 +299,13 @@ struct OriginDiagram: View {
 struct ShapeInspector: View {
     @Binding var shape: DesignShape
     let units: LengthUnit
+    var stock: Stock? = nil
+
+    /// A model on a rotary blank: it lies along the axis, so only its place along the blank and its size are set here.
+    private var onBlank: RotaryStock? {
+        guard shape.modelSpec?.rotary != nil else { return nil }
+        return stock?.rotary
+    }
 
     static let fonts = ["Helvetica-Bold", "Helvetica", "Futura-Bold", "AvenirNext-Bold", "Georgia-Bold", "Times-Bold",
                         "GillSans-Bold", "Copperplate-Bold", "Didot-Bold", "Impact", "MarkerFelt-Wide", "Chalkduster",
@@ -308,9 +315,13 @@ struct ShapeInspector: View {
         Form {
             Section(shape.kind.label) {
                 TextField("Name", text: $shape.name)
-                LengthField(title: "Center X", mm: $shape.position.x, units: units)
-                LengthField(title: "Center Y", mm: $shape.position.y, units: units)
-                NumberField(title: "Rotation", value: $shape.rotation, suffix: "°", decimals: 2)
+                if onBlank != nil {
+                    LengthField(title: "Middle (X)", mm: $shape.position.x, units: units, help: "Where the middle of the model's length is along the blank")
+                } else {
+                    LengthField(title: "Center X", mm: $shape.position.x, units: units)
+                    LengthField(title: "Center Y", mm: $shape.position.y, units: units)
+                    NumberField(title: "Rotation", value: $shape.rotation, suffix: "°", decimals: 2)
+                }
                 NumberField(title: "Scale", value: Binding(get: { shape.scale * 100 }, set: { shape.scale = max(0.001, $0 / 100) }),
                             suffix: "%", decimals: 2)
                 if shape.modelSpec == nil {
@@ -382,6 +393,8 @@ struct ShapeInspector: View {
         case let .paths(paths):
             LabeledContent("Contours", value: "\(paths.count) (\(paths.filter(\.isClosed).count) closed)")
             Text("Imported vectors can be moved, rotated and scaled.").font(.caption).foregroundStyle(.secondary)
+        case let .model(spec) where onBlank != nil:
+            RotaryModelRows(shape: $shape, spec: spec, blank: onBlank!, units: units)
         case let .model(spec):
             let natural = spec.naturalSize
             let set: (ModelSpec) -> Void = { shape.kind = .model($0) }
@@ -406,6 +419,60 @@ struct ShapeInspector: View {
             Text("Machine it with 3D Roughing, then 3D Finishing (Add Toolpath).")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// A 3D model on a rotary blank: which of its axes lies along the blank, which way round, turned how far about the
+/// axis, and its size, with buttons to fit it to the blank or show it at the size it was drawn.
+struct RotaryModelRows: View {
+    @Binding var shape: DesignShape
+    let spec: ModelSpec
+    let blank: RotaryStock
+    let units: LengthUnit
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+
+    var body: some View {
+        let placement = spec.rotary ?? RotaryPlacement(longestOf: spec.mesh)
+        let mesh = spec.alongAxis
+        let set: (RotaryPlacement) -> Void = { var s = spec; s.rotary = $0; shape.kind = .model(s) }
+        LabeledContent("Triangles", value: spec.mesh.triangleCount.formatted())
+        Picker("Along the blank", selection: Binding(get: { placement.alongAxis }, set: { var q = placement; q.alongAxis = $0; set(q) })) {
+            ForEach(UpAxis.allCases) { Text("Model's \($0.rawValue.uppercased()) axis").tag($0) }
+        }
+        .help("Which of the model's own axes lies along the rotation axis")
+        Toggle("End for end", isOn: Binding(get: { placement.reversed }, set: { var q = placement; q.reversed = $0; set(q) }))
+            .help("Turn the model round so its other end is toward the chuck")
+        NumberField(title: "Turn", value: Binding(get: { placement.turn }, set: { var q = placement; q.turn = $0; set(q) }), suffix: "°", decimals: 1)
+            .help("Turn the model about the rotation axis: which side of it is on top at A0")
+        LengthField(title: "Length", mm: Binding(get: { Double(mesh.length) * shape.scale },
+                                                 set: { if mesh.length > 0 { shape.scale = max(0.001, $0 / Double(mesh.length)) } }), units: units,
+                    help: "Along the blank")
+        LengthField(title: "Diameter", mm: Binding(get: { 2 * Double(mesh.maxRadius) * shape.scale },
+                                                   set: { if mesh.maxRadius > 0 { shape.scale = max(0.001, $0 / (2 * Double(mesh.maxRadius))) } }),
+                    units: units, help: "Across the model at its widest, round the axis")
+        HStack {
+            Spacer()
+            Button("Actual Size") { shape.scale = 1 }
+                .help("The size the model was drawn at")
+            Button("Fit to Blank") {
+                shape.scale = RotaryPlacement.fitScale(mesh, blank: blank)
+                shape.position.x = blank.length / 2
+            }
+            .help("As wide as the blank is round and no longer than it, in the middle of it")
+        }
+        if let e = shape.rotaryExtent {
+            if 2 * e.radius > blank.diameter + 1e-6 {
+                Label("\(len(2 * e.radius)) across, wider than the \(len(blank.diameter)) blank", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if e.minX < -1e-6 || e.maxX > blank.length + 1e-6 {
+                Label("Runs past the end of the \(len(blank.length)) blank", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+        Text("Lies along the rotation axis, centred on it. Finish it with 3D Rotary Finishing (Add Toolpath).")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 }
 

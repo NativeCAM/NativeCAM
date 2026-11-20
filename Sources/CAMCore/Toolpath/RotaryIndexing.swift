@@ -51,9 +51,9 @@ public enum RotaryIndex {
                 issues.append(JobIssue(.error, "Has index angles, but the material isn't a rotary blank. Set up rotary stock "
                     + "or clear the angles.", operation: op.name))
             }
-            for op in ops where !op.kind.needsShapes {
-                issues.append(JobIssue(.error, "Rounding turns a rotary blank, but the material isn't one. Set up rotary stock.",
-                                       operation: op.name))
+            for op in ops where op.kind.turnsWholeBlank {
+                issues.append(JobIssue(.error, (op.kind.needsShapes ? "3D rotary finishing cuts a model on a rotary blank"
+                    : "Rounding turns a rotary blank") + ", but the material isn't one. Set up rotary stock.", operation: op.name))
             }
             return issues
         }
@@ -120,8 +120,9 @@ public enum RotaryIndex {
         for op in ops {
             switch op.kind {
             case .rough3D, .finish3D:
-                issues.append(JobIssue(.error, "3D toolpaths aren't supported on rotary stock yet.", operation: op.name))
-            case .rounding: continue
+                issues.append(JobIssue(.error, "3D Roughing and 3D Finishing cut flat sheets: on rotary stock, use 3D Rotary "
+                    + "Finishing.", operation: op.name))
+            case .rounding, .rotaryFinish: continue
             default: break
             }
             let angles = op.rotaryAngles
@@ -144,7 +145,7 @@ public enum RotaryIndex {
         if blank.shape == .cylinder {
             var order: [UUID] = []
             var reach: [UUID: (dy: Double, name: String, carve: Bool)] = [:]
-            for tp in toolpaths {
+            for tp in toolpaths where tp.wrapDiameter == nil {
                 let opID = tp.sourceOperationID
                 guard let dy = reachFromTopLine(tp, centre: stock.height / 2) else { continue }
                 if let r = reach[opID] {
@@ -213,14 +214,15 @@ public enum RotaryIndex {
         if let problem = wrappedFeedIssue(project.machine) {
             issues.append(JobIssue(.error, problem + " Lay the design out on faces for this machine."))
         }
-        for op in project.operations where op.enabled && op.kind.needsShapes {
+        for op in project.operations where op.enabled && op.kind.needsShapes && !op.kind.turnsWholeBlank {
             if op.indexAngles != nil {
                 issues.append(JobIssue(.error, "Has index angles, but on a wrapped job each shape's place on the sheet sets the "
                     + "angle it's cut at. Clear the angles.", operation: op.name))
             }
             switch op.kind {
             case .rough3D, .finish3D:
-                issues.append(JobIssue(.error, "3D toolpaths aren't supported on rotary stock yet.", operation: op.name))
+                issues.append(JobIssue(.error, "3D Roughing and 3D Finishing cut flat sheets: on rotary stock, use 3D Rotary "
+                    + "Finishing.", operation: op.name))
             default: break
             }
         }
@@ -235,7 +237,7 @@ public enum RotaryIndex {
         let radius = blank.topRadius
         var reported = Set(project.operations.filter { op in
             if case .drill = op.kind { return true }
-            return !op.kind.needsShapes
+            return op.kind.turnsWholeBlank
         }.map(\.id))
         for tp in toolpaths where tp.wrapDiameter != nil && !reported.contains(tp.sourceOperationID) {
             guard let e = tp.cuttingExtents else { continue }
@@ -264,17 +266,19 @@ public enum RotaryIndex {
             + "documented, so NativeCAM can't give cuts that turn the blank the right feed."
     }
 
-    /// Rounding on a rotary job, on faces or wrapped: it turns the whole blank, so it takes no index angles, and it
-    /// turns the blank while cutting, so the controller has to be able to feed that.
+    /// Rounding and 3D rotary finishing on a rotary job, on faces or wrapped: they cut all the way round the blank, so
+    /// they take no index angles, and they turn the blank while cutting, so the controller has to be able to feed that.
+    /// A 3D rotary finish also wants the blank round before it.
     static func roundingIssues(_ project: Project) -> [JobIssue] {
-        let rounding = project.operations.filter { $0.enabled && !$0.kind.needsShapes }
-        guard !rounding.isEmpty else { return [] }
+        let whole = project.operations.filter { $0.enabled && $0.kind.turnsWholeBlank }
+        guard !whole.isEmpty else { return [] }
         var issues: [JobIssue] = []
-        for op in rounding where op.indexAngles != nil {
-            issues.append(JobIssue(.error, "Rounding turns the whole blank, so index angles don't apply. Clear them.", operation: op.name))
+        for op in whole where op.indexAngles != nil {
+            issues.append(JobIssue(.error, "\(op.kind.needsShapes ? "3D rotary finishing" : "Rounding") turns the whole blank, so "
+                + "index angles don't apply. Clear them.", operation: op.name))
         }
         if project.stock.rotary?.isWrapped != true, let problem = wrappedFeedIssue(project.machine) {
-            issues.append(JobIssue(.error, problem, operation: rounding[0].name))
+            issues.append(JobIssue(.error, problem, operation: whole[0].name))
         }
         return issues
     }

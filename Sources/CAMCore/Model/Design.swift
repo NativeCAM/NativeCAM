@@ -35,10 +35,14 @@ public enum ShapeKind: Hashable, Codable, Sendable {
     /// Spiral lines for a wrapped rotary job (a rope or barley twist): see `SpiralSpec`.
     case spiral(SpiralSpec)
 
-    /// The project file format a shape of this kind needs: spirals are format 5 (older builds can't read them).
+    /// The project file format a shape of this kind needs: spirals are format 5 (older builds can't read them), and a
+    /// model placed on a rotary blank is format 7 (see `ModelSpec.requiredFormatVersion`).
     public var requiredFormatVersion: Int {
-        if case .spiral = self { return 5 }
-        return 1
+        switch self {
+        case .spiral: 5
+        case let .model(spec): spec.requiredFormatVersion
+        default: 1
+        }
     }
 
     public var label: String {
@@ -125,7 +129,8 @@ public struct DesignShape: Identifiable, Hashable, Codable, Sendable {
         case let .paths(paths):
             return paths
         case let .model(spec):
-            return spec.oriented.silhouette
+            // On a rotary blank: the outline from the side, centred on the axis.
+            return spec.rotary == nil ? spec.oriented.silhouette : spec.alongAxis.outline
         case let .spiral(spec):
             return spec.lines
         }
