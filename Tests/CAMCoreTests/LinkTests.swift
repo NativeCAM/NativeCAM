@@ -28,6 +28,25 @@ struct LinkTests {
     @Test func demoSignLinksAreSafeAndFaster() throws { try check(.demoSign(), cell: 1.0) }
     @Test func demoReliefLinksAreSafeAndFaster() throws { try check(.demoRelief(), cell: 1.0) }
 
+    /// Past the edge of the material model nothing is known: a hole drilled there (beyond the bit's radius from the
+    /// material) feeds down from the plunge height as over uncut stock, rather than rapiding to its depth, which went
+    /// into the spoilboard.
+    @Test func plungesPastTheMaterialEdgeAreNeverRapids() throws {
+        let hole = DesignShape(kind: .circle(radius: 1), position: Vec2(-15, 75))
+        let op = CAMOperation(kind: .drill(DrillParams(depth: 25, peckDepth: 5)), shapeIDs: [hole.id], tool: Fixture.endMill)
+        var p = Fixture.project(shapes: [hole], ops: [op])
+        p.stock.retractMode = .minimum
+        let tp = try #require(CAMEngine.generate(p).toolpaths.first)
+        var lowestRapid = Double.infinity, deepest = 0.0
+        tp.forEachMotion { _, m in
+            if m.kind == .rapid { lowestRapid = min(lowestRapid, m.end.z) } else { deepest = min(deepest, m.end.z) }
+        }
+        #expect(deepest < -24.9)
+        // Back down into its own peck hole (0.5 mm above the last peck) is the lowest a rapid goes.
+        #expect(lowestRapid >= -20 + 0.5 - 1e-6)
+        #expect(!tp.motions.contains { $0.kind == .rapid && $0.end.z < -p.stock.thickness })
+    }
+
     @Test func linksRiseOnlyToTheSafeDistance() throws {
         let p = Project.demoSign()
         let job = CAMEngine.generate(p)
