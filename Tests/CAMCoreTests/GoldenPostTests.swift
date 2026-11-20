@@ -238,7 +238,11 @@ struct GoldenPostTests {
         let lib = ToolLibrary.starter
         var compression = lib.tool(number: 4)!
         compression.upcutLength = 0.2.inch
-        let eighth = lib.tool(number: 2)!, vBit = lib.tool(number: 6)!, ball = lib.tool(number: 7)!
+        let eighth = lib.tool(number: 2)!, vBit = lib.tool(number: 6)!
+        var ball = lib.tool(number: 7)!
+        // The starter library's speeds when format 1 saved this project (#23 lowered them for a thicker chip).
+        compression.cutting.spindleRPM = 18000
+        ball.cutting.spindleRPM = 18000
 
         var machine = MachineProfile(model: .pro4896, spindle: .vfdSpindle, minRPM: 7000, maxRPM: 18000, toolChange: .atc,
                                      dustCollection: false, spindleSpinUpDwell: 3, rapidRateForEstimates: 600.inch,

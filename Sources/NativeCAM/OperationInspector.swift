@@ -566,20 +566,15 @@ struct RestMachiningSection: View {
     /// Flat-bottomed bits that can clear a pocket floor.
     private var flatTools: [Tool] { library.tools.filter { $0.shape == .flatEndMill || $0.shape == .surfacing } }
 
-    /// The smallest end mill at least half as big again as this toolpath's (a 1/4" for a 1/8"), else the largest
-    /// larger one.
-    private var suggested: Tool? {
-        let mills = library.tools.filter { $0.shape == .flatEndMill && $0.diameter > tool.diameter + 1e-6 }
-        return mills.filter { $0.diameter >= 1.5 * tool.diameter - 1e-6 }.min { $0.diameter < $1.diameter }
-            ?? mills.max { $0.diameter < $1.diameter }
-    }
+    /// The end mill the toggle picks (`ToolLibrary.clearanceTool(for:)`); nil when none is larger than this toolpath's.
+    private var suggested: Tool? { ToolLibrary(tools: library.tools).clearanceTool(for: tool) }
 
     var body: some View {
         Section("Rest machining") {
             Toggle("Clear with a larger tool first", isOn: Binding(get: { params.clearanceTool != nil }, set: { on in
-                params.clearanceTool = on ? suggested ?? flatTools.first : nil
+                params.clearanceTool = on ? suggested : nil
             }))
-            .disabled(params.clearanceTool == nil && flatTools.isEmpty)
+            .disabled(params.clearanceTool == nil && suggested == nil)
             if let large = params.clearanceTool {
                 let inLibrary = flatTools.contains { $0.id == large.id }
                 Picker("Larger tool", selection: Binding(get: { large.id }, set: { id in
@@ -599,6 +594,9 @@ struct RestMachiningSection: View {
                     Text("Choose a tool larger than this toolpath's \(tool.name).")
                         .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                 }
+            } else if suggested == nil {
+                Text("No end mill larger than this toolpath's \(tool.name) in the library; add one in the Tool Library to clear with it first.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Clears the bulk with a big bit and sends this toolpath's bit only where the big one can't reach.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

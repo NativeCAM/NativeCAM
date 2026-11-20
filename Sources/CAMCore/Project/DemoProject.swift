@@ -48,11 +48,8 @@ public extension Project {
     static func demoRelief() -> Project {
         let lib = ToolLibrary.starter
         let material = MaterialKind.hardwood
-        var endMill = lib.tool(number: 1)!
-        // Maple wants a thicker chip than the plywood defaults: take the chart recommendation.
-        let rec = ChipLoad.recommend(for: endMill, material: material, machine: .avidPRO6060)
-        endMill.cutting.feedRate = rec.feed
-        endMill.cutting.spindleRPM = rec.rpm
+        // The starter feeds and speeds are inside the chart for hardwood as they are.
+        let endMill = lib.tool(number: 1)!
         let ball = lib.tool(number: 7)!
         let stock = Stock(width: 7.inch, height: 5.inch, thickness: 0.75.inch, materialName: "Hard maple", materialKind: material)
         let center = Vec2(3.5.inch, 2.5.inch)
