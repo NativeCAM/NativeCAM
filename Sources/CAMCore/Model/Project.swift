@@ -7,8 +7,10 @@ public struct Project: Hashable, Sendable {
     /// post the job as a flat sheet, which with Z zeroed on the rotation axis drives the tool into the blank. Flat
     /// projects on Avid's Mach4 profile are still written as format 1 so older builds keep opening them. Format 4 adds
     /// a rotary axis turned by hand, where builds that read format 3 would write A moves the machine can't make. Format 5
-    /// adds wrapped rotary jobs: a format-4 build would read the unrolled sheet as one face and cut it indexed.
-    public static let currentFormatVersion = 5
+    /// adds wrapped rotary jobs: a format-4 build would read the unrolled sheet as one face and cut it indexed. Format 6
+    /// adds a V-carve's start depth and inlay plugs, which a format-5 build would carve from the surface as an ordinary
+    /// V-carve of the design.
+    public static let currentFormatVersion = 6
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
@@ -52,6 +54,22 @@ public struct Project: Hashable, Sendable {
 
     public func shapes(for op: CAMOperation) -> [DesignShape] {
         op.shapeIDs.compactMap { shape(id: $0) }
+    }
+
+    /// The inlay pocket a V-carve inlay plug goes into: the one sharing a shape with it (the plug mirrors the same
+    /// design), or else the project's only one.
+    public func inlayPocket(for plug: CAMOperation) -> CAMOperation? {
+        let pockets = operations.filter { $0.id != plug.id && { if case let .vcarve(p) = $0.kind { p.inlay?.role == .pocket } else { false } }($0) }
+        return pockets.first { !Set($0.shapeIDs).isDisjoint(with: plug.shapeIDs) } ?? (pockets.count == 1 ? pockets.first : nil)
+    }
+
+    /// The selected vector a V-carve inlay plug set to carve inside one does: the one of its shapes holding all the
+    /// others. nil when there's none (it then uses the boundary margin) or the plug uses the margin anyway.
+    public func plugBoundary(for op: CAMOperation) -> DesignShape? {
+        guard case let .vcarve(p) = op.kind, p.isPlug, p.inlay?.boundary == .vector else { return nil }
+        let shapes = shapes(for: op).filter { !$0.isKeepOut }
+        let outlines = shapes.map { $0.polylines(tolerance: 0.05).filter { $0.isClosed && $0.count >= 3 } }
+        return VCarveGenerator.plugBoundaryIndex(outlines: outlines).map { shapes[$0] }
     }
 
     public func encoded() throws -> Data {

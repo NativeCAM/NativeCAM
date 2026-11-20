@@ -267,22 +267,149 @@ public struct DrillParams: Hashable, Codable, Sendable {
     }
 }
 
-public struct VCarveParams: Hashable, Codable, Sendable {
-    /// Maximum carve depth (flat bottom), mm; nil carves to full V depth wherever the shape allows.
+public struct VCarveParams: Hashable, Sendable {
+    /// Maximum carve depth (flat bottom) below the start depth, mm; nil carves to full V depth wherever the shape
+    /// allows. Measured from the start depth, as Vectric VCarve's Flat Depth is, so the deepest cut is
+    /// `startDepth + flatDepth` below the material top.
     public var flatDepth: Double?
-    /// Max depth per pass; nil carves in one pass.
+    /// Max depth per pass, counted down from the start depth; nil carves in one pass.
     public var passDepth: Double?
     /// Spacing of samples along the outline, mm (smaller = smoother, more G-code).
     public var sampleSpacing: Double
     /// Optional flat end mill that clears the flat bottom (only used with `flatDepth`). Cut before the V-bit.
+    /// Without one, the V-bit clears the flat bottom itself.
     public var clearanceTool: Tool?
+    /// Depth the carve is calculated from, mm below the material top: the carve is cut as if the material top
+    /// were this much lower (0 on the surface; an existing pocket's depth to carve inside it). The bit's tip runs at
+    /// `startDepth + (r − tipRadius) / tan(halfAngle)` for a circle of radius r inscribed at that depth. A plug
+    /// ignores it and uses its own (see `VCarveInlay`).
+    public var startDepth: Double
+    /// One side of a V-carve inlay; nil = an ordinary V-carve.
+    public var inlay: VCarveInlay?
 
-    public init(flatDepth: Double? = nil, passDepth: Double? = nil, sampleSpacing: Double = 0.25, clearanceTool: Tool? = nil) {
+    public init(flatDepth: Double? = nil, passDepth: Double? = nil, sampleSpacing: Double = 0.25, clearanceTool: Tool? = nil,
+                startDepth: Double = 0, inlay: VCarveInlay? = nil) {
         self.flatDepth = flatDepth
         self.passDepth = passDepth
         self.sampleSpacing = sampleSpacing
         self.clearanceTool = clearanceTool
+        self.startDepth = startDepth
+        self.inlay = inlay
     }
+
+    public var isPlug: Bool { inlay?.role == .plug }
+
+    /// The depth the carve is calculated from: a plug's P − G, otherwise `startDepth`.
+    public var carveStartDepth: Double { inlay.flatMap { $0.role == .plug ? $0.plugStartDepth : nil } ?? max(0, startDepth) }
+
+    /// How far below the start depth the carve may go (flat bottom): a plug's surface clearance, otherwise
+    /// `flatDepth`.
+    public var carveFlatDepth: Double? { inlay.flatMap { $0.role == .plug ? $0.surfaceClearance : nil } ?? flatDepth }
+
+    /// Deepest point below the material top the carve is asked to reach (nil for an unlimited V).
+    public var deepest: Double? { carveFlatDepth.map { carveStartDepth + $0 } }
+
+    /// The project file format these settings need: a start depth or a plug is format 6, since an older build would
+    /// ignore them and carve from the surface (a plug as an ordinary V-carve of the design).
+    public var requiredFormatVersion: Int { startDepth > 1e-9 || isPlug ? 6 : 1 }
+}
+
+extension VCarveParams: Codable {
+    private enum CodingKeys: String, CodingKey { case flatDepth, passDepth, sampleSpacing, clearanceTool, startDepth, inlay }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        flatDepth = try c.decodeIfPresent(Double.self, forKey: .flatDepth)
+        passDepth = try c.decodeIfPresent(Double.self, forKey: .passDepth)
+        sampleSpacing = try c.decode(Double.self, forKey: .sampleSpacing)
+        clearanceTool = try c.decodeIfPresent(Tool.self, forKey: .clearanceTool)
+        startDepth = try c.decodeIfPresent(Double.self, forKey: .startDepth) ?? 0
+        inlay = try c.decodeIfPresent(VCarveInlay.self, forKey: .inlay)
+    }
+
+    /// A start depth of 0 and no inlay are left out, so ordinary V-carves save exactly as before.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(flatDepth, forKey: .flatDepth)
+        try c.encodeIfPresent(passDepth, forKey: .passDepth)
+        try c.encode(sampleSpacing, forKey: .sampleSpacing)
+        try c.encodeIfPresent(clearanceTool, forKey: .clearanceTool)
+        if startDepth != 0 { try c.encode(startDepth, forKey: .startDepth) }
+        try c.encodeIfPresent(inlay, forKey: .inlay)
+    }
+}
+
+/// One side of a V-carve inlay: a contrasting plug glued into a V-carved pocket, then planed flush. Both sides are
+/// cut with the same V-bit. Settings follow Vectric's VCarve Inlay toolpath (V12), so its tutorials translate.
+///
+/// The **pocket** (female) is an ordinary V-carve of the design to its flat depth P: at depth d below its start
+/// depth, its wall is inset d·tan(α) from the outline (α = the bit's half angle).
+///
+/// The **plug** (male) carves the area *around* the design, mirrored left to right about the centre of the design's
+/// bounds, inside a boundary (a margin round the design, or a selected vector), so the design stands proud. It is carved as if the material top were S = P − G lower: at depth S the plug's walls lie
+/// exactly on the (mirrored) outline, and above it they lean in at the bit's angle, d·tan(α) at height d above S.
+/// Flipped into the pocket, the plug's walls therefore meet the pocket's along their whole height when the plug's
+/// face (the plug board's original top) is S deep in the pocket, leaving
+///
+///     glue gap = P − S = G
+///
+/// between the plug's face and the pocket's flat bottom; where the pocket is too narrow to reach its flat depth,
+/// the plug's ridges fill its grooves exactly. The plug is cut on down to S + C, so the plug board's carved floor
+/// stands C (the surface clearance) above the pocket board's top when the walls meet: room for the wood to
+/// compress as it's clamped, and the waste that's sawn or planed off afterwards.
+public struct VCarveInlay: Hashable, Codable, Sendable {
+    public enum Role: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// The female side: an ordinary V-carve to the flat depth.
+        case pocket
+        /// The male side: the area around the mirrored design, so the design stands proud.
+        case plug
+        public var id: String { rawValue }
+        public var label: String { rawValue.capitalized }
+    }
+
+    /// Where a plug's carving stops.
+    public enum Boundary: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// The design's outline grown by the boundary margin.
+        case margin
+        /// The outermost selected vector: the one holding all the others (a rectangle the size of the plug board,
+        /// say). A choice, not a guess: a design can have a shape round the rest of it too.
+        case vector
+        public var id: String { rawValue }
+        public var label: String { self == .margin ? "Margin" : "Selected vector" }
+    }
+
+    public var role: Role
+    /// Plug: the flat depth of the pocket it goes into (P), mm.
+    public var pocketDepth: Double
+    /// Plug: the gap left between the plug's face and the pocket's flat bottom (G), mm.
+    public var glueGap: Double
+    /// Plug: how far the plug board's carved floor stands above the pocket board's surface when the walls meet (C), mm.
+    public var surfaceClearance: Double
+    /// Plug: where the carving stops.
+    public var boundary: Boundary
+    /// Plug: how far past the design's outline the plug is carved with a margin boundary, mm.
+    public var boundaryMargin: Double
+
+    public static let defaultPocketDepth = 0.2.inch
+    public static let defaultGlueGap = 0.02.inch
+    public static let defaultSurfaceClearance = 0.0625.inch
+    public static let defaultBoundaryMargin = 0.25.inch
+
+    public init(role: Role, pocketDepth: Double = VCarveInlay.defaultPocketDepth, glueGap: Double = VCarveInlay.defaultGlueGap,
+                surfaceClearance: Double = VCarveInlay.defaultSurfaceClearance, boundary: Boundary = .margin,
+                boundaryMargin: Double = VCarveInlay.defaultBoundaryMargin) {
+        self.role = role
+        self.pocketDepth = pocketDepth
+        self.glueGap = glueGap
+        self.surfaceClearance = surfaceClearance
+        self.boundary = boundary
+        self.boundaryMargin = boundaryMargin
+    }
+
+    /// The plug's start depth, S = P − G.
+    public var plugStartDepth: Double { max(0, pocketDepth - glueGap) }
+    /// The plug's deepest cut below its material top, S + C.
+    public var plugCutDepth: Double { plugStartDepth + max(0, surfaceClearance) }
 }
 
 /// Where 3D toolpaths may go.
@@ -435,7 +562,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case let .profile(p): p.depth.cutDepth
         case let .pocket(p): p.depth.cutDepth
         case let .drill(p): p.depth
-        case let .vcarve(p): p.flatDepth
+        case let .vcarve(p): p.deepest
         case .rough3D, .finish3D, .rounding: nil
         }
     }
@@ -470,9 +597,15 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     public var rotaryAngles: [Double] { indexAngles ?? [0] }
 
     /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
-    /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it).
+    /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it). A V-carve
+    /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`).
     public var requiredFormatVersion: Int {
-        if case .rounding = kind { return 5 }
-        return indexAngles == nil ? 1 : 3
+        let own: Int
+        switch kind {
+        case .rounding: own = 5
+        case let .vcarve(p): own = p.requiredFormatVersion
+        default: own = 1
+        }
+        return max(own, indexAngles == nil ? 1 : 3)
     }
 }
