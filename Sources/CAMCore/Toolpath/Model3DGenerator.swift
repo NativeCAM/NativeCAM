@@ -191,10 +191,20 @@ enum Model3DGenerator {
         // Surface the tool must stay above: model + allowance; uncut material (0) outside the model in outline mode.
         var surface = targets(s, allowance: params.allowance)
         for i in surface.indices where surface[i] == .infinity { surface[i] = 0 }
-        // Ball and flat cutters drop exactly onto the triangles; the grid then only carries the material around the model.
+        // The cutter drops exactly onto the triangles (every bit shape but a V with no angle); the grid then only
+        // carries the material around the model.
         var triangles: [Double] = []
         for m in s.models {
-            m.forEachModelTriangle { a, b, c in triangles += [a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z] }
+            m.forEachModelTriangle { a, b, c in
+                func add(_ v: SIMD3<Double>) {
+                    triangles.append(v.x)
+                    triangles.append(v.y)
+                    triangles.append(v.z)
+                }
+                add(a)
+                add(b)
+                add(c)
+            }
         }
         let exact = TriangleDropCutter(tool: tool, allowance: params.allowance, triangles: triangles)
         if exact != nil {
@@ -243,9 +253,10 @@ enum Model3DGenerator {
             let n = max(1, Int((len / ds).rounded(.up)))
             var pts: [Vec3] = []
             pts.reserveCapacity(n + 1)
+            var hint: Int32 = -1
             for k in 0...n {
                 let p = sgm.a.lerp(to: sgm.b, Double(k) / Double(n))
-                pts.append(Vec3(p, max(floor, min(0, dropper.z(at: p)))))
+                pts.append(Vec3(p, max(floor, min(0, dropper.z(at: p, hint: &hint)))))
             }
             box.paths[i] = simplify3D(pts, tolerance: tolerance)
         }
@@ -262,9 +273,10 @@ enum Model3DGenerator {
                 // Short hop: follow the surface (drop-cutter) so the link can't gouge.
                 let n = max(1, Int((hop / ds).rounded(.up)))
                 let from = b.position.xy
+                var hint: Int32 = -1
                 for k in 1...n {
                     let p = from.lerp(to: first.xy, Double(k) / Double(n))
-                    b.feed(Vec3(p, max(floor, min(0, dropper.z(at: p)))))
+                    b.feed(Vec3(p, max(floor, min(0, dropper.z(at: p, hint: &hint)))))
                 }
             } else {
                 b.enter(at: first)
@@ -281,6 +293,8 @@ struct CombinedDrop: Sendable {
     let exact: TriangleDropCutter?
     let grid: DropCutter
     func z(at p: Vec2) -> Double { max(exact?.z(at: p) ?? -.infinity, grid.z(at: p)) }
+    /// `z(at:)` testing the exact cutter's `hint` triangle first (see `TriangleDropCutter.z(at:hint:)`).
+    func z(at p: Vec2, hint: inout Int32) -> Double { max(exact?.z(at: p, hint: &hint) ?? -.infinity, grid.z(at: p)) }
 }
 
 /// Drop-cutter on a height grid: the lowest tool-tip Z at an XY position that doesn't cut into the surface.

@@ -68,12 +68,15 @@ enum Rotary3DGenerator {
         }
         var warnings: [String] = []
         switch tool.shape {
-        case .ballNose: break
+        case .ballNose, .bullNose: break
         case .flatEndMill, .surfacing:
             warnings.append("A ball-nose bit gives a much smoother 3D finish than '\(tool.name)'.")
         default:
-            warnings.append("'\(tool.name)' is a \(tool.shape.label.lowercased()), which 3D rotary finishing follows the model with as if it "
-                + "were a flat end mill of its diameter: it never cuts into the model, but leaves material in hollows. Use a ball nose.")
+            if cutter.kind != .profile {
+                warnings.append("'\(tool.name)' is a \(tool.shape.label.lowercased()) whose shape 3D rotary finishing can't follow exactly, "
+                    + "so it follows the model as if it were a flat end mill of its diameter: it never cuts into the model, but leaves "
+                    + "material in hollows. Check its angle, or use a ball nose.")
+            }
         }
 
         let top = blank.topRadius, cy = stock.originPoint.y

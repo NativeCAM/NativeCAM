@@ -59,6 +59,7 @@ For checking UI changes without clicking through the app:
 ## Measuring toolpath changes
 
 - **Timing.** `scripts/measure/analyze.py job.tap` breaks a posted job down per toolpath (cutting and rapid length, retracts, plunges, segment sizes) and times it at constant velocity and with an acceleration model (15 in/s² by default; pass `--accel 50` to match NativeCAM's own estimate).
+- **Drop-cutter speed.** `NATIVECAM_BENCH=1 scripts/test.sh --filter DropCutterBenchmark` times the demo relief's 3D finish (with its ball nose and with V-bits and a bull nose), the demo pawn's 3D rotary finish and both whole jobs, and writes the figures to `.build/dropcutter-bench.txt`. It's off in normal runs.
 - **Part comparison.** Simulate the before and after G-code with the same grid, `nativecam-cli sim job.tap --cell 0.25 --heights out.bin`, then `scripts/measure/compare_parts.py before.bin after.bin --ellipse cx cy rx ry` (or `--rect x0 y0 x1 y1`, in mm) reports how much of the finished part changed.
 
 ## Test data from other projects

@@ -213,6 +213,90 @@ struct Rotary3DTests {
         }
     }
 
+    /// Batched queries carry the last winner along as a hint and skip triangles that can't beat the best so far; the
+    /// answers are exactly the ones asked one at a time.
+    @Test func batchedQueriesGiveTheSameAnswers() throws {
+        let mesh = MeshModel.revolved(name: "Pawn", profile: MeshModel.pawnProfile(samples: 120), segments: 48)
+        var triangles: [Double] = []
+        DesignShape(kind: .model(ModelSpec(mesh: mesh, depth: 1, rotary: RotaryPlacement())), position: Vec2(60, 0))
+            .forEachBlankTriangle { a, b, c in triangles += [a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z] }
+        for tool in [Self.ball, Self.lib.tool(number: 1)!, Self.lib.tool(number: 6)!] {
+            let cutter = try #require(RotaryDropCutter(tool: tool, allowance: 0.2, triangles: triangles))
+            // A spiral along the part, as the finish asks.
+            var queries: [(x: Double, angle: Double)] = []
+            for i in 0..<3000 {
+                let k = Double(i)
+                queries.append((x: 12 + k * 0.03, angle: k * 0.05))
+            }
+            let batched = cutter.tipRadii(queries)
+            var mismatches = 0
+            for (q, b) in zip(queries, batched) where cutter.tipRadius(x: q.x, angle: q.angle) != b { mismatches += 1 }
+            #expect(mismatches == 0, "\(tool.name)")
+        }
+    }
+
+    /// V-bits, engraving bits and bull noses on a rotary blank use the same exact profile cutter as 3-axis finishing:
+    /// it agrees with turning the mesh by hand and dropping them at y = 0.
+    @Test func otherBitsMatchTheFlatDropCutterOnTheTurnedMesh() throws {
+        let mesh = MeshModel.revolved(name: "Pawn", profile: MeshModel.pawnProfile(samples: 120), segments: 40)
+        var triangles: [Double] = []
+        let spec = ModelSpec(mesh: mesh, depth: 1, rotary: RotaryPlacement(turn: 7))
+        DesignShape(kind: .model(spec), position: Vec2(60, 0), scale: 1.1).forEachBlankTriangle { a, b, c in
+            triangles += [a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z]
+        }
+        var bull = Self.ball
+        bull.shape = .bullNose
+        bull.cornerRadius = 1
+        for tool in [Self.lib.tool(number: 6)!, Self.lib.tool(number: 9)!, bull] {
+            for allowance in [0.0, 0.2] {
+                let rotary = try #require(RotaryDropCutter(tool: tool, allowance: allowance, triangles: triangles))
+                #expect(rotary.kind == .profile)
+                for angle in [0.0, 0.7, -2.9] {
+                    let c = cos(angle), s = sin(angle)
+                    var turned = triangles
+                    for i in stride(from: 0, to: turned.count, by: 3) {
+                        let y = triangles[i + 1], z = triangles[i + 2]
+                        turned[i + 1] = y * c - z * s
+                        turned[i + 2] = y * s + z * c
+                    }
+                    let flat = try #require(TriangleDropCutter(tool: tool, allowance: allowance, triangles: turned))
+                    for x in stride(from: 10.0, through: 110, by: 3.7) {
+                        let a = rotary.tipRadius(x: x, angle: angle), b = flat.z(at: Vec2(x, 0))
+                        #expect(abs(a - b) < 1e-9 || (a == -.infinity && b < 0), "\(tool.name) x \(x) angle \(angle): \(a) vs \(b)")
+                    }
+                }
+            }
+        }
+    }
+
+    /// A V-bit finishing a turned part follows it exactly all the way round (it used to be followed as a flat end mill
+    /// of its diameter): no warning, no gouge, and down in the hollows where a flat end mill that wide couldn't go.
+    @Test func aVBitFinishesATurnedPartExactly() throws {
+        let vbit = Self.lib.tool(number: 6)!
+        let p = Self.shallow(.spiral) { $0.operations[0].tool = vbit }
+        let job = CAMEngine.generate(p)
+        #expect(!job.issues.contains { $0.message.contains("as if it were a flat end mill") }, "\(job.issues.map(\.message))")
+        var s = SimulationSession(toolpaths: job.toolpaths, stock: p.stock, rapidRate: 5000, cellSize: 0.25)
+        s.runToEnd()
+        let g = try #require(s.radialGrid)
+        var inside = 0.0
+        var hollow = Double.infinity
+        for j in 0..<g.rows {
+            for c in 0..<g.columns {
+                let x = g.originX + Double(c) * g.cellSize
+                guard x >= 25, x <= 75 else { continue }
+                let model = 19 + 0.5 * sin((x - 20) / 5)
+                let d = Double(g.radii[j * g.columns + c]) - model
+                inside = max(inside, -d)
+                // At the bottom of a hollow (sin = −1), how far out the surface is left.
+                if abs(sin((x - 20) / 5) + 1) < 0.002 { hollow = min(hollow, d) }
+            }
+        }
+        #expect(inside < 0.02, "gouge \(inside)")
+        // A flat end mill 12.7 mm across sits on the hollow's sides 0.4 mm up; the V's point gets to the bottom.
+        #expect(hollow < 0.05, "left \(hollow) mm in the hollows")
+    }
+
     // MARK: The turned profile
 
     /// Acceptance: a part with an analytic profile r(x), finished from a round blank (layers, then the finish).
@@ -422,7 +506,8 @@ struct Rotary3DTests {
             p.operations[0].tool.fluteLength = 0.5
             p.operations[0].tool.stickout = 50
         }
-        has("as if it were a flat end mill") { $0.operations[0].tool = Self.lib.tool(number: 5)! }
+        // A V-bit is followed exactly now; only one whose shape can't be described falls back to a flat end mill.
+        #expect(serious(issues { $0.operations[0].tool = Self.lib.tool(number: 5)! }).allSatisfy { !$0.message.contains("as if it were") })
         has("no inverse-time feed (G93)", .error, ControllerPostTests.controller(.centroid, units: .mm))
         has("can't be done by hand", .error) { $0.machine.rotary?.turnsByHand = true }
         has("index angles don't apply", .error) { $0.operations[0].indexAngles = [0, 90] }
