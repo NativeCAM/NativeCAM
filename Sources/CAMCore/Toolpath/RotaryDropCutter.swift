@@ -24,7 +24,10 @@ struct RotaryDropCutter: Sendable {
     /// Tool radius, mm (0 for a probe).
     let radius: Double
     let allowance: Double
-    /// Half-width of the tool's footprint, mm: the ball's radius plus the allowance, or a flat bottom's radius.
+    /// The cutter for `.profile`, grown by the allowance.
+    let profile: CutterProfile?
+    /// Half-width of the tool's footprint, mm: the ball's radius plus the allowance, a flat bottom's radius, or the
+    /// grown profile's radius.
     let reach: Double
     /// Extent of the triangles along x, and their farthest point from the axis, mm.
     let minX: Double, maxX: Double, maxRadius: Double
@@ -34,33 +37,61 @@ struct RotaryDropCutter: Sendable {
     private let xBin: Double
     private let xBins: Int
     private let angleBins: Int
-    /// Bin contents, compressed rows: the triangles of bin k are items[start[k] ..< start[k + 1]], with bin
+    /// Bin contents, compressed rows: the triangles of bin k are items[start[k] ..< start[k + 1]], in order, with bin
     /// k = angleBin × xBins + xBin.
     private let start: [Int32]
     private let items: [Int32]
+    /// The most a triangle can put the tip above its highest corner (what the cutter's lowest point leaves), plus a
+    /// little slack for rounding: a triangle whose turned corners are all at least this far below the best so far
+    /// can't beat it.
+    private let lift: Double
+    /// Each triangle's area × 2 (the length of its edges' cross product) and its edges' squared lengths, which don't
+    /// change as it turns: for telling when its tests are well conditioned at an angle (`steady`).
+    private let size: [Double]
+    private let edges: [Double]
 
     var triangleCount: Int { tri.count / 9 }
 
-    /// A cutter for `tool` (ball noses exactly; flat end mills and surfacing bits exactly; any other shape as a flat
-    /// end mill of its diameter, which never cuts deeper than the real bit would). nil when there are no triangles.
+    /// A cutter for `tool`: ball noses, flat end mills and surfacing bits with their own tests, V-bits, engraving bits,
+    /// drills and bull noses exactly as a `CutterProfile` (grown by the allowance). A shape the profile can't describe
+    /// (a V with no angle) is followed as a flat end mill of its diameter, which never cuts deeper than the real bit
+    /// would. nil when there are no triangles.
     init?(tool: Tool, allowance: Double, triangles: [Double], angleBins: Int = 720) {
-        let kind: Kind = tool.shape == .ballNose ? .ball : .flat
-        self.init(kind: kind, radius: tool.radius, allowance: max(0, allowance), triangles: triangles, angleBins: angleBins)
+        let a = max(0, allowance)
+        switch tool.shape {
+        case .ballNose:
+            self.init(kind: .ball, radius: tool.radius, allowance: a, profile: nil, triangles: triangles, angleBins: angleBins)
+        case .flatEndMill, .surfacing:
+            self.init(kind: .flat, radius: tool.radius, allowance: a, profile: nil, triangles: triangles, angleBins: angleBins)
+        default:
+            if let shape = CutterProfile(tool: tool) {
+                self.init(profile: shape, allowance: a, triangles: triangles, angleBins: angleBins)
+            } else {
+                self.init(kind: .flat, radius: tool.radius, allowance: a, profile: nil, triangles: triangles, angleBins: angleBins)
+            }
+        }
+    }
+
+    /// A cutter of any convex profile (a tapered ball nose, say), leaving `allowance` square to the surface.
+    init?(profile shape: CutterProfile, allowance: Double, triangles: [Double], angleBins: Int = 720) {
+        self.init(kind: .profile, radius: shape.radius, allowance: max(0, allowance), profile: shape.grown(by: max(0, allowance)),
+                  triangles: triangles, angleBins: angleBins)
     }
 
     /// A probe with no width, for asking where a ray from the axis meets the model (`crossings`).
     init?(probe triangles: [Double], angleBins: Int = 720) {
-        self.init(kind: .flat, radius: 0, allowance: 0, triangles: triangles, angleBins: angleBins)
+        self.init(kind: .flat, radius: 0, allowance: 0, profile: nil, triangles: triangles, angleBins: angleBins)
     }
 
-    private init?(kind: Kind, radius: Double, allowance: Double, triangles: [Double], angleBins requested: Int) {
+    private init?(kind: Kind, radius: Double, allowance: Double, profile: CutterProfile?, triangles: [Double], angleBins requested: Int) {
         let count = triangles.count / 9
         guard count > 0 else { return nil }
         self.kind = kind
         self.radius = radius
         self.allowance = allowance
+        self.profile = profile
         tri = Array(triangles.prefix(count * 9))
-        let reach = kind == .ball ? radius + allowance : radius
+        let reach = profile?.radius ?? (kind == .ball ? radius + allowance : radius)
         self.reach = reach
 
         // Each triangle's reach along x and round the axis.
@@ -145,8 +176,40 @@ struct RotaryDropCutter: Sendable {
                 }
             }
         }
+        // What turning doesn't change, for telling when a triangle's tests are well conditioned (`steady`).
+        var area = [Double](repeating: 0, count: count), sides = [Double](repeating: 0, count: count * 3)
+        for t in 0..<count {
+            let i = t * 9
+            let a = SIMD3(tri[i], tri[i + 1], tri[i + 2]), b = SIMD3(tri[i + 3], tri[i + 4], tri[i + 5])
+            let c = SIMD3(tri[i + 6], tri[i + 7], tri[i + 8])
+            area[t] = simd_length(simd_cross(b - a, c - a))
+            sides[t * 3] = simd_length_squared(b - a)
+            sides[t * 3 + 1] = simd_length_squared(c - b)
+            sides[t * 3 + 2] = simd_length_squared(a - c)
+        }
         start = counts
         items = list
+        lift = (profile.map { -$0.minHeight } ?? allowance) + 1e-6
+        size = area
+        edges = sides
+    }
+
+    /// Whether triangle t's tests, turned so its corners' Y are ya, yb, yc, are accurate to well within the 1e-6 mm
+    /// slack in its bound: its facet isn't nearly vertical without being skipped, and (for a ball) nor is an edge.
+    @inline(__always) private func steady(_ t: Int, _ v: UnsafeBufferPointer<Double>, _ ya: Double, _ yb: Double, _ yc: Double) -> Bool {
+        let i = t * 9
+        let xa = v[i], xb = v[i + 3], xc = v[i + 6]
+        // The Z part of the turned triangle's normal, as the tests work it out (it needs only X and Y).
+        let nz = abs((xb - xa) * (yc - ya) - (yb - ya) * (xc - xa))
+        let len = size[t]
+        let skipped = nz < 0.5e-12 && nz < 0.5e-9 * len
+        if !skipped, nz < 2e-3 * len { return false }
+        guard kind == .ball else { return true } // flat and profile edges stay between their corners' heights
+        @inline(__always) func steep(_ dx: Double, _ dy: Double, _ k: Int) -> Bool {
+            let xy = dx * dx + dy * dy
+            return xy > 0.5e-12 && xy < 2e-6 * edges[t * 3 + k]
+        }
+        return !steep(xb - xa, yb - ya, 0) && !steep(xc - xb, yc - yb, 1) && !steep(xa - xc, ya - yc, 2)
     }
 
     @inline(__always) private static func length(_ p: SIMD3<Double>) -> Double { (p.y * p.y + p.z * p.z).squareRoot() }
@@ -207,27 +270,57 @@ struct RotaryDropCutter: Sendable {
     /// of turns round): the lowest the tool can come down there without cutting into the model. -infinity when no part
     /// of the model is within the tool's footprint.
     func tipRadius(x: Double, angle: Double) -> Double {
+        var hint: Int32 = -1
+        return tipRadius(x: x, angle: angle, hint: &hint)
+    }
+
+    /// `tipRadius(x:angle:)`, testing triangle `hint` first (the last query's winner, or -1); on return `hint` is
+    /// this query's winner. The answer is the same whatever the hint: triangles that can't beat the best so far are
+    /// skipped, and a good hint makes that most of them.
+    func tipRadius(x: Double, angle: Double, hint: inout Int32) -> Double {
         guard let k = bin(x: x, angle: angle) else { return -.infinity }
         let c = cos(angle), s = sin(angle)
         let p = Vec2(x, 0)
         var best = -Double.infinity
+        var winner: Int32 = -1
         let r = reach, lo = x - reach, hi = x + reach
+        let first = Int(start[k]), end = Int(start[k + 1])
         tri.withUnsafeBufferPointer { v in
-            for n in Int(start[k])..<Int(start[k + 1]) {
-                let i = Int(items[n]) * 9
-                guard max(v[i], v[i + 3], v[i + 6]) >= lo, min(v[i], v[i + 3], v[i + 6]) <= hi else { continue }
-                // Turned so the material facing `angle` is on top: y' = y cos θ − z sin θ, z' = y sin θ + z cos θ.
-                let ya = v[i + 1] * c - v[i + 2] * s, yb = v[i + 4] * c - v[i + 5] * s, yc = v[i + 7] * c - v[i + 8] * s
-                guard max(ya, yb, yc) >= -r, min(ya, yb, yc) <= r else { continue }
-                let a = SIMD3(v[i], ya, v[i + 1] * s + v[i + 2] * c)
-                let b = SIMD3(v[i + 3], yb, v[i + 4] * s + v[i + 5] * c)
-                let cc = SIMD3(v[i + 6], yc, v[i + 7] * s + v[i + 8] * c)
-                let z = kind == .ball
-                    ? TriangleDropCutter.ballTip(a, b, cc, p, radius: radius, allowance: allowance)
-                    : TriangleDropCutter.flatTip(a, b, cc, p, radius: radius, allowance: allowance)
-                if z > best { best = z }
+            items.withUnsafeBufferPointer { list in
+                @inline(__always) func test(_ t: Int, skipping: Bool) {
+                    let i = t * 9
+                    guard max(v[i], v[i + 3], v[i + 6]) >= lo, min(v[i], v[i + 3], v[i + 6]) <= hi else { return }
+                    // Turned so the material facing `angle` is on top: y' = y cos θ − z sin θ, z' = y sin θ + z cos θ.
+                    let ya = v[i + 1] * c - v[i + 2] * s, yb = v[i + 4] * c - v[i + 5] * s, yc = v[i + 7] * c - v[i + 8] * s
+                    guard max(ya, yb, yc) >= -r, min(ya, yb, yc) <= r else { return }
+                    let za = v[i + 1] * s + v[i + 2] * c, zb = v[i + 4] * s + v[i + 5] * c, zc = v[i + 7] * s + v[i + 8] * c
+                    // Can't beat the best so far (and its tests are accurate enough to be sure of that).
+                    if skipping, max(za, zb, zc) + lift <= best, steady(t, v, ya, yb, yc) { return }
+                    let a = SIMD3(v[i], ya, za), b = SIMD3(v[i + 3], yb, zb), cc = SIMD3(v[i + 6], yc, zc)
+                    let z: Double
+                    switch kind {
+                    case .ball: z = TriangleDropCutter.ballTip(a, b, cc, p, radius: radius, allowance: allowance)
+                    case .flat: z = TriangleDropCutter.flatTip(a, b, cc, p, radius: radius, allowance: allowance)
+                    case .profile: z = profile!.tip(a, b, cc, p, normal: TriangleDropCutter.upNormal(a, b, cc), above: best)
+                    }
+                    if z > best {
+                        best = z
+                        winner = Int32(t)
+                    }
+                }
+                // The hint counts only if it's in this bin (every triangle that can touch the tool here is).
+                if hint >= 0 {
+                    var a = first, b = end
+                    while a < b {
+                        let m = (a + b) / 2
+                        if list[m] < hint { a = m + 1 } else { b = m }
+                    }
+                    if a < end, list[a] == hint { test(Int(hint), skipping: false) }
+                }
+                for n in first..<end where list[n] != hint { test(Int(list[n]), skipping: true) }
             }
         }
+        if winner >= 0 { hint = winner }
         return best
     }
 
@@ -277,7 +370,8 @@ struct RotaryDropCutter: Sendable {
     func tipRadii(_ queries: [(x: Double, angle: Double)]) -> [Double] {
         let out = ParallelResults<Double>(count: queries.count, initial: -.infinity)
         Self.concurrently(queries.count) { range in
-            for i in range { out[i] = tipRadius(x: queries[i].x, angle: queries[i].angle) }
+            var hint: Int32 = -1
+            for i in range { out[i] = tipRadius(x: queries[i].x, angle: queries[i].angle, hint: &hint) }
         }
         return out.array
     }

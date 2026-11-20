@@ -175,6 +175,53 @@ struct Model3DTests {
         #expect(error < 0.25, "surface error \(error) mm")
     }
 
+    /// V-bits and bull noses drop exactly onto the triangles too: finishing the dome with them doesn't gouge it, and
+    /// over the top the tool sits where the bit's own shape says (a sharp V's point on the dome, a bull nose's flat
+    /// on the summit).
+    @Test(arguments: [ToolLibrary.starter.tool(number: 6)!, ToolLibrary.starter.tool(number: 5)!, ToolLibrary.starter.tool(number: 9)!,
+                      Self.bullNose])
+    func otherBitsFinishTheSurfaceWithoutGouging(_ tool: Tool) throws {
+        var shape = Model3DFixture.shape()
+        shape.id = UUID()
+        let op = CAMOperation(kind: .finish3D(Finish3DParams(stepoverFraction: 0.1)), shapeIDs: [shape.id], tool: tool)
+        let job = CAMEngine.generate(Model3DFixture.project(shape, ops: [op]))
+        let tp = try #require(job.toolpaths.first)
+        let grid = simulate(tp, cell: 0.25)
+        var gouge = 0.0
+        var worstAt = Vec2.zero
+        for r in 0..<grid.rows {
+            for c in 0..<grid.columns {
+                let p = Vec2(grid.origin.x + Double(c) * grid.cellSize, grid.origin.y + Double(r) * grid.cellSize)
+                guard let m = Model3DFixture.modelZ(p) else { continue }
+                let h = Double(grid.heights[grid.index(c, r)])
+                if m - h > gouge { gouge = m - h; worstAt = p }
+            }
+        }
+        #expect(gouge < 0.08, "\(tool.name) gouged \(gouge) mm at \(worstAt), r = \(worstAt.distance(to: Model3DFixture.center))")
+        // Near the summit every pass touches the dome: a V-bit with its point (or tip flat) on it, a bull nose with
+        // its flat, so the passes' lowest point over the top is the dome's height there.
+        var nearTop = Double.infinity
+        let o = Model3DFixture.center
+        tp.forEachMotion { start, m in
+            guard m.kind == .feed else { return }
+            // The point of the move nearest the summit (moves over the flat top can be long).
+            let dx = m.end.x - start.x, dy = m.end.y - start.y
+            let l2 = dx * dx + dy * dy
+            let t = l2 > 0 ? max(0, min(1, ((o.x - start.x) * dx + (o.y - start.y) * dy) / l2)) : 0
+            let q = Vec2(start.x + dx * t, start.y + dy * t)
+            if q.distance(to: o) < 1 { nearTop = min(nearTop, start.z + (m.end.z - start.z) * t) }
+        }
+        #expect(nearTop > -0.1 && nearTop <= 1e-6, "\(tool.name): \(nearTop)")
+    }
+
+    static var bullNose: Tool {
+        var t = ToolLibrary.starter.tool(number: 7)!
+        t.shape = .bullNose
+        t.cornerRadius = 1.5
+        t.name = "1/4\" bull nose, 1.5 mm corners"
+        return t
+    }
+
     @Test func wholeMaterialBoundaryCutsAroundTheModelToItsBase() throws {
         let tool = ToolLibrary.starter.tool(number: 1)!
         var shape = Model3DFixture.shape(depth: 10)
