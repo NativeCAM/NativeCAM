@@ -47,5 +47,6 @@ Estimates time the posted moves with a look-ahead motion planner model rather th
 - per-axis acceleration and rapid speeds, corner speeds from a junction tolerance, and arc speed limits
 - the controller's own planner: Mach4's 20-line look-ahead with rapids in exact stop, Grbl's 16 blocks with blended rapids and a 0.01 mm junction deviation, and so on for each controller
 - tool-change and spindle time
+- on a rotary job, each turn of the blank at the rotary axis's turn speed (**Material & Machine ▸ Rotary Axis**), or 30 seconds for each turn by hand
 
 Drive tier, acceleration and these settings live under **Material & Machine ▸ Motion**. The machine summary says where the acceleration came from. None of the estimates has been timed against a real machine yet.

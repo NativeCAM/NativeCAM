@@ -84,6 +84,9 @@ public enum GCodeCheck {
         // Rotary jobs: the blank may only turn with the tool at safe Z. Z isn't known at the start or after a stop.
         let rotaryJob = stock.rotary != nil
         var rotaryZ: Double?
+        // A blank turned by hand turns at a stop (M0) whose comment asks for it, on the stop's line or the one before.
+        let byHand = rotaryJob && machine.rotary?.turnsByHand == true
+        var lastComment: String?
 
         var rows = gcode.components(separatedBy: "\n")
         if rows.last == "" { rows.removeLast() }
@@ -104,11 +107,17 @@ public enum GCodeCheck {
             if depth != 0 { add(.error, n, "unclosed", "A comment isn't closed.") }
 
             let code = GCodeParser.stripComments(raw).uppercased().trimmingCharacters(in: .whitespaces)
-            if code.isEmpty || code.hasPrefix("%") { continue }
+            let comment = GCodeParser.commentText(raw)
+            if code.isEmpty || code.hasPrefix("%") {
+                if comment != nil { lastComment = comment }
+                continue
+            }
             guard let words = try? GCodeParser.tokenize(code, lineNo: n) else {
                 add(.error, n, "unreadable", "Can't read “\(raw)”.")
                 continue
             }
+            let message = comment ?? lastComment
+            if words.allSatisfy({ $0.0 == "N" || $0.0 == "O" }), comment != nil { lastComment = comment } else { lastComment = nil }
             if ended { add(.warning, n, "afterEnd", "Comes after the program end (M30 or M2), so it won't run.") }
 
             var gs: [Double] = [], ms: [Int] = []
@@ -206,6 +215,15 @@ public enum GCodeCheck {
                             + "old bit. Save one file per tool.")
                     }
                 case 0, 1:
+                    if byHand, message.flatMap(RotaryOutput.manualTurn) != nil {
+                        if let z = rotaryZ, z < safeZ - 1e-3 {
+                            add(.error, n, "turn below safe Z", "Stops for the blank to be turned by hand with the tool below "
+                                + "safe Z, where the blank could swing into it.")
+                        }
+                        if spindleOn {
+                            add(.error, n, "turn spindle", "Stops for the blank to be turned by hand with the spindle running.")
+                        }
+                    }
                     awaitingLift = true; lifted = false; afterChange = true
                     rotaryZ = nil
                 case 2, 30: ended = true
@@ -379,7 +397,8 @@ public enum GCodeCheck {
         var tool: Int
         var rpm: Double
         var toolpath: String
-        /// The A value the post writes for the toolpath's index angle (nil on a flat job).
+        /// The A value the post writes for the toolpath's index angle, or on a blank turned by hand the angle its stop
+        /// asks for (nil on a flat job).
         var a: Double?
     }
 
@@ -397,8 +416,14 @@ public enum GCodeCheck {
         let rotary = RotaryOutput(project)
         var out: [ExpectedMove] = []
         var tool: Int?, speed: Double?
+        // A blank turned by hand: the post stops the spindle for each turn, so it spins up again afterwards.
+        var dial: Double?
         for tp in toolpaths where !tp.isEmpty {
-            let a = tp.indexAngle.flatMap { angle in rotary?.value(angle) }
+            let a = tp.indexAngle.flatMap { angle in rotary?.position(angle) }
+            if rotary?.manual == true, let a, a != dial {
+                dial = a
+                speed = nil
+            }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             let s = stock.toWork(tp.start)
             if (tool != tp.tool.number || speed != rpm) && machine.spindleSpinUpDwell > 0 {
@@ -445,6 +470,11 @@ public enum GCodeCheck {
             }
         }
 
+        // On a blank turned by hand there are no A words: each move is at the angle the last stop asked for.
+        let byHand = RotaryOutput(project)?.manual ?? false
+        let turns = program.pauses.compactMap { p in p.message.flatMap(RotaryOutput.manualTurn).map { (line: p.line, dial: $0) } }
+        func dial(before line: Int) -> Double? { turns.last { $0.line < line }?.dial }
+
         var issues: [Issue] = []
         func fail(_ line: Int?, _ message: String) { if issues.filter({ $0.severity == .error }).count < 5 { issues.append(Issue(.error, line: line, message)) } }
         func near(_ a: Vec3, _ b: Vec3, _ t: Double) -> Bool { abs(a.x - b.x) <= t && abs(a.y - b.y) <= t && abs(a.z - b.z) <= t }
@@ -474,7 +504,14 @@ public enum GCodeCheck {
                 fail(line, "Ends at \(show(w.motion.end)), but “\(e.toolpath)” goes to \(show(e.end)).")
                 break
             }
-            if let a = e.a, w.motion.a.map({ abs($0 - a) > 5e-4 }) ?? true {
+            if let a = e.a, byHand {
+                let at = dial(before: line)
+                if at.map({ abs($0 - a) > 5e-4 }) ?? true {
+                    let read = at.map { "with the blank turned to \(RotaryIndex.label($0))" } ?? "before any stop asks for the blank to be turned"
+                    fail(line, "Cuts \(read), where “\(e.toolpath)” needs it at \(RotaryIndex.label(a)).")
+                    break
+                }
+            } else if let a = e.a, w.motion.a.map({ abs($0 - a) > 5e-4 }) ?? true {
                 let read = w.motion.a.map { "A\(String(format: "%.3f", $0))" } ?? "no A position"
                 fail(line, "Cuts with \(read) where “\(e.toolpath)” is turned to A\(String(format: "%.3f", a)).")
                 break

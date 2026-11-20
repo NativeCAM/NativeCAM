@@ -1,0 +1,65 @@
+(Golden {rotary})
+(Post: Grbl - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(File 2 of 2: one file per tool)
+(Material: Maple rotary blank, round, D=50.000, L=300.000 mm)
+(Z ZERO = CENTRE OF ROTATION)
+(Y ZERO = AXIS CENTRELINE   X ZERO = LEFT END OF THE BLANK)
+(Raise the tool clear of the chuck and tailstock before Cycle Start)
+(TURN THE BLANK BY HAND AT EACH STOP {M0})
+(Angles count up as the top of the blank rolls toward -Y)
+(Safe Z 37.700)
+(T2 1/8in Upcut End Mill D3.175)
+G90 G94 G17
+G21
+(Load T2 1/8in Upcut End Mill and zero Z on the rotation axis before starting)
+M8
+(Turn the blank to 0deg, then resume)
+M0
+S18000 M3
+G4 P2.00
+(Hole @ 0deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 Z27.000
+G1 Z13.000 F500
+G0 Z37.700
+M5
+(Turn the blank to 90deg, then resume)
+M0
+S18000 M3
+G4 P2.00
+(Hole @ 90deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+M5
+(Turn the blank to 180deg, then resume)
+M0
+S18000 M3
+G4 P2.00
+(Hole @ 180deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+M5
+(Turn the blank to 270deg, then resume)
+M0
+S18000 M3
+G4 P2.00
+(Hole @ 270deg T2)
+G0 Z37.700
+G0 X220.000 Y0.000
+G0 Z27.000
+G1 Z13.000
+G0 Z37.700
+G0 Z50.400
+G0 X150.000 Y0.000
+M5
+M9
+M30

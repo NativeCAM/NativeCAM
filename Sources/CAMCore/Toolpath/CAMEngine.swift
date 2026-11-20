@@ -87,24 +87,39 @@ public enum CAMEngine {
                 issues.append(JobIssue(.warning, "No shapes selected.", operation: op.name))
                 continue
             }
-            // Flat jobs cut once; rotary jobs once per index angle, each on its own face model.
+            // Flat jobs cut once; rotary jobs once per index angle, each on its own face model. Every angle is
+            // generated first, then cut toolpath by toolpath: a V-carve's flat clearing at every angle, then its V-bit
+            // at every angle, so the job changes tools once rather than at every face.
             let angles: [Double?] = stock.rotary == nil ? [nil] : op.rotaryAngles
+            func faceKey(_ angle: Double?) -> Double { angle.map(RotaryIndex.normalized) ?? 0 }
+            var perAngle: [[Toolpath]] = []
             for (position, angle) in angles.enumerated() {
-                let face = angle.map(RotaryIndex.normalized) ?? 0
-                var model = models.removeValue(forKey: face) ?? newModel()
-                defer { models[face] = model }
+                let face = faceKey(angle)
+                if models[face] == nil { models[face] = newModel() }
                 var opContext = ctx
-                let snapshot = model.grid
+                let snapshot = models[face]!.grid
                 opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
                 opContext.keepOuts = keepOuts
-                let generated = generate(op, shapes: shapes, context: opContext)
-                for (role, var tp) in generated.enumerated() {
-                    if let angle {
-                        tp.indexAngle = angle
-                        tp.operationID = op.id
-                        tp.name += " @ \(RotaryIndex.label(angle))"
-                        if position > 0 { tp.id = RotaryIndex.toolpathID(operation: op.id, role: role, position: position) }
+                var generated = generate(op, shapes: shapes, context: opContext)
+                if let angle {
+                    for (index, tp) in generated.enumerated() {
+                        // Role 0 is the toolpath that carries the operation's own ID; the others (a V-carve's flat
+                        // clearing) count from 1, so a toolpath keeps its IDs whether or not the others exist.
+                        let role = tp.id == op.id ? 0 : max(1, index)
+                        generated[index].indexAngle = angle
+                        generated[index].operationID = op.id
+                        generated[index].name += " @ \(RotaryIndex.label(angle))"
+                        if position > 0 { generated[index].id = RotaryIndex.toolpathID(operation: op.id, role: role, position: position) }
                     }
+                }
+                perAngle.append(generated)
+            }
+            for index in 0..<(perAngle.map(\.count).max() ?? 0) {
+                for (position, angle) in angles.enumerated() where index < perAngle[position].count {
+                    var tp = perAngle[position][index]
+                    let face = faceKey(angle)
+                    var model = models.removeValue(forKey: face) ?? newModel()
+                    defer { models[face] = model }
                     if stock.retract == .minimum {
                         let settings = LinkOptimizer.Settings(safeDistance: stock.safeDistance, clearanceZ: clearanceZ,
                                                               stayDownLimit: max(3 * tp.tool.diameter, 10), floorZ: -stock.thickness,

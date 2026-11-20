@@ -346,13 +346,16 @@ public struct SimulationSession: Sendable {
     /// Steps fully applied to `faces`.
     private var appliedSteps = 0
 
-    /// The pace the simulation turns a rotary blank at, degrees per second. A nominal speed: the run-time
-    /// estimate doesn't count turns yet.
-    public static let turnSpeed = 90.0
+    /// The pace the simulation turns a rotary blank at when the machine's turn speed isn't known, degrees per
+    /// second. The run-time estimate assumes the same (`RotaryAxis.nominalTurnSpeed`).
+    public static let turnSpeed = RotaryAxis.nominalTurnSpeed / 60
 
-    public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, durations: [[Double]]? = nil) {
+    /// `turnSpeed` is the rotary axis's own speed in degrees per minute (`RotaryAxis.drivenTurnSpeed`); nil turns
+    /// the blank at the nominal pace.
+    public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, durations: [[Double]]? = nil,
+                turnSpeed: Double? = nil) {
         timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations,
-                                      turnSpeed: stock.rotary == nil ? nil : Self.turnSpeed)
+                                      turnSpeed: stock.rotary == nil ? nil : turnSpeed.map { $0 / 60 } ?? Self.turnSpeed)
         guard let blank = stock.rotary else {
             faces = [MaterialSimulator(stock: stock, cellSize: cellSize)]
             faceAngles = [0]

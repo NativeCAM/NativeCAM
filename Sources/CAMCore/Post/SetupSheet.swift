@@ -25,7 +25,7 @@ public enum SetupSheet {
             <dt>Material</dt><dd>\(esc(stock.materialName)) rotary blank: \(shape), \(len(blank.length)) long</dd>
             <dt>XY zero</dt><dd>X at the \(RotaryOutput.xZero(stock)), Y on the rotation axis centreline</dd>
             <dt>Z zero</dt><dd class="error">On the rotation axis\(avid ? " (Avid: Rotary tab ▸ Z Axis Touch)" : ""), not the top of the blank</dd>
-            <dt>Rotary</dt><dd>Turns on \(esc(machine.rotary?.letter.rawValue ?? "A")) between faces, with the tool at safe Z. Raise the tool clear of the chuck and tailstock before starting.</dd>
+            <dt>Rotary</dt><dd>\(esc(RotaryOutput.setupNote(machine))) Raise the tool clear of the chuck and tailstock before starting.</dd>
             <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the top face (\(len(blank.radius + stock.clearanceHeight)) from the axis)</dd>
             """
         } else {
@@ -86,6 +86,9 @@ public enum SetupSheet {
         h += "<h2>Run order</h2>\n<table><tr><th>#</th><th>Toolpath</th><th>Tool</th>\(angleColumn ? "<th class=\"num\">Angle</th>" : "")<th class=\"num\">RPM</th><th class=\"num\">Feed</th><th class=\"num\">Depth</th><th class=\"num\">Time</th></tr>\n"
         var current: Int?
         var step = 0
+        // A blank turned by hand: the program stops before each new angle, as the post writes it.
+        let rotary = RotaryOutput(project)
+        var dial: Double?
         for tp in job.toolpaths where !tp.isEmpty {
             if current != tp.tool.number {
                 let what: String
@@ -98,6 +101,11 @@ public enum SetupSheet {
                 }
                 h += "<tr class=\"change\"><td></td><td colspan=\"\(angleColumn ? 7 : 6)\">\(what)</td></tr>\n"
                 current = tp.tool.number
+            }
+            if let rotary, rotary.manual, let angle = tp.indexAngle, dial != rotary.position(angle) {
+                dial = rotary.position(angle)
+                h += "<tr class=\"change\"><td></td><td colspan=\"7\">The program stops: turn the blank to "
+                    + "\(esc(RotaryIndex.label(rotary.position(angle)))) by hand, then press Cycle Start.</td></tr>\n"
             }
             step += 1
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM

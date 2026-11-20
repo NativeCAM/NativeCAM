@@ -43,7 +43,7 @@ public struct AvidMach4Post: Sendable {
         w.comment("Machine: \(machine.displayName), \(machine.spindle == .vfdSpindle ? "spindle" : "router"), \(machine.toolChange.label)")
         let rotary = RotaryOutput(project)
         if rotary != nil {
-            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: true) { w.comment(line) }
+            for line in RotaryOutput.header(stock, units: units, num: { num($0) }, avid: true, axis: machine.rotary) { w.comment(line) }
         } else {
             w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")
             w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
@@ -71,6 +71,8 @@ public struct AvidMach4Post: Sendable {
         var currentRPM: Double?
         var state = ModalState()
         var turned = false
+        // On a blank turned by hand, the angle the operator was last asked for; nil until the first stop.
+        var dial: Double?
 
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
@@ -78,6 +80,19 @@ public struct AvidMach4Post: Sendable {
                 toolChange(tp, first: currentTool == nil, writer: &w, state: &state)
                 currentTool = tp.tool.number
                 currentRPM = nil
+            }
+            // Turned by hand: stop with the tool at safe Z and the spindle off, and say which angle to turn the blank
+            // to. The first toolpath always asks, so the file never assumes where the blank was left.
+            if let rotary, rotary.manual, let angle = tp.indexAngle, dial != rotary.position(angle) {
+                if currentRPM != nil {
+                    let safe = workZ(stock.clearanceHeight)
+                    if state.z != round(safe) { w.line("G00 Z\(num(safe, isZ: true))") }
+                    w.line("M05")
+                    currentRPM = nil
+                }
+                w.comment(rotary.turnMessage(angle, resume: "Cycle Start"))
+                w.line("M00")
+                dial = rotary.position(angle)
             }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             if currentRPM != rpm || toolChanged {
@@ -95,7 +110,7 @@ public struct AvidMach4Post: Sendable {
             state.y = round(startWork.y)
             // Rotary: turn the blank at safe Z, over the start of the cut, whenever the angle isn't known to be right
             // (always after a tool change, since the macro or the operator may have turned it).
-            if let rotary, let angle = tp.indexAngle, state.a != rotary.value(angle) {
+            if let rotary, !rotary.manual, let angle = tp.indexAngle, state.a != rotary.value(angle) {
                 w.line("G00 \(rotary.word(angle))")
                 state.a = rotary.value(angle)
                 turned = true
