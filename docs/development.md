@@ -35,6 +35,8 @@ scripts/test.sh
 
 The script adds the compiler and linker flags Swift Testing needs when only the Command Line Tools are installed, and builds the tests optimized in their own folder (`.build/tests`), because the geometry and simulation run about 100× slower unoptimized. Extra arguments pass through to `swift test`, for example `scripts/test.sh --filter PostTests`. For a debuggable, unoptimized run, use `NATIVECAM_TEST_DEBUG=1 scripts/test.sh`.
 
+GitHub Actions runs the same script, then `swift build` for the app and the command-line tool, on every pull request and every push to `main` ([`.github/workflows/tests.yml`](../.github/workflows/tests.yml)). It uses GitHub's Apple-silicon macOS 26 image with Xcode 26. When a golden file differs, the run keeps the new output as a `golden-actual` download on the run's page.
+
 ## Golden G-code
 
 The golden-file tests (`GoldenPostTests` for the Avid Mach4 post, and one suite per other controller) compare posted files byte for byte, line endings included, with files in [`Tests/CAMCoreTests/Fixtures/golden/`](../Tests/CAMCoreTests/Fixtures/golden/):
