@@ -234,10 +234,18 @@ public struct PocketParams: Hashable, Codable, Sendable {
     public var entry: EntrySettings
     /// Dogbone or T-bone relief in the wall's inside corners (islands included); nil = none.
     public var cornerRelief: CornerReliefSettings?
+    /// Rest machining: a larger end mill that clears the pocket first, with its own stepover, pass depth and feeds,
+    /// leaving the allowance plus `restMargin(for:)` on the walls. The operation's own tool then cuts only where the
+    /// larger one couldn't reach (corners, narrow slots) and the final pass round the walls. nil = the operation's
+    /// tool clears it all.
+    ///
+    /// No new file format: a build that doesn't know the key cuts the same pocket with the operation's tool alone,
+    /// which is slower but not wrong.
+    public var clearanceTool: Tool?
 
     public init(strategy: PocketStrategy = .offset, direction: CutDirection = .climb, depth: DepthSettings,
                 allowance: Double = 0, rasterAngle: Double = 0, stepoverFraction: Double? = nil,
-                entry: EntrySettings = EntrySettings(), cornerRelief: CornerReliefSettings? = nil) {
+                entry: EntrySettings = EntrySettings(), cornerRelief: CornerReliefSettings? = nil, clearanceTool: Tool? = nil) {
         self.strategy = strategy
         self.direction = direction
         self.depth = depth
@@ -246,7 +254,13 @@ public struct PocketParams: Hashable, Codable, Sendable {
         self.stepoverFraction = stepoverFraction
         self.entry = entry
         self.cornerRelief = cornerRelief
+        self.clearanceTool = clearanceTool
     }
+
+    /// Material a clearance tool leaves on the walls beyond the allowance, so the operation's own tool (`small`) cuts
+    /// the whole wall and the two bits leave no step where they meet: a tenth of its diameter, at most 0.25 mm
+    /// (0.01 in).
+    public static func restMargin(for small: Tool) -> Double { min(0.25, 0.1 * small.diameter) }
 }
 
 public struct DrillParams: Hashable, Codable, Sendable {
@@ -595,6 +609,17 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
 
     /// The angles this operation cuts at on rotary stock.
     public var rotaryAngles: [Double] { indexAngles ?? [0] }
+
+    /// The tool that cuts before the operation's own: a pocket's larger clearance tool, or the end mill that clears a
+    /// V-carve's flat bottom. Operations next to each other in the run order that share one cut all their clearing
+    /// first, then their own tools (see `OperationScheduler`).
+    public var clearanceTool: Tool? {
+        switch kind {
+        case let .pocket(p): p.clearanceTool
+        case let .vcarve(p): (p.carveFlatDepth ?? 0) > 0 ? p.clearanceTool : nil
+        default: nil
+        }
+    }
 
     /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
     /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it). A V-carve

@@ -57,7 +57,9 @@ struct SidebarView: View {
                         Label {
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(op.name).foregroundStyle(op.enabled ? .primary : .secondary)
-                                Text("T\(op.tool.number) \(op.tool.name)").font(.caption).foregroundStyle(.secondary)
+                                // A clearance tool cuts first: "T10, then T2 1/8" Upcut End Mill".
+                                Text("\(op.clearanceTool.map { "T\($0.number), then " } ?? "")T\(op.tool.number) \(op.tool.name)")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         } icon: { Image(systemName: icon(for: op.kind)) }
                         Spacer()

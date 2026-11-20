@@ -317,7 +317,9 @@ final class Workspace {
         case let .pocket(p) where p.cornerRelief != nil: break
         default: return nil
         }
-        guard let tp = job?.toolpaths.first(where: { $0.sourceOperationID == id }), let corners = tp.reliefCorners, !corners.isEmpty else {
+        // A rest-machined pocket's clearing comes first and has no reliefs: they're on the operation's own toolpath.
+        guard let tp = job?.toolpaths.first(where: { $0.sourceOperationID == id && $0.reliefCorners != nil }),
+              let corners = tp.reliefCorners, !corners.isEmpty else {
             return nil
         }
         return (id, corners, tp.tool.radius)
@@ -460,6 +462,11 @@ final class Workspace {
             let opIndex = Dictionary(uniqueKeysWithValues: project.operations.enumerated().map { ($1.id, $0) })
             for (i, tp) in toolpaths.enumerated() {
                 var color = colorForOperation(opIndex[tp.sourceOperationID] ?? i)
+                // A rest-machined pocket's clearing (the larger bit) in a paler shade of the pocket's colour.
+                if let k = opIndex[tp.sourceOperationID], case let .pocket(p) = project.operations[k].kind,
+                   let large = p.clearanceTool, tp.tool.isSameBit(as: large), !tp.tool.isSameBit(as: project.operations[k].tool) {
+                    color = SIMD4(color.x + (1 - color.x) * 0.55, color.y + (1 - color.y) * 0.55, color.z + (1 - color.z) * 0.55, color.w)
+                }
                 let highlight = selectedOperationID == tp.sourceOperationID
                 if dimmed { color.w = 0.35 } else if !highlight && selectedOperationID != nil { color.w = 0.45 }
                 let rapid = SIMD4<Float>(1, 0.3, 0.3, dimmed ? 0.2 : 0.55)
