@@ -7,8 +7,10 @@ enum PocketGenerator {
         let loops = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }.filter { $0.isClosed }
         let regions = Region.build(from: loops, fill: .evenOdd)
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
-        let result = generate(regions: regions, tool: tool, params: params, context: context, builder: &b)
-        return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: result)
+        let result = clear(regions: regions, tool: tool, params: params, context: context, shapes: shapes, builder: &b)
+        var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: result.warnings)
+        toolpath.reliefCorners = result.corners
+        return toolpath
     }
 
     /// Shared by pockets and V-carve flat-area clearing. Appends to `b`, returns warnings.
@@ -16,10 +18,17 @@ enum PocketGenerator {
     /// walls stay exact). Inner rings are always smoothed within the machine's roughing smoothing budget.
     static func generate(regions: [Region], tool: Tool, params: PocketParams, context: GenerationContext,
                          smoothBoundary: Bool = false, builder b: inout ToolpathBuilder) -> [String] {
+        clear(regions: regions, tool: tool, params: params, context: context, smoothBoundary: smoothBoundary, shapes: [], builder: &b).warnings
+    }
+
+    /// The clearing itself. `shapes` are the drawn shapes the regions came from, so corner choices can find their
+    /// corners; also returns the wall corners that get reliefs (nil without corner reliefs).
+    static func clear(regions: [Region], tool: Tool, params: PocketParams, context: GenerationContext, smoothBoundary: Bool = false,
+                      shapes: [DesignShape], builder b: inout ToolpathBuilder) -> (warnings: [String], corners: [ReliefCorner]?) {
         var warnings: [String] = []
         if regions.isEmpty {
             warnings.append("Pockets need closed shapes; none were selected.")
-            return warnings
+            return (warnings, nil)
         }
         let r = tool.radius
         let stepover = max(0.05, tool.diameter * (params.stepoverFraction ?? tool.cutting.stepoverFraction))
@@ -29,32 +38,37 @@ enum PocketGenerator {
         let levels = params.depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
         if levels.isEmpty {
             warnings.append("Cut depth must be greater than the start depth.")
-            return warnings
+            return (warnings, nil)
         }
 
         // Tool-centre boundary: shrink each region by the tool radius plus allowance.
         let boundary = regions.flatMap { $0.offset(by: -(r + params.allowance), arcTolerance: context.arcTolerance) }
         if boundary.isEmpty {
             warnings.append("The tool is too large to fit in the pocket.")
-            return warnings
+            return (warnings, nil)
         }
         // Feed links are allowed only if they stay inside this (slightly grown) safe area.
         let safe = boundary.flatMap { $0.offset(by: 0.01, arcTolerance: context.arcTolerance) }
 
         // Corner reliefs on the wall rings: the boundary and its islands (region loops have the pocket on their left).
         var reliefs: [CornerRelief.Relief] = []
+        var reliefCorners: [ReliefCorner]?
         if let relief = params.cornerRelief {
             let design = CornerRelief.Design(regions.flatMap(\.loops))
+            let index = CornerRelief.ShapeIndex(shapes, tolerance: context.flattenTolerance)
+            var matched = Set<Int>()
             var blocked = 0
+            var marks: [ReliefCorner] = []
             for loop in boundary.flatMap(\.loops) {
-                let plan = CornerRelief.plan(loop, wasteOnLeft: true, design: design, offset: r + params.allowance, settings: relief)
-                reliefs += plan.reliefs
-                blocked += plan.blocked
+                let found = CornerRelief.corners(loop, wasteOnLeft: true, design: design, offset: r + params.allowance,
+                                                 maxCornerAngle: relief.maxCornerAngle)
+                let chosen = CornerRelief.choose(found, settings: relief, shapes: index, matched: &matched)
+                reliefs += chosen.reliefs
+                blocked += chosen.blocked
+                marks += chosen.corners
             }
-            if blocked > 0 {
-                warnings.append(blocked == 1 ? "1 corner wasn't relieved: its relief would cut into nearby geometry."
-                    : "\(blocked) corners weren't relieved: their reliefs would cut into nearby geometry.")
-            }
+            reliefCorners = marks
+            warnings += CornerRelief.warnings(blocked: blocked, unmatched: (relief.overrides?.count ?? 0) - matched.count)
         }
 
         switch params.strategy {
@@ -88,7 +102,7 @@ enum PocketGenerator {
                 zAbove = z
             }
         }
-        return warnings
+        return (warnings, reliefCorners)
     }
 
     // MARK: Offset rings

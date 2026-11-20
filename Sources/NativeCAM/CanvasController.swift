@@ -58,6 +58,12 @@ final class CanvasController: ViewportInteractionDelegate {
     // MARK: Mouse
 
     func viewportMouseDown(at point: Vec2, tolerance: Double, modifiers: NSEvent.ModifierFlags) -> Bool {
+        // A corner mark of the selected toolpath: step that corner to its next relief (and take the click, so
+        // nothing starts moving).
+        if let mark = workspace.cornerHit(point, tolerance: tolerance, project: p) {
+            setCorner(mark.corner, to: mark.corner.nextRelief, in: mark.operation)
+            return true
+        }
         guard let hit = workspace.hitTest(point, tolerance: tolerance, project: p) else { return false }
         let extend = modifiers.contains(.shift) || modifiers.contains(.command)
         if extend {
@@ -228,7 +234,59 @@ final class CanvasController: ViewportInteractionDelegate {
 
     // MARK: Context menu
 
+    // MARK: Corner reliefs
+
+    /// Gives one corner of a profile or pocket its own relief (nil: back to the toolpath's setting). One undo step.
+    private func setCorner(_ corner: ReliefCorner, to relief: ReliefCorner.Relief?, in operation: UUID) {
+        var proj = p
+        guard let i = proj.operations.firstIndex(where: { $0.id == operation }) else { return }
+        switch proj.operations[i].kind {
+        case var .profile(q):
+            guard let s = q.cornerRelief else { return }
+            q.cornerRelief = s.setting(relief, for: corner)
+            proj.operations[i].kind = .profile(q)
+        case var .pocket(q):
+            guard let s = q.cornerRelief else { return }
+            q.cornerRelief = s.setting(relief, for: corner)
+            proj.operations[i].kind = .pocket(q)
+        default:
+            return
+        }
+        project.wrappedValue = proj
+    }
+
+    /// A wall as it looks in the Top view.
+    static func wallName(_ wall: ReliefCorner.Wall) -> String {
+        var angle = atan2(wall.direction.y, wall.direction.x) * 180 / .pi
+        angle = angle.truncatingRemainder(dividingBy: 180)
+        if angle < 0 { angle += 180 }
+        if angle < 1 || angle > 179 { return "horizontal side" }
+        if abs(angle - 90) < 1 { return "vertical side" }
+        return "side at \(Int(angle.rounded()))°"
+    }
+
+    private func cornerMenu(_ corner: ReliefCorner, operation: UUID) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        var choices: [(String, ReliefCorner.Relief)] = [("Dogbone", .dogbone)]
+        for (k, wall) in corner.walls.enumerated() { choices.append(("T-bone into the \(Self.wallName(wall))", .tBone(wall: k))) }
+        choices.append(("No Relief", .asCut))
+        for (title, relief) in choices {
+            let item = ClosureMenuItem(title) { [weak self] in self?.setCorner(corner, to: relief, in: operation) }
+            item.state = corner.relief == relief ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let reset = ClosureMenuItem("Use Toolpath Setting") { [weak self] in self?.setCorner(corner, to: nil, in: operation) }
+        reset.isEnabled = corner.isChanged
+        menu.addItem(reset)
+        return menu
+    }
+
     func viewportMenu(at point: Vec2, tolerance: Double) -> NSMenu? {
+        if let mark = workspace.cornerHit(point, tolerance: tolerance, project: p) {
+            return cornerMenu(mark.corner, operation: mark.operation)
+        }
         let menu = NSMenu()
         if let hit = workspace.hitTest(point, tolerance: tolerance, project: p) {
             // Mac convention: right-clicking an unselected item selects it first.

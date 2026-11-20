@@ -138,6 +138,17 @@ public struct Transform2D: Hashable, Codable, Sendable {
     public var determinant: Double { a * d - b * c }
     /// Uniform scale estimate (used for curve flattening tolerance).
     public var approximateScale: Double { sqrt(abs(determinant)) }
+
+    /// The transform that undoes this one; nil when it flattens everything onto a line.
+    public var inverted: Transform2D? {
+        let det = determinant
+        guard abs(det) > 1e-12 else { return nil }
+        let ia = d / det, ib = -b / det, ic = -c / det, id = a / det
+        return Transform2D(a: ia, b: ib, c: ic, d: id, tx: -(ia * tx + ic * ty), ty: -(ib * tx + id * ty))
+    }
+
+    /// Applies only the linear part (for directions).
+    public func applyLinear(_ v: Vec2) -> Vec2 { Vec2(a * v.x + c * v.y, b * v.x + d * v.y) }
 }
 
 public extension Double {
