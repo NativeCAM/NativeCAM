@@ -31,6 +31,20 @@ struct OperationInspector: View {
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
                 IndexedResultSection(toolpaths: tps, job: job, rapidRate: project.machine.rapidRateForEstimates, units: units)
+            } else if let job = workspace.job, case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
+                // A rest-machined pocket: the larger bit's clearing, then this toolpath's own.
+                Section("Result") {
+                    let rate = project.machine.rapidRateForEstimates
+                    let seconds = tps.map { job.estimatedSeconds(toolpath: $0.id) ?? $0.estimatedSeconds(rapidRate: rate) }
+                    LabeledContent("Cutting length", value: "\(units.format(tps.reduce(0) { $0 + $1.cuttingLength }, decimals: 1)) \(units.symbol)")
+                    LabeledContent("Estimated time", value: formatDuration(seconds.reduce(0, +)))
+                    ForEach(Array(tps.enumerated()), id: \.element.id) { i, tp in
+                        LabeledContent("   T\(tp.tool.number) \(tp.tool.name)", value: formatDuration(seconds[i]))
+                    }
+                    if let deepest = tps.compactMap({ $0.cuttingExtents.map { -$0.min.z } }).max() {
+                        LabeledContent("Deepest cut", value: "\(units.format(deepest)) \(units.symbol)")
+                    }
+                }
             } else if let tp = workspace.job?.toolpaths.first(where: { $0.sourceOperationID == op.id }) {
                 Section("Result") {
                     LabeledContent("Cutting length", value: "\(units.format(tp.cuttingLength, decimals: 1)) \(units.symbol)")
@@ -93,6 +107,7 @@ struct OperationInspector: View {
                                                                  set: { var q = p; q.stepoverFraction = $0; set(q) }))
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = $0; set(q) }), units: units)
             }
+            RestMachiningSection(params: Binding(get: { p }, set: { set($0) }), tool: op.tool, units: units)
             DepthSection(depth: Binding(get: { p.depth }, set: { var q = p; q.depth = $0; set(q) }), tool: op.tool, stock: project.stock, units: units)
             EntrySection(entry: Binding(get: { p.entry }, set: { var q = p; q.entry = $0; set(q) }), units: units)
             CornersSection(relief: Binding(get: { p.cornerRelief }, set: { var q = p; q.cornerRelief = $0; set(q) }), available: true)
@@ -535,6 +550,58 @@ struct CornersSection: View {
                     Text("Cuts just past each inside corner the bit can't reach, so square parts fit. A dogbone cuts into the corner; a T-bone cuts into one side only, which is easier to hide and better for slots about as wide as the bit.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
+            }
+        }
+    }
+}
+
+/// Rest machining for a pocket: a larger end mill clears it first, and this toolpath's tool only cuts what that
+/// one can't reach.
+struct RestMachiningSection: View {
+    @Binding var params: PocketParams
+    let tool: Tool
+    let units: LengthUnit
+    @Environment(ToolLibraryStore.self) private var library
+
+    /// Flat-bottomed bits that can clear a pocket floor.
+    private var flatTools: [Tool] { library.tools.filter { $0.shape == .flatEndMill || $0.shape == .surfacing } }
+
+    /// The smallest end mill at least half as big again as this toolpath's (a 1/4" for a 1/8"), else the largest
+    /// larger one.
+    private var suggested: Tool? {
+        let mills = library.tools.filter { $0.shape == .flatEndMill && $0.diameter > tool.diameter + 1e-6 }
+        return mills.filter { $0.diameter >= 1.5 * tool.diameter - 1e-6 }.min { $0.diameter < $1.diameter }
+            ?? mills.max { $0.diameter < $1.diameter }
+    }
+
+    var body: some View {
+        Section("Rest machining") {
+            Toggle("Clear with a larger tool first", isOn: Binding(get: { params.clearanceTool != nil }, set: { on in
+                params.clearanceTool = on ? suggested ?? flatTools.first : nil
+            }))
+            .disabled(params.clearanceTool == nil && flatTools.isEmpty)
+            if let large = params.clearanceTool {
+                let inLibrary = flatTools.contains { $0.id == large.id }
+                Picker("Larger tool", selection: Binding(get: { large.id }, set: { id in
+                    if let t = library.tool(id: id) { params.clearanceTool = t }
+                })) {
+                    if !inLibrary { Text("T\(large.number) \(large.name) (project copy)").tag(large.id) }
+                    ForEach(flatTools) { t in Text("T\(t.number) \(t.name)").tag(t.id) }
+                }
+                let leave = params.allowance + PocketParams.restMargin(for: tool)
+                if large.diameter > tool.diameter + 1e-6 {
+                    Text("\(large.name) clears the pocket first with its own stepover, pass depth and feeds, leaving "
+                        + "\(units.format(leave)) \(units.symbol) on the walls. \(tool.name) then cuts only the corners and narrow parts "
+                        + "the larger bit can't reach, and the final pass round the walls. Toolpaths next to each other that clear "
+                        + "with the same bit share its tool change.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("Choose a tool larger than this toolpath's \(tool.name).")
+                        .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text("Clears the bulk with a big bit and sends this toolpath's bit only where the big one can't reach.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
     }

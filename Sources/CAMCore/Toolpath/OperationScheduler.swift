@@ -8,6 +8,12 @@ import Foundation
 /// - 3D roughing of the same model (when it's the finish), and
 /// - any earlier operation whose area overlaps its own (the user's order may carry intent there).
 /// Disabled operations aren't machined, so they keep their place next to the operation they followed.
+///
+/// An operation with a clearance tool (a rest-machined pocket, a V-carve's flat clearing) cuts with two tools, the
+/// clearance tool first. Operations next to each other in the run order that share a clearance tool cut as one block:
+/// all their clearing, then each its own tool in order (`blocks`). Several pockets cleared with the same 1/2" bit and
+/// finished with the same 1/8" one change tools once each way, and a block never needs more changes than cutting
+/// its operations one by one. The search counts changes the same way, so it can bring such operations together.
 public enum OperationScheduler {
     public struct Result: Sendable, Equatable {
         public var order: [UUID]
@@ -77,7 +83,7 @@ public enum OperationScheduler {
                 }
             }
         }
-        let tools = enabled.map { ops[$0].tool.number }
+        let tools = enabled.map { Tools(clearance: ops[$0].clearanceTool?.number, own: ops[$0].tool.number) }
         let original = Array(0..<m)
         let scheduled = m <= exactLimit ? exact(before: before, tools: tools) : greedy(before: before, tools: tools)
         let changesBefore = changes(original, tools)
@@ -100,61 +106,100 @@ public enum OperationScheduler {
                       toolChangesAfter: better ? changesAfter : changesBefore, outOfOrder: late)
     }
 
-    static func changes(_ seq: [Int], _ tools: [Int]) -> Int {
-        zip(seq, seq.dropFirst()).filter { tools[$0.0] != tools[$0.1] }.count
+    /// The tool numbers an operation cuts with: its clearance tool's (if any), then its own.
+    struct Tools: Hashable {
+        var clearance: Int?
+        var own: Int
+    }
+
+    /// Where a run order stands: the tool in the spindle at the end (-1 before the first), and the clearance tool
+    /// of the block the last operation is in (nil when it has none).
+    struct State: Hashable {
+        var tool = -1
+        var block: Int?
+    }
+
+    /// Tool changes for cutting an operation with `t` next, and the state after it. Joining the open block (same
+    /// clearance tool) slips its clearing in with the block's others, so only its own tool can add a change.
+    static func step(_ s: State, _ t: Tools) -> (changes: Int, state: State) {
+        func change(_ a: Int, _ b: Int) -> Int { a >= 0 && a != b ? 1 : 0 }
+        guard let c = t.clearance else { return (change(s.tool, t.own), State(tool: t.own)) }
+        if s.block == c { return (change(s.tool, t.own), State(tool: t.own, block: c)) }
+        return (change(s.tool, c) + change(c, t.own), State(tool: t.own, block: c))
+    }
+
+    /// The order operations cut in, given each one's clearance tool number (nil for none), in run order: runs of
+    /// neighbours sharing a clearance tool form a block that cuts all its clearing first; each other operation is a
+    /// block of its own.
+    public static func blocks(_ clearance: [Int?]) -> [[Int]] {
+        var out: [[Int]] = []
+        for (k, c) in clearance.enumerated() {
+            if let c, let last = out.last?.last, clearance[last] == c { out[out.count - 1].append(k) } else { out.append([k]) }
+        }
+        return out
+    }
+
+    static func changes(_ seq: [Int], _ tools: [Tools]) -> Int {
+        var state = State(), total = 0
+        for k in seq {
+            let (c, next) = step(state, tools[k])
+            total += c
+            state = next
+        }
+        return total
     }
 
     /// Fewest tool changes over all orders that respect `before`; among those, the one closest to the user's order
-    /// (lexicographically smallest). Memoized over (done set, current tool).
-    static func exact(before: [UInt64], tools: [Int]) -> [Int]? {
+    /// (lexicographically smallest). Memoized over (done set, state).
+    static func exact(before: [UInt64], tools: [Tools]) -> [Int]? {
         let m = before.count
         guard m > 0 else { return [] }
         let full: UInt64 = m == 64 ? .max : (1 << UInt64(m)) - 1
-        struct Key: Hashable { var done: UInt64; var tool: Int }
+        struct Key: Hashable { var done: UInt64; var state: State }
         var memo: [Key: Int] = [:]
-        func cost(_ done: UInt64, _ tool: Int) -> Int {
+        func cost(_ done: UInt64, _ state: State) -> Int {
             if done == full { return 0 }
-            let key = Key(done: done, tool: tool)
+            let key = Key(done: done, state: state)
             if let c = memo[key] { return c }
             var best = Int.max
             for k in 0..<m where done & (1 << UInt64(k)) == 0 && before[k] & ~done == 0 {
-                let step = tool >= 0 && tools[k] != tool ? 1 : 0
-                let rest = cost(done | (1 << UInt64(k)), tools[k])
+                let (step, next) = step(state, tools[k])
+                let rest = cost(done | (1 << UInt64(k)), next)
                 if rest != .max { best = min(best, step + rest) }
             }
             memo[key] = best
             return best
         }
-        guard cost(0, -1) != .max else { return nil }
+        guard cost(0, State()) != .max else { return nil }
         var seq: [Int] = []
-        var done: UInt64 = 0, tool = -1
+        var done: UInt64 = 0, state = State()
         while done != full {
-            let target = cost(done, tool)
+            let target = cost(done, state)
             guard let k = (0..<m).first(where: { k in
-                done & (1 << UInt64(k)) == 0 && before[k] & ~done == 0
-                    && (tool >= 0 && tools[k] != tool ? 1 : 0) + cost(done | (1 << UInt64(k)), tools[k]) == target
+                let (c, next) = step(state, tools[k])
+                return done & (1 << UInt64(k)) == 0 && before[k] & ~done == 0 && c + cost(done | (1 << UInt64(k)), next) == target
             }) else { return nil }
             seq.append(k)
             done |= 1 << UInt64(k)
-            tool = tools[k]
+            state = step(state, tools[k]).state
         }
         return seq
     }
 
-    /// Stable same-tool-first topological order (for very long job lists).
-    static func greedy(before: [UInt64], tools: [Int]) -> [Int]? {
+    /// Stable topological order that takes whatever adds no tool change first (for very long job lists).
+    static func greedy(before: [UInt64], tools: [Tools]) -> [Int]? {
         let m = before.count
         guard m <= 64 else { return nil }
         var done: UInt64 = 0
         var seq: [Int] = []
-        var tool: Int?
+        var state = State()
         while seq.count < m {
             let ready = (0..<m).filter { done & (1 << UInt64($0)) == 0 && before[$0] & ~done == 0 }
             guard let first = ready.first else { return nil }
-            let k = ready.first { tools[$0] == tool } ?? first
+            let k = ready.first { step(state, tools[$0]).changes == 0 } ?? first
             seq.append(k)
             done |= 1 << UInt64(k)
-            tool = tools[k]
+            state = step(state, tools[k]).state
         }
         return seq
     }
