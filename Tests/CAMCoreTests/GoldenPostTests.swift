@@ -319,4 +319,42 @@ struct GoldenPostTests {
         #expect(try Project.decode(p.encoded()) == p)
         try Self.check(Self.post(p), golden: "decoded-setup-v1")
     }
+
+    // MARK: Rest machining
+
+    /// A recess cleared with a 1/2" end mill and finished with a 1/8" one, on the default PRO6060: a 4" × 2-1/2"
+    /// rectangle with a 3/8" slot out of its top (too narrow for the 1/2") and a round boss left standing.
+    static func restPocketProject() -> Project {
+        func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "2E57F000-0000-0000-0000-%012d", n))! }
+        let eighth = ToolLibrary.starter.tool(number: 2)!
+        let half = Tool(id: id(20), number: 10, name: "1/2\" Upcut End Mill", shape: .flatEndMill, diameter: 0.5.inch, fluteLength: 1.25.inch,
+                        cutting: CuttingData(spindleRPM: 10000, feedRate: 380.inch, plungeRate: 50.inch, stepdown: 0.25.inch,
+                                             stepoverFraction: 0.45))
+        let outline = [(2, 1.5), (6, 1.5), (6, 4), (4.1875, 4), (4.1875, 4.75), (3.8125, 4.75), (3.8125, 4), (2, 4)]
+        let recess = DesignShape(id: id(1), name: "Recess", kind: .paths([Polyline(outline.map { Vec2($0.0.inch, $0.1.inch) }, closed: true)]),
+                                 position: .zero)
+        let boss = DesignShape(id: id(2), name: "Boss", kind: .circle(radius: 0.375.inch), position: Vec2(3.inch, 2.75.inch))
+        let op = CAMOperation(id: id(11), name: "Recess", kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 0.25.inch),
+                                                                                    clearanceTool: half)),
+                              shapeIDs: [recess.id, boss.id], tool: eighth)
+        return Project(name: "Rest-machined recess", displayUnits: .inch,
+                       stock: Stock(width: 8.inch, height: 6.inch, thickness: 0.75.inch, materialName: "Baltic birch plywood"),
+                       machine: .avidPRO6060, shapes: [recess, boss], operations: [op],
+                       notes: "Saved by the first build with rest machining, as format 1.")
+    }
+
+    /// The 1/2" clears first (T10), then the 1/8" (T2) cuts the slot, the corners and the walls. The project
+    /// stays format 1: an older build ignores the clearance tool and cuts the same pocket with the 1/8" alone.
+    @Test func restMachinedPocketDecodesAndPostsBothTools() throws {
+        let p = try Self.savedProject("rest-pocket-v1", make: Self.restPocketProject)
+        #expect(p.formatVersion == 1)
+        let made = Self.restPocketProject()
+        #expect(p.operations == made.operations && p.shapes == made.shapes)
+        #expect(try Project.decode(p.encoded()) == p)
+        let job = CAMEngine.generate(p)
+        #expect(!job.hasErrors)
+        #expect(job.toolpaths.map(\.name) == ["Recess – clearing", "Recess"])
+        #expect(job.toolpaths.map(\.tool.number) == [10, 2])
+        try Self.check(Self.post(p), golden: "decoded-rest-pocket-v1")
+    }
 }

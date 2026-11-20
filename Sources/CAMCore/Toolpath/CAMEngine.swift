@@ -83,11 +83,20 @@ public enum CAMEngine {
         let clearanceZ = max(stock.clearanceHeight, stock.plungeHeight)
         // Wrapped rotary jobs cut each operation once on the unrolled sheet; the posts wrap it around the blank.
         let wrap = stock.rotary.flatMap { $0.isWrapped ? $0.wrapDiameterOrBlank : nil }
-        for op in project.operations where op.enabled && (operationIDs?.contains(op.id) ?? true) {
+        func faceKey(_ angle: Double?) -> Double { angle.map(RotaryIndex.normalized) ?? 0 }
+        /// One operation's toolpaths at each of its angles, each marked clearing (cut before the operation's own
+        /// tool) or not.
+        struct Generated {
+            var op: CAMOperation
+            var wrap: Double?
+            var angles: [Double?]
+            var perAngle: [[(tp: Toolpath, clearing: Bool)]]
+        }
+        func generateAll(_ op: CAMOperation) -> Generated? {
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
             if shapes.isEmpty && op.kind.needsShapes {
                 issues.append(JobIssue(.warning, "No shapes selected.", operation: op.name))
-                continue
+                return nil
             }
             // Rounding works on the whole blank, wrapped round it at the sheet's radius, whatever the layout.
             let wrap = op.kind.needsShapes ? wrap : stock.rotary.map { 2 * $0.topRadius }
@@ -95,8 +104,7 @@ public enum CAMEngine {
             // unrolled sheet). Every angle is generated first, then cut toolpath by toolpath: a V-carve's flat clearing
             // at every angle, then its V-bit at every angle, so the job changes tools once rather than at every face.
             let angles: [Double?] = stock.rotary == nil || wrap != nil ? [nil] : op.rotaryAngles
-            func faceKey(_ angle: Double?) -> Double { angle.map(RotaryIndex.normalized) ?? 0 }
-            var perAngle: [[Toolpath]] = []
+            var perAngle: [[(tp: Toolpath, clearing: Bool)]] = []
             for (position, angle) in angles.enumerated() {
                 let face = faceKey(angle)
                 if models[face] == nil { models[face] = newModel() }
@@ -105,6 +113,7 @@ public enum CAMEngine {
                 opContext.materialTop = { p, r in Double(LinkOptimizer.maxHeight(snapshot, around: p, radius: r)) }
                 opContext.keepOuts = keepOuts
                 var generated = generate(op, shapes: shapes, context: opContext)
+                let clearing = generated.map { $0.id != op.id }
                 if let angle {
                     for (index, tp) in generated.enumerated() {
                         // Role 0 is the toolpath that carries the operation's own ID; the others (a V-carve's flat
@@ -116,11 +125,16 @@ public enum CAMEngine {
                         if position > 0 { generated[index].id = RotaryIndex.toolpathID(operation: op.id, role: role, position: position) }
                     }
                 }
-                perAngle.append(generated)
+                perAngle.append(Array(zip(generated, clearing)).map { (tp: $0.0, clearing: $0.1) })
             }
-            for index in 0..<(perAngle.map(\.count).max() ?? 0) {
-                for (position, angle) in angles.enumerated() where index < perAngle[position].count {
-                    var tp = perAngle[position][index]
+            return Generated(op: op, wrap: wrap, angles: angles, perAngle: perAngle)
+        }
+        func emit(_ g: Generated, clearing: Bool) {
+            let op = g.op, wrap = g.wrap
+            for index in 0..<(g.perAngle.map(\.count).max() ?? 0) {
+                for (position, angle) in g.angles.enumerated() where index < g.perAngle[position].count {
+                    guard g.perAngle[position][index].clearing == clearing else { continue }
+                    var tp = g.perAngle[position][index].tp
                     let face = faceKey(angle)
                     var model = models.removeValue(forKey: face) ?? newModel()
                     defer { models[face] = model }
@@ -145,6 +159,18 @@ public enum CAMEngine {
                     toolpaths.append(tp)
                 }
             }
+        }
+        // Operations next to each other that share a clearance tool cut all their clearing, then each its own tool
+        // (see `OperationScheduler.blocks`); every other operation cuts on its own, clearing first.
+        let ops = project.operations.filter { $0.enabled && (operationIDs?.contains($0.id) ?? true) }
+        for block in OperationScheduler.blocks(ops.map { $0.clearanceTool?.number }) {
+            var generated: [Generated] = []
+            for k in block {
+                guard let g = generateAll(ops[k]) else { continue }
+                emit(g, clearing: true)
+                generated.append(g)
+            }
+            for g in generated { emit(g, clearing: false) }
         }
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
@@ -219,7 +245,7 @@ public enum CAMEngine {
         case let .profile(p):
             return [ProfileGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         case let .pocket(p):
-            return [PocketGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
+            return PocketGenerator.generate(op: op, params: p, shapes: shapes, context: context)
         case let .drill(p):
             return [DrillGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         case let .vcarve(p):

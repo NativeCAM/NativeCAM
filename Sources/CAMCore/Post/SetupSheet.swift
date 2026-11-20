@@ -90,6 +90,25 @@ public enum SetupSheet {
         }
         h += "</table>\n"
 
+        // Rest-machined pockets: what the larger bit leaves and what the smaller one then cuts.
+        var rest: [String] = []
+        for op in project.operations {
+            guard case let .pocket(p) = op.kind, let large = p.clearanceTool else { continue }
+            let cut = job.toolpaths.filter { $0.sourceOperationID == op.id && !$0.isEmpty }
+            guard cut.contains(where: { $0.tool.number == op.tool.number && $0.tool.isSameBit(as: op.tool) }) else { continue }
+            func bit(_ t: Tool) -> String { "T\(t.number) \(esc(t.name))" }
+            let finish = p.allowance > 1e-9 ? ", leaving \(len(p.allowance)) for a finishing pass" : ""
+            if cut.contains(where: { $0.id != op.id && $0.tool.number == large.number && $0.tool.isSameBit(as: large) }) {
+                let margin = p.allowance + PocketParams.restMargin(for: op.tool)
+                rest.append("<li>\(esc(op.name)): \(bit(large)) clears the pocket first, leaving \(len(margin)) on the walls. "
+                    + "\(bit(op.tool)) then cuts only the corners and narrow parts the larger bit can't reach, and the final pass "
+                    + "round the walls\(finish).</li>\n")
+            } else {
+                rest.append("<li>\(esc(op.name)): \(bit(large)) doesn't fit in the pocket, so \(bit(op.tool)) clears all of it\(finish).</li>\n")
+            }
+        }
+        if !rest.isEmpty { h += "<h2>Rest machining</h2>\n<ul>\n" + rest.joined() + "</ul>\n" }
+
         h += "<h2>Run order</h2>\n<table><tr><th>#</th><th>Toolpath</th><th>Tool</th>\(angleColumn ? "<th class=\"num\">Angle</th>" : "")<th class=\"num\">RPM</th><th class=\"num\">Feed</th><th class=\"num\">Depth</th><th class=\"num\">Time</th></tr>\n"
         var current: Int?
         var step = 0

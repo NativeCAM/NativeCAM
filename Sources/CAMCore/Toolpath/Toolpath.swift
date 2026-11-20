@@ -114,7 +114,7 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// its motions are in that face's frame. nil on a flat job.
     public var indexAngle: Double?
     /// The operation this toolpath came from, when it isn't `id` (an operation cut at several angles makes one
-    /// toolpath per angle).
+    /// toolpath per angle, and a rest-machined pocket's clearing with the larger tool has an ID of its own).
     public var operationID: UUID?
     /// The inside corners that get (or could get) a relief, for showing and changing them on the canvas; nil when the
     /// operation has no corner reliefs. Posts and checks don't read it.
