@@ -59,10 +59,12 @@ public struct Project: Hashable, Sendable {
 
     public var name: String
     public var displayUnits: LengthUnit
-    public var stock: Stock
+    /// Changing it keeps depths tied to the material thickness fitted to it (`fitDepthsToMaterial()`).
+    public var stock: Stock { didSet { if stock.thickness != oldValue.thickness { fitDepthsToMaterial() } } }
     public var machine: MachineProfile
     public var shapes: [DesignShape]
-    public var operations: [CAMOperation]
+    /// Changing them keeps depths tied to the material thickness fitted to it (`fitDepthsToMaterial()`).
+    public var operations: [CAMOperation] { didSet { fitDepthsToMaterial() } }
     public var notes: String
     /// Cutting the job in tiles bigger than the machine's travel; nil (off) in every older file.
     public var tiling: TilingSettings?
@@ -78,6 +80,30 @@ public struct Project: Hashable, Sendable {
         self.operations = operations
         self.notes = notes
         self.tiling = tiling
+        fitDepthsToMaterial()
+    }
+
+    /// Keeps every depth tied to the material thickness (`DepthSettings.fromBottom`, `DrillParams.fromBottom`) at
+    /// its distance from the material's bottom. Changing `stock` or `operations` calls it.
+    public mutating func fitDepthsToMaterial() {
+        let t = stock.thickness
+        for i in operations.indices {
+            let kind: OperationKind
+            switch operations[i].kind {
+            case var .profile(p) where p.depth.fromBottom != nil:
+                p.depth.fit(thickness: t)
+                kind = .profile(p)
+            case var .pocket(p) where p.depth.fromBottom != nil:
+                p.depth.fit(thickness: t)
+                kind = .pocket(p)
+            case var .drill(p) where p.fromBottom != nil:
+                p.fit(thickness: t)
+                kind = .drill(p)
+            default:
+                continue
+            }
+            if kind != operations[i].kind { operations[i].kind = kind }
+        }
     }
 
     public func shape(id: UUID) -> DesignShape? { shapes.first { $0.id == id } }
@@ -133,6 +159,7 @@ extension Project: Codable {
         operations = try c.decode([CAMOperation].self, forKey: .operations)
         notes = try c.decode(String.self, forKey: .notes)
         tiling = try c.decodeIfPresent(TilingSettings.self, forKey: .tiling)
+        fitDepthsToMaterial()
     }
 
     public func encode(to encoder: Encoder) throws {

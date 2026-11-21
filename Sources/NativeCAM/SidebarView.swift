@@ -339,16 +339,19 @@ enum ShapeFactory {
         let endMill = pick({ $0.shape == .flatEndMill }, 1)
         let vBit = pick({ $0.shape == .vBit }, 5)
         let t = project.stock.thickness
+        // Through cuts on a flat sheet follow its thickness (a rotary job's thickness is the blank's radius).
+        let flat = project.stock.rotary == nil
         switch kind {
         case .profile:
             return CAMOperation(name: "Profile", kind: .profile(ProfileParams(
-                side: .outside, direction: .climb, depth: DepthSettings(cutDepth: t + 0.02.inch),
+                side: .outside, direction: .climb, depth: flat ? .through(t) : DepthSettings(cutDepth: t + 0.02.inch),
                 tabs: TabSettings(enabled: true), entry: EntrySettings(kind: .ramp))), shapeIDs: shapes, tool: endMill)
         case .pocket:
             return CAMOperation(name: "Pocket", kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: min(0.25.inch, t / 2)))),
                                 shapeIDs: shapes, tool: endMill)
         case .drill:
-            return CAMOperation(name: "Drill", kind: .drill(DrillParams(depth: t + 0.02.inch, peckDepth: endMill.diameter)),
+            return CAMOperation(name: "Drill", kind: .drill(DrillParams(depth: t + 0.02.inch, peckDepth: endMill.diameter,
+                                                                        fromBottom: flat ? -MaterialDepth.defaultOvercut : nil)),
                                 shapeIDs: shapes, tool: endMill)
         case .vcarve:
             return CAMOperation(name: "V-carve", kind: .vcarve(VCarveParams()), shapeIDs: shapes, tool: vBit)

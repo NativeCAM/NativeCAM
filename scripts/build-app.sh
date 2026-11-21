@@ -54,6 +54,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
       <key>UTTypeTagSpecification</key>
       <dict><key>public.filename-extension</key><array><string>nativecam</string></array></dict>
     </dict>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.nativecam.toolpath-template</string>
+      <key>UTTypeDescription</key><string>NativeCAM Toolpath Template</string>
+      <key>UTTypeConformsTo</key><array><string>public.json</string><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>nativecamtemplate</string></array></dict>
+    </dict>
   </array>
   <key>UTImportedTypeDeclarations</key>
   <array>

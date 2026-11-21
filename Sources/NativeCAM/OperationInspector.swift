@@ -15,10 +15,7 @@ struct OperationInspector: View {
                 TextField("Name", text: $op.name)
                 Toggle("Include in output", isOn: $op.enabled)
                 if op.kind.needsShapes {
-                    LabeledContent("Shapes", value: "\(op.shapeIDs.count)")
-                    Button("Use Selected Shapes") { op.shapeIDs = workspace.selectedShapeIDs }
-                        .disabled(workspace.selectedShapeIDs.isEmpty)
-                        .help("Select shapes in the Design list, then click to assign them to this toolpath")
+                    VectorRows(op: $op, project: project, selected: workspace.selectedShapeIDs)
                 }
             }
             if let blank = project.stock.rotary, blank.isWrapped, op.indexAngles == nil, op.kind.needsShapes, !op.kind.turnsWholeBlank {
@@ -114,8 +111,10 @@ struct OperationInspector: View {
         case let .drill(p):
             let set: (DrillParams) -> Void = { op.kind = .drill($0) }
             Section("Drilling") {
-                LengthField(title: "Hole depth", mm: Binding(get: { p.depth }, set: { var q = p; q.depth = max(0.01, $0); set(q) }), units: units)
-                Button("Through material (+0.02 in)") { var q = p; q.depth = project.stock.thickness + 0.02.inch; set(q) }
+                MaterialDepthRows(title: "Hole depth",
+                                  value: Binding(get: { MaterialDepthValue(depth: p.depth, fromBottom: p.fromBottom) },
+                                                 set: { var q = p; q.depth = max(0.01, $0.depth); q.fromBottom = $0.fromBottom; set(q) }),
+                                  stock: project.stock, units: units)
                 LengthField(title: "Peck depth", mm: Binding(get: { p.peckDepth }, set: { var q = p; q.peckDepth = max(0, $0); set(q) }), units: units,
                             help: "0 = single plunge")
                 Toggle("Full retract between pecks", isOn: Binding(get: { p.fullRetract }, set: { var q = p; q.fullRetract = $0; set(q) }))
@@ -658,12 +657,10 @@ struct DepthSection: View {
     var body: some View {
         Section("Depth") {
             LengthField(title: "Start depth", mm: $depth.startDepth, units: units, minimum: 0)
-            LengthField(title: "Cut depth", mm: $depth.cutDepth, units: units, minimum: 0.01)
-            HStack {
-                Spacer()
-                Button("Through (+0.02 in)") { depth.cutDepth = stock.thickness + 0.02.inch }
-                    .help("Material thickness plus a small breakthrough into the spoilboard")
-            }
+            MaterialDepthRows(title: "Cut depth",
+                              value: Binding(get: { MaterialDepthValue(depth: depth.cutDepth, fromBottom: depth.fromBottom) },
+                                             set: { var d = depth; d.cutDepth = max(0.01, $0.depth); d.fromBottom = $0.fromBottom; depth = d }),
+                              stock: stock, units: units)
             LengthField(title: "Pass depth", mm: Binding(get: { depth.passDepth ?? tool.cutting.stepdown }, set: { depth.passDepth = max(0.05, $0) }),
                         units: units, help: "Defaults to the tool's stepdown")
             let passes = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum).count
@@ -676,6 +673,117 @@ struct DepthSection: View {
                 Label("Deeper than the tool's cutting length", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange).font(.caption)
             }
+        }
+    }
+}
+
+/// A depth with how it's measured: down from the material top, or tied to the thickness (through the material, or
+/// leaving some above its bottom), so it follows the thickness when it changes or in a template applied to other
+/// material.
+struct MaterialDepthValue: Hashable {
+    var depth: Double
+    var fromBottom: Double?
+}
+
+struct MaterialDepthRows: View {
+    enum Mode: String, CaseIterable, Identifiable {
+        case fromTop, through, leave
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .fromTop: "From top"
+            case .through: "Through"
+            case .leave: "Thickness −"
+            }
+        }
+    }
+
+    let title: String
+    @Binding var value: MaterialDepthValue
+    let stock: Stock
+    let units: LengthUnit
+
+    private var mode: Mode { value.fromBottom.map { $0 <= 1e-9 ? .through : .leave } ?? .fromTop }
+
+    var body: some View {
+        // Tied to the thickness only on a flat sheet (a rotary job's thickness is the blank's radius).
+        if stock.rotary == nil || value.fromBottom != nil {
+            Picker(title, selection: Binding(get: { mode }, set: { set($0) })) {
+                ForEach(Mode.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .help("From top: a fixed depth. Through and Thickness −: measured from the material's bottom, so the depth follows the thickness")
+        }
+        switch mode {
+        case .fromTop:
+            LengthField(title: stock.rotary == nil ? "Depth" : title, mm: Binding(get: { value.depth }, set: { value = MaterialDepthValue(depth: $0) }),
+                        units: units, minimum: 0.01)
+        case .through:
+            LengthField(title: "Past the bottom", mm: Binding(get: { -(value.fromBottom ?? 0) }, set: { tie(-max(0, $0)) }), units: units,
+                        help: "How far into the spoilboard the cut goes")
+        case .leave:
+            LengthField(title: "Leave", mm: Binding(get: { value.fromBottom ?? 0 }, set: { tie(max(0.01, $0)) }), units: units,
+                        help: "Material left above the bottom")
+        }
+        if mode != .fromTop {
+            Text("\(units.format(value.depth)) \(units.symbol) deep in this \(units.format(stock.thickness)) \(units.symbol) material. "
+                 + "Follows the thickness if it changes, and in templates.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func tie(_ fromBottom: Double) {
+        value = MaterialDepthValue(depth: MaterialDepth.depth(fromBottom: fromBottom, thickness: stock.thickness), fromBottom: fromBottom)
+    }
+
+    private func set(_ new: Mode) {
+        let t = stock.thickness
+        switch new {
+        case .fromTop: value.fromBottom = nil
+        case .through: tie(value.depth > t ? t - value.depth : -MaterialDepth.defaultOvercut)
+        case .leave: tie(value.depth < t - 0.01 ? t - value.depth : 0.125.inch)
+        }
+    }
+}
+
+/// How a toolpath finds its vectors: chosen by hand, or every shape on a layer or of a kind (picked up again when a
+/// shape's layer changes, vectors are imported, or on Recalculate All, and kept when it's saved in a template).
+struct VectorRows: View {
+    @Binding var op: CAMOperation
+    let project: Project
+    let selected: [UUID]
+
+    var body: some View {
+        let rule = op.vectorSelection == .selection ? nil : op.vectorSelection
+        let layers = project.layerNames
+        Picker("Vectors", selection: Binding(get: { rule }, set: { new in
+            var o = op
+            o.vectorSelection = new
+            if let new { o.shapeIDs = project.shapeIDs(matching: new) }
+            op = o
+        })) {
+            Text("Chosen by hand").tag(VectorSelection?.none)
+            Divider()
+            ForEach(layers, id: \.self) { Text("Layer “\($0)”").tag(VectorSelection?.some(.layers([$0]))) }
+            if case let .layers(names)? = rule, names.count != 1 || !layers.contains(names[0]) {
+                Text(VectorSelection.layers(names).label).tag(rule)
+            }
+            Divider()
+            ForEach(ShapeFilter.allCases) { Text($0.label).tag(VectorSelection?.some(.kind($0))) }
+        }
+        .help("Toolpaths that find their vectors by layer or kind pick them up again, and keep finding them in a template")
+        LabeledContent("Shapes", value: "\(op.shapeIDs.count)")
+        Button("Use Selected Shapes") {
+            var o = op
+            o.shapeIDs = selected
+            o.vectorSelection = nil
+            op = o
+        }
+        .disabled(selected.isEmpty)
+        .help("Select shapes in the Design list, then click to assign them to this toolpath")
+        if rule == nil, let inferred = project.inferredVectorSelection(for: op) {
+            Text(inferred == .selection ? "In a template: the vectors selected when it's applied." : "In a template: \(inferred.label).")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

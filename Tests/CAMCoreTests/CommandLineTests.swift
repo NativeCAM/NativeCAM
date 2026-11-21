@@ -89,4 +89,29 @@ struct CommandLineTests {
         #expect(!run.output.contains("Not written"), "\(run.output)")
         #expect(FileManager.default.fileExists(atPath: out.path))
     }
+    @Test func templatesSaveAndApplyFromTheCommandLine() throws {
+        let dir = try Self.folder()
+        var sign = Project.demoSign()
+        for i in sign.shapes.indices where sign.shapes[i].name == "Sign outline" { sign.shapes[i].layer = "Cut Out" }
+        let source = dir.appendingPathComponent("sign.nativecam")
+        try sign.encoded().write(to: source)
+        let template = dir.appendingPathComponent("Sign.nativecamtemplate")
+        let saved = try Self.run(["template", "save", source.path, "-o", template.path])
+        #expect(saved.status == 0, "\(saved.output)")
+        #expect(saved.output.contains("Cut out sign: Layer “Cut Out”"))
+
+        var board = sign
+        board.operations = []
+        board.stock.thickness = 0.5.inch
+        let target = dir.appendingPathComponent("board.nativecam")
+        try board.encoded().write(to: target)
+        let out = dir.appendingPathComponent("applied.nativecam")
+        let applied = try Self.run(["template", "apply", template.path, target.path, "-o", out.path])
+        #expect(applied.status == 0, "\(applied.output)")
+        #expect(applied.output.contains("T1 1/4\" Upcut End Mill: in the library"))
+        let result = try Project.decode(Data(contentsOf: out))
+        #expect(result.operations.count == 4)
+        guard case let .profile(cut)? = result.operations.last?.kind else { Issue.record("no profile"); return }
+        #expect(abs(cut.depth.cutDepth - 0.52.inch) < 1e-9)
+    }
 }

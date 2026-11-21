@@ -16,14 +16,33 @@ public enum CutDirection: String, Codable, Sendable, CaseIterable, Identifiable 
 /// Depths are measured down from the material top (positive numbers, mm).
 public struct DepthSettings: Hashable, Codable, Sendable {
     public var startDepth: Double
+    /// The final depth below the material top. With `fromBottom` set it follows the material thickness
+    /// (`Project.fitDepthsToMaterial()` keeps it so), so a build that doesn't know `fromBottom` cuts the same depth.
     public var cutDepth: Double
     /// Max depth per pass; nil uses the tool's stepdown.
     public var passDepth: Double?
+    /// A cut depth tied to the material thickness: the cut stops this far above the material's bottom, mm. Negative
+    /// cuts through it, that far into the spoilboard ("through the material"); positive leaves that much ("thickness
+    /// − x"). nil = `cutDepth` is a plain depth below the top, whatever the thickness.
+    ///
+    /// No new file format: `cutDepth` is always saved fitted to the thickness, so an older build cuts the same depth.
+    public var fromBottom: Double?
 
-    public init(startDepth: Double = 0, cutDepth: Double, passDepth: Double? = nil) {
+    public init(startDepth: Double = 0, cutDepth: Double, passDepth: Double? = nil, fromBottom: Double? = nil) {
         self.startDepth = startDepth
         self.cutDepth = cutDepth
         self.passDepth = passDepth
+        self.fromBottom = fromBottom
+    }
+
+    /// A depth through material `thickness` thick, `overcut` into the spoilboard, that keeps following the thickness.
+    public static func through(_ thickness: Double, overcut: Double = MaterialDepth.defaultOvercut) -> DepthSettings {
+        DepthSettings(cutDepth: MaterialDepth.depth(fromBottom: -overcut, thickness: thickness), fromBottom: -overcut)
+    }
+
+    /// Sets `cutDepth` from `fromBottom` for material `thickness` thick (nothing for a plain depth).
+    public mutating func fit(thickness: Double) {
+        if let b = fromBottom { cutDepth = MaterialDepth.depth(fromBottom: b, thickness: thickness) }
     }
 
     /// Z levels (negative, relative to material top) for each pass, evenly distributed, last = final depth.
@@ -300,13 +319,32 @@ public struct DrillParams: Hashable, Codable, Sendable {
     public var fullRetract: Bool
     /// Dwell at the bottom of the hole, seconds.
     public var dwell: Double
+    /// A hole depth tied to the material thickness, as `DepthSettings.fromBottom`: the hole stops this far above the
+    /// material's bottom (negative goes through it). nil = `depth` is a plain depth. No new file format.
+    public var fromBottom: Double?
 
-    public init(depth: Double, peckDepth: Double = 0, fullRetract: Bool = true, dwell: Double = 0) {
+    public init(depth: Double, peckDepth: Double = 0, fullRetract: Bool = true, dwell: Double = 0, fromBottom: Double? = nil) {
         self.depth = depth
         self.peckDepth = peckDepth
         self.fullRetract = fullRetract
         self.dwell = dwell
+        self.fromBottom = fromBottom
     }
+
+    /// Sets `depth` from `fromBottom` for material `thickness` thick (nothing for a plain depth).
+    public mutating func fit(thickness: Double) {
+        if let b = fromBottom { depth = MaterialDepth.depth(fromBottom: b, thickness: thickness) }
+    }
+}
+
+/// Depths measured from the material's bottom rather than its top, so they follow the material thickness.
+public enum MaterialDepth {
+    /// How far a through cut goes into the spoilboard unless told otherwise: 0.02 in.
+    public static let defaultOvercut = 0.02.inch
+
+    /// The depth below the top of material `thickness` thick that stops `fromBottom` above its bottom (never above
+    /// the top).
+    public static func depth(fromBottom: Double, thickness: Double) -> Double { max(0, thickness - fromBottom) }
 }
 
 public struct VCarveParams: Hashable, Sendable {
@@ -911,9 +949,14 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// face under the spindle; the same shapes are cut at each angle. nil cuts at 0° only. Only rotary jobs take
     /// angles.
     public var indexAngles: [Double]?
+    /// How the toolpath finds its shapes: the shapes on a layer, or of a kind, which `Project.bindVectors()` picks up
+    /// again (applying a template, Recalculate All, changing a shape's layer); nil = chosen by hand. `shapeIDs` is
+    /// always what's cut, so a build that doesn't know the key cuts the same shapes. In a template, `.selection`
+    /// means the shapes selected when it's applied.
+    public var vectorSelection: VectorSelection?
 
     public init(id: UUID = UUID(), name: String? = nil, enabled: Bool = true, kind: OperationKind,
-                shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil) {
+                shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil, vectorSelection: VectorSelection? = nil) {
         self.id = id
         self.name = name ?? kind.label
         self.enabled = enabled
@@ -921,6 +964,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         self.shapeIDs = shapeIDs
         self.tool = tool
         self.indexAngles = indexAngles
+        self.vectorSelection = vectorSelection
     }
 
     /// The angles this operation cuts at on rotary stock.
