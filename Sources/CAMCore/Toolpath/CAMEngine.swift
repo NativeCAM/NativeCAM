@@ -580,29 +580,6 @@ public enum CAMEngine {
         return issues
     }
 
-    static func chipLoadIssues(_ tp: Toolpath, project: Project) -> [JobIssue] {
-        let tool = tp.tool
-        guard ChipLoad.applies(to: tool), tp.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
-        let material = project.stock.material
-        let r = ChipLoad.range(material, diameter: tool.diameter)
-        let chip = tool.cutting.feedRate / (tp.spindleRPM * Double(tool.fluteCount))
-        let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
-        let units = project.displayUnits
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine)
-        let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM."
-        // Ball and bull noses finish at light engagement, so allow them a little below the end-mill floor.
-        let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
-        if chip < floor {
-            return [JobIssue(.warning, "Chip load \(inch(chip)) is below the \(inch(r.lowerBound))–\(inch(r.upperBound)) range for this bit in \(material.label.lowercased()); thin chips rub, burn and dull the bit. \(suggestion)",
-                             operation: tp.name)]
-        }
-        if chip > r.upperBound * 1.25 {
-            return [JobIssue(.info, "Chip load \(inch(chip)) is above the \(inch(r.lowerBound))–\(inch(r.upperBound)) range for this bit in \(material.label.lowercased()); expect a rougher edge. \(suggestion)",
-                             operation: tp.name)]
-        }
-        return []
-    }
-
     /// Safety and sanity checks: material thickness, tool reach, machine travel, spindle range, rapids into stock.
     public static func validate(_ tp: Toolpath, operation op: CAMOperation, project: Project, checkTravel: Bool = true) -> [JobIssue] {
         var issues: [JobIssue] = []

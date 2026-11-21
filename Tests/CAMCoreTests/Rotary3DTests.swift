@@ -644,7 +644,12 @@ struct Rotary3DTests {
         let p = Project.demoPawn()
         #expect(p.formatVersion == 7)
         let job = CAMEngine.generate(p)
-        let unexpected = job.issues.filter { $0.severity == .error || ($0.severity == .warning && !$0.message.contains("rotary axis turns at most")) }
+        // The rounding slows near the axis for the rotary axis's assumed 90° a second, which the checks say, and which
+        // makes its chip there too thin for softwood (#58).
+        let unexpected = job.issues.filter {
+            $0.severity == .error || ($0.severity == .warning && !$0.message.contains("rotary axis turns at most")
+                && !$0.message.contains("the rotary axis can't turn fast enough"))
+        }
         #expect(unexpected.isEmpty, "\(unexpected.map(\.message))")
         #expect(job.toolpaths.map(\.name) == ["Round to 1.55\"", "Finish pawn"])
         let text = String(decoding: GoldenPostTests.post(p, job.toolpaths), as: UTF8.self)

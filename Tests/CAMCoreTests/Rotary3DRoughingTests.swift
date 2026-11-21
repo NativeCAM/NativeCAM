@@ -481,7 +481,12 @@ struct Rotary3DRoughingTests {
         let p = Project.demoTableLeg()
         #expect(p.formatVersion == 12)
         let job = CAMEngine.generate(p)
-        let unexpected = job.issues.filter { $0.severity == .error || ($0.severity == .warning && !$0.message.contains("rotary axis turns at most")) }
+        // Both slow near the axis for the rotary axis's assumed 90° a second, which the checks say, and which makes their
+        // chip there too thin for softwood (#58), as on the pawn.
+        let unexpected = job.issues.filter {
+            $0.severity == .error || ($0.severity == .warning && !$0.message.contains("rotary axis turns at most")
+                && !$0.message.contains("the rotary axis can't turn fast enough"))
+        }
         #expect(unexpected.isEmpty, "\(unexpected.map(\.message))")
         #expect(job.toolpaths.map(\.name) == ["Rough leg", "Finish leg"])
         var post = AvidMach4Post(project: p, date: GoldenPostTests.date)
