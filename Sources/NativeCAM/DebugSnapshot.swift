@@ -13,6 +13,8 @@ import UniformTypeIdentifiers
 /// its job setup when `-NativeCAMSnapshotTemplateSetup YES`), logs Toolpaths ▸ Apply Template's items (the templates
 /// folder can be pointed elsewhere with `-NativeCAMTemplatesFolder <dir>`) and what each toolpath found, draws the
 /// Apply Template sheet and the save panel's options, then snapshots the project with the template applied.
+/// `-NativeCAMSnapshotImport <file.dxf|svg|pdf>` first imports vectors into the project as File ▸ Import does (one shape
+/// per layer), logging each shape's layer.
 enum DebugSnapshot {
     static var requested: (project: String, outDir: String)? {
         let d = UserDefaults.standard
@@ -38,6 +40,18 @@ enum DebugSnapshot {
         func log(_ s: String) { FileHandle.standardError.write(("snapshot: " + s + "\n").data(using: .utf8)!) }
         log("start")
         var project = loaded
+        if let path = UserDefaults.standard.string(forKey: "NativeCAMSnapshotImport") {
+            let url = URL(fileURLWithPath: path)
+            do {
+                let result = try VectorImporter.importFile(at: url)
+                let shapes = result.shapes(name: url.deletingPathExtension().lastPathComponent, stock: project.stock)
+                project.shapes += shapes
+                project.bindVectors()
+                for shape in shapes { log("import \(shape.name): layer “\(shape.layer)”") }
+            } catch {
+                log("import failed: \(error.localizedDescription)")
+            }
+        }
         if let path = UserDefaults.standard.string(forKey: "NativeCAMSnapshotTemplate") {
             project = applyTemplate(path, to: project, out: out, log: log, spin: spin)
         }

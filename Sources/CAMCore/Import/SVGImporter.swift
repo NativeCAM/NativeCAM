@@ -79,9 +79,11 @@ public enum SVGImporter {
         let unitScale = ImportGeometry.maxStretch(rootCTM)
 
         var builder = SVGGeometryBuilder(tolerance: tol, ids: tree.ids)
+        builder.inkscapeLayers = SVGGeometryBuilder.hasInkscapeLayers(root)
         builder.renderChildren(of: root, SVGState(ctm: rootCTM, viewport: viewport))
 
-        let chained = PathChainer.chain(builder.closed + builder.open, tolerance: PathChainer.joinTolerance(for: tol))
+        let (chained, layers) = PathChainer.chainByLayer(builder.closed + builder.open, layers: builder.closedLayers + builder.openLayers,
+                                                         tolerance: PathChainer.joinTolerance(for: tol))
         warnings.append(contentsOf: builder.warningMessages())
         if chained.duplicatesRemoved > 0 {
             warnings.append("Removed \(chained.duplicatesRemoved) duplicate path\(chained.duplicatesRemoved == 1 ? "" : "s") " +
@@ -99,7 +101,7 @@ public enum SVGImporter {
         let flipHeight = hMM ?? chained.polylines.bounds.max.y
         let flip = Transform2D(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: flipHeight.isFinite ? flipHeight : 0)
         return ImportResult(polylines: chained.polylines.map { $0.transformed(flip) }, points: [], warnings: warnings,
-                            sourceUnits: sourceUnits, unitScale: unitScale)
+                            sourceUnits: sourceUnits, unitScale: unitScale, polylineLayers: layers)
     }
 }
 
@@ -542,6 +544,10 @@ struct SVGState {
     var ctm: Transform2D
     /// Current viewport size in user units (for percentage lengths).
     var viewport: (w: Double, h: Double)
+    /// The layer being drawn (see `SVGGeometryBuilder.layerName`), nil outside any.
+    var layer: String? = nil
+    /// How many groups deep: 0 for the root's own children.
+    var depth = 0
 }
 
 struct SVGGeometryBuilder {
@@ -549,6 +555,11 @@ struct SVGGeometryBuilder {
     let ids: [String: SVGElement]
     var closed: [Polyline] = []
     var open: [Polyline] = []
+    /// The layer of each closed and open path.
+    var closedLayers: [String?] = []
+    var openLayers: [String?] = []
+    /// True when the file has Inkscape layers: then only they count as layers.
+    var inkscapeLayers = false
     private var skipped: [String: Int] = [:]
     private var notes: [String] = []
     private var noteSet: Set<String> = []
@@ -580,6 +591,28 @@ struct SVGGeometryBuilder {
         "cursor", "view", "animate", "animateMotion", "animateTransform", "set", "mpath", "solidColor",
     ]
 
+    static func hasInkscapeLayers(_ el: SVGElement) -> Bool {
+        el["inkscape:groupmode"] == "layer" || el.children.contains { hasInkscapeLayers($0) }
+    }
+
+    /// The layer a `<g>` starts, if it starts one: an Inkscape layer (its label), or, in a file without them, a group
+    /// straight under the root with a name, as Illustrator (`data-name`, else `id`), Affinity (`serif:id`) and most
+    /// other drawing programs write their layers. Inkscape's own automatic group ids (`g123`) don't name a layer.
+    func layerName(_ el: SVGElement, _ state: SVGState) -> String? {
+        func clean(_ s: String?) -> String? {
+            guard let t = s?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { return nil }
+            return t
+        }
+        if inkscapeLayers {
+            guard el["inkscape:groupmode"] == "layer" else { return nil }
+            return clean(el["inkscape:label"]) ?? clean(el["id"])
+        }
+        guard state.depth == 0 else { return nil }
+        if let name = clean(el["data-name"]) ?? clean(el["serif:id"]) { return name }
+        guard let id = clean(el["id"]), id.range(of: #"^g\d+$"#, options: .regularExpression) == nil else { return nil }
+        return id
+    }
+
     private static func isHidden(_ el: SVGElement) -> Bool {
         el.property("display") == "none"
     }
@@ -609,6 +642,8 @@ struct SVGGeometryBuilder {
         switch el.name {
         case "g", "a", "switch":
             s.ctm = elementTransform(el).then(state.ctm)
+            if el.name == "g", let name = layerName(el, state) { s.layer = name }
+            s.depth = state.depth + 1
             renderChildren(of: el, s)
         case "svg":
             renderNestedSVG(el, state, transform: elementTransform(el).then(state.ctm), size: nil)
@@ -743,7 +778,13 @@ struct SVGGeometryBuilder {
         }
         sink.finish()
         for p in sink.subpaths {
-            if p.isClosed { closed.append(p) } else { open.append(p) }
+            if p.isClosed {
+                closed.append(p)
+                closedLayers.append(state.layer)
+            } else {
+                open.append(p)
+                openLayers.append(state.layer)
+            }
         }
     }
 }
