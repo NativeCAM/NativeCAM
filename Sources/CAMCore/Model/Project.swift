@@ -15,7 +15,8 @@ public struct Project: Hashable, Sendable {
     /// file, bigger than the machine's travel. Settings for tiling that's off (or leaves the job in one tile) don't raise it.
     /// Format 10 adds 3D finishing strategies (waterline, steep and shallow, pencil) and cross-hatching, which a format-9
     /// build would ignore and cut as one raster. Format 12 adds 3D rotary roughing, which older builds can't read.
-    public static let currentFormatVersion = 12
+    /// Format 13 adds adaptive pocket clearing, which a format-12 build can't read.
+    public static let currentFormatVersion = 13
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

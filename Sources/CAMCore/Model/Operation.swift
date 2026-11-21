@@ -255,8 +255,58 @@ public enum PocketStrategy: String, Codable, Sendable, CaseIterable, Identifiabl
     case offset
     /// Zig-zag raster lines, followed by a boundary clean-up pass.
     case raster
+    /// Constant-engagement clearing (`AdaptiveClearing`): the bit cuts a steady sliver of its width at the full depth
+    /// of its flutes, then a pass round the walls. Format 13.
+    case adaptive
     public var id: String { rawValue }
     public var label: String { rawValue.capitalized }
+}
+
+/// Settings for adaptive pocket clearing (`PocketStrategy.adaptive`). Its pass depth is the pocket's Pass depth, which
+/// for adaptive defaults to the bit's flute length (`PocketParams.passLevels`).
+public struct AdaptiveSettings: Hashable, Codable, Sendable {
+    /// Optimal load: the radial engagement the clearing holds, as a fraction of the bit's diameter (0.12 = 12%).
+    public var optimalLoad: Double
+    /// Smallest radius the clearing's loops and links turn on, mm; nil = automatic, from the machine's X/Y
+    /// acceleration (`AdaptiveSettings.automaticLoopRadius`).
+    public var minimumLoopRadius: Double?
+
+    public init(optimalLoad: Double = AdaptiveSettings.defaultLoad, minimumLoopRadius: Double? = nil) {
+        self.optimalLoad = optimalLoad
+        self.minimumLoopRadius = minimumLoopRadius
+    }
+
+    public static let defaultLoad = 0.12
+    /// The optimal load the clearing accepts, as a fraction of the diameter.
+    public static let loadRange: ClosedRange<Double> = 0.03...0.5
+
+    /// The load in use, kept inside `loadRange`.
+    public var load: Double { min(max(optimalLoad, Self.loadRange.lowerBound), Self.loadRange.upperBound) }
+
+    /// A loop of radius ρ caps the feed at √(a·ρ) (a = the machine's X/Y acceleration), so the automatic radius is the
+    /// one that lets `feed` (mm/min) run at full speed, F²/a, kept between a quarter of the bit's diameter and twice it:
+    /// tighter is too tight to cut round, wider leaves too much in corners.
+    public static func automaticLoopRadius(tool: Tool, feed: Double, machine: MachineProfile) -> Double {
+        let d = tool.diameter
+        return min(max(fullSpeedRadius(feed: feed, machine: machine), 0.25 * d), 2 * d)
+    }
+
+    /// The loop radius at which the machine's X/Y acceleration first holds `feed` (mm/min) back: F²/a.
+    public static func fullSpeedRadius(feed: Double, machine: MachineProfile) -> Double {
+        let v = feed / 60, a = max(1, machine.axisAcceleration.x)
+        return v * v / a
+    }
+
+    /// The fastest a loop of radius `radius` (mm) can be cut with the machine's X/Y acceleration, mm/min: √(a·ρ).
+    public static func loopFeedCap(radius: Double, machine: MachineProfile) -> Double {
+        (max(1, machine.axisAcceleration.x) * max(0, radius)).squareRoot() * 60
+    }
+
+    /// The minimum loop radius in use for `tool` cutting at `feed` (mm/min).
+    public func loopRadius(tool: Tool, feed: Double, machine: MachineProfile) -> Double {
+        if let r = minimumLoopRadius { return max(0.05, r) }
+        return Self.automaticLoopRadius(tool: tool, feed: feed, machine: machine)
+    }
 }
 
 public struct PocketParams: Hashable, Codable, Sendable {
@@ -279,10 +329,13 @@ public struct PocketParams: Hashable, Codable, Sendable {
     /// No new file format: a build that doesn't know the key cuts the same pocket with the operation's tool alone,
     /// which is slower but not wrong.
     public var clearanceTool: Tool?
+    /// Adaptive clearing's settings (`strategy == .adaptive`); nil = the defaults. Other strategies ignore it.
+    public var adaptive: AdaptiveSettings?
 
     public init(strategy: PocketStrategy = .offset, direction: CutDirection = .climb, depth: DepthSettings,
                 allowance: Double = 0, rasterAngle: Double = 0, stepoverFraction: Double? = nil,
-                entry: EntrySettings = EntrySettings(), cornerRelief: CornerReliefSettings? = nil, clearanceTool: Tool? = nil) {
+                entry: EntrySettings = EntrySettings(), cornerRelief: CornerReliefSettings? = nil, clearanceTool: Tool? = nil,
+                adaptive: AdaptiveSettings? = nil) {
         self.strategy = strategy
         self.direction = direction
         self.depth = depth
@@ -292,7 +345,25 @@ public struct PocketParams: Hashable, Codable, Sendable {
         self.entry = entry
         self.cornerRelief = cornerRelief
         self.clearanceTool = clearanceTool
+        self.adaptive = adaptive
     }
+
+    /// Adaptive clearing's settings in use.
+    public var adaptiveSettings: AdaptiveSettings { adaptive ?? AdaptiveSettings() }
+
+    /// The pass depth `tool` cuts at when Pass depth isn't set: its stepdown, or for adaptive clearing the full length
+    /// of its flutes, which is the point of it (a light cut the bit's whole height rather than a wide one at a time).
+    public func defaultPassDepth(_ tool: Tool) -> Double {
+        strategy == .adaptive ? max(tool.cutting.stepdown, tool.fluteLength) : tool.cutting.stepdown
+    }
+
+    /// The Z levels `tool` cuts this pocket at.
+    public func passLevels(_ tool: Tool) -> [Double] {
+        depth.passLevels(toolStepdown: defaultPassDepth(tool), firstPassMinimum: tool.firstPassMinimum)
+    }
+
+    /// Adaptive clearing is format 13: a format-12 build can't read the strategy.
+    public var requiredFormatVersion: Int { strategy == .adaptive ? 13 : 1 }
 
     /// Material a clearance tool leaves on the walls beyond the allowance, so the operation's own tool (`small`) cuts
     /// the whole wall and the two bits leave no step where they meet: a tenth of its diameter, at most 0.25 mm
@@ -1150,10 +1221,12 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it). A V-carve
     /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`). 3D rotary finishing is format 7.
     /// Chamfers, flutes and prisms are format 8 (older builds can't read them). 3D finishing other than a single raster
-    /// is format 10 (see `Finish3DParams.requiredFormatVersion`). 3D rotary roughing is format 12.
+    /// is format 10 (see `Finish3DParams.requiredFormatVersion`). 3D rotary roughing is format 12. Adaptive pocket
+    /// clearing is format 13.
     public var requiredFormatVersion: Int {
         let own: Int
         switch kind {
+        case let .pocket(p): own = p.requiredFormatVersion
         case .rounding: own = 5
         case .rotaryFinish: own = 7
         case .rotaryRough: own = 12
