@@ -24,6 +24,21 @@ struct CommandLineTests {
         return Run(status: process.terminationStatus, output: String(decoding: data, as: UTF8.self))
     }
 
+    /// Runs the tool with standard output and standard error kept apart.
+    static func runSplit(_ arguments: [String]) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = cli
+        process.arguments = arguments
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        try process.run()
+        // Small outputs: read one, then the other, after the process ends.
+        process.waitUntilExit()
+        let o = out.fileHandleForReading.readDataToEndOfFile(), e = err.fileHandleForReading.readDataToEndOfFile()
+        return (process.terminationStatus, String(decoding: o, as: UTF8.self), String(decoding: e, as: UTF8.self))
+    }
+
     /// A fresh folder for one test's files.
     static func folder() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("nativecam-cli-tests-\(UUID().uuidString)")
@@ -147,9 +162,15 @@ struct CommandLineTests {
         #expect(second.output.contains("Wrote \(dir.appendingPathComponent("board + Sign 2.nativecam").path)"))
         #expect(try Data(contentsOf: target) == original)
 
-        // --in-place overwrites the project; with -o as well it refuses.
-        let both = try Self.run(["template", "apply", template.path, target.path, "-o", made.path, "--in-place"])
+        // --in-place overwrites the project; with -o as well it refuses before doing anything (#67): nothing on
+        // standard output, the reason on standard error, and no file touched.
+        let madeBefore = try Data(contentsOf: made)
+        let both = try Self.runSplit(["template", "apply", template.path, target.path, "-o", made.path, "--in-place"])
         #expect(both.status != 0)
+        #expect(both.stdout.isEmpty, "\(both.stdout)")
+        #expect(both.stderr.contains("Pass -o or --in-place, not both."))
+        #expect(try Data(contentsOf: made) == madeBefore)
+        #expect(try Data(contentsOf: target) == original)
         let inPlace = try Self.run(["template", "apply", template.path, target.path, "--in-place"])
         #expect(inPlace.status == 0, "\(inPlace.output)")
         #expect(try Project.decode(Data(contentsOf: target)).operations.count == 4)
