@@ -6,6 +6,11 @@ enum PocketGenerator {
     /// it left (rest machining; see `PocketParams.clearanceTool`).
     static func generate(op: CAMOperation, params: PocketParams, shapes: [DesignShape], context: GenerationContext) -> [Toolpath] {
         let tool = op.tool
+        if params.strategy == .adaptive, context.stock.rotary?.isWrapped == true {
+            let b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
+            return [b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: [
+                "Adaptive clearing isn't available on wrapped rotary jobs yet, so this pocket isn't cut. Choose Offset or Raster."])]
+        }
         let loops = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }.filter { $0.isClosed }
         let regions = Region.build(from: loops, fill: .evenOdd)
         if let large = params.clearanceTool, !regions.isEmpty {
@@ -144,7 +149,9 @@ enum PocketGenerator {
         if stepover > tool.diameter * 0.95 {
             warnings.append("Stepover is larger than the tool diameter; material will be left behind.")
         }
-        let levels = params.depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
+        // Adaptive clearing cuts the full length of the flutes at once; rest machining's rings take the bit's stepdown.
+        let levels = reached == nil ? params.passLevels(tool)
+            : params.depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
         if levels.isEmpty {
             warnings.append("Cut depth must be greater than the start depth.")
             return (warnings, nil)
@@ -234,6 +241,9 @@ enum PocketGenerator {
                 b.retract()
                 zAbove = z
             }
+        case .adaptive:
+            warnings += AdaptiveClearing.cut(boundary: boundary, tool: tool, params: params, levels: levels, context: context,
+                                             reliefs: reliefs, safe: safe, builder: &b)
         }
         return (warnings, reliefCorners)
     }
@@ -298,7 +308,7 @@ enum PocketGenerator {
     }
 
     /// `reliefs` belong to the wall rings, the top level of the tree; inner rings never get any.
-    private static func cutTree(_ nodes: [RingNode], z: Double, zAbove: Double, params: PocketParams, stepover: Double, safe: [Region],
+    static func cutTree(_ nodes: [RingNode], z: Double, zAbove: Double, params: PocketParams, stepover: Double, safe: [Region],
                                 reliefs: [CornerRelief.Relief] = [], first: inout Bool, builder b: inout ToolpathBuilder) {
         // Inside-out: finish each branch's inner rings before its enclosing ring.
         let ordered = nearestNeighborOrder(nodes, from: b.position.xy,
@@ -434,7 +444,8 @@ extension PocketGenerator {
         let safe = boundary.flatMap { $0.offset(by: 0.01, arcTolerance: context.arcTolerance) }
         var first = true
         switch strategy {
-        case .offset:
+        case .offset, .adaptive:
+            // (Nothing asks for adaptive here; 3D rotary roughing's patterns are offset rings or raster lines.)
             let tree = ringTree(boundary, stepover: stepover, toolRadius: tool.radius, arcTolerance: context.arcTolerance)
             smooth(tree, deviation: context.machine.cornerSmoothing, plannerDeviation: context.machine.cornerDeviation,
                    stepover: stepover, toolRadius: tool.radius, boundary: false, chordTolerance: context.arcTolerance)
