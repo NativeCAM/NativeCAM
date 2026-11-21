@@ -145,6 +145,7 @@ enum DebugSnapshot {
         // 4. Each inspector at full height, sections below the fold included, and the checks Export runs.
         renderInspectors(project, workspace: ws, out: out, spin: spin)
         exportCheck(project, job: ws.job, log: log)
+        starterLibraryCheck(log: log)
         interactionSelfCheck(project, log: log)
         print("snapshot: wrote PNGs to \(out.path)")
         exit(0)
@@ -229,6 +230,27 @@ enum DebugSnapshot {
         }
         render(MachineSetupView(offerUseHere: false, start: ("generic", .setup), height: 1100) { _, _, _ in },
                size: NSSize(width: 640, height: 1100), name: "inspector-machine-setup.png")
+    }
+
+    /// Logs what the Tool Library's Reset to Starter Library… dialog and Add Missing Starter Tools report say, for a
+    /// library saved before the 1/2" end mill joined the starter library, with an edited starter bit and a T10 of its
+    /// own (the dialogs themselves can't be drawn offscreen). Changes no library.
+    @MainActor
+    private static func starterLibraryCheck(log: (String) -> Void) {
+        var library = ToolLibrary(tools: ToolLibrary.starter.tools.filter { $0.number != 10 })
+        library.tools[0].cutting.feedRate = 150.inch
+        var own = ToolLibrary.starter.tools[6]
+        own.id = UUID()
+        own.number = 10
+        own.diameter = 0.375.inch
+        own.name = "3/8\" Ball Nose"
+        library.tools.append(own)
+        let reset = library.starterReset
+        log("tool library reset dialog: \(StarterLibraryText.resetTitle(reset)) | \(StarterLibraryText.resetMessage(reset))")
+        let report = StarterLibraryText.report(library.missingStarterTools())
+        log("tool library add missing: \(report.title) | \(report.message.replacingOccurrences(of: "\n", with: " / "))")
+        let none = StarterLibraryText.report(ToolLibrary.starter.missingStarterTools())
+        log("tool library add missing (up to date): \(none.title) | \(none.message)")
     }
 
     /// Logs the job's issues and the export checks of every file the post writes, as Export would show them.
