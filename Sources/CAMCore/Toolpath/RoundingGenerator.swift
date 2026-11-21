@@ -26,8 +26,7 @@ enum RoundingGenerator {
         let finish = finishedRadius(p, blank: blank)
         let outer = blank.outerRadius
         guard finish < outer - 1e-6 else {
-            let u = LengthUnit.mm
-            tp.warnings = ["The blank is already no bigger than \(u.format(2 * finish)) mm round, so there's nothing to cut."]
+            tp.warnings = ["The blank is already no bigger than \(ctx.length(2 * finish)) round, so there's nothing to cut."]
             return tp
         }
         let x0 = p.startX ?? tool.radius, x1 = p.endX ?? blank.length - tool.radius

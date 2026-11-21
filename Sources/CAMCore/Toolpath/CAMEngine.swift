@@ -19,12 +19,25 @@ public struct GenerationContext: Sendable {
     /// The parts the job's other toolpaths cut (on this face of an indexed rotary job). Leads and corner reliefs keep
     /// clear of them. nil when none are known (an operation generated on its own).
     public var protectedRegions: ProtectedRegions?
+    /// The project's display units, which generators' warnings give lengths and feeds in (like the job's checks).
+    public var units: LengthUnit
 
-    public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005) {
+    public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005,
+                units: LengthUnit = .mm) {
         self.stock = stock
         self.machine = machine
         self.flattenTolerance = flattenTolerance
         self.arcTolerance = arcTolerance
+        self.units = units
+    }
+
+    /// A length (mm) for a warning, in the display units: "4.000 mm", "0.1575 in".
+    public func length(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+
+    /// A feed (mm/min) for a warning, in the display units: "8,001 mm/min", "315.0 in/min".
+    public func feed(_ mmPerMinute: Double) -> String {
+        let v = units.fromMM(mmPerMinute)
+        return "\(v.formatted(.number.precision(.fractionLength(units == .inch ? 1 : 0)))) \(units.feedSymbol)"
     }
 }
 
@@ -72,7 +85,8 @@ public enum CAMEngine {
     public static func generate(_ project: Project, operationIDs: Set<UUID>? = nil) -> JobResult {
         let ctx = GenerationContext(stock: project.stock, machine: project.machine,
                                     flattenTolerance: 0.01,
-                                    arcTolerance: min(0.005, project.machine.arcFitTolerance / 2))
+                                    arcTolerance: min(0.005, project.machine.arcFitTolerance / 2),
+                                    units: project.displayUnits)
         var toolpaths: [Toolpath] = []
         var issues: [JobIssue] = []
         // Coarse model of the material as each toolpath removes it (drives links and rest-aware depths). A rotary job
@@ -187,7 +201,10 @@ public enum CAMEngine {
                     }
                     issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
                     if let wrap {
-                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, tolerance: ctx.flattenTolerance)
+                        // 3D rotary finishing has already lowered its feeds for the rotary axis, and said so.
+                        var finish = false
+                        if case .rotaryFinish = op.kind { finish = true }
+                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !finish)
                     } else if project.machine.outputArcs {
                         tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
                     }

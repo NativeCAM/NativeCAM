@@ -147,7 +147,7 @@ final class Workspace {
         externalProgramName = nil
         beginSession(SimulationSession(toolpaths: job.toolpaths, stock: project.stock,
                                        rapidRate: project.machine.rapidRateForEstimates, cellSize: nil,
-                                       durations: job.estimate?.motionSeconds,
+                                       estimate: job.estimate,
                                        turnSpeed: project.machine.rotary?.drivenTurnSpeed), project: project)
     }
 

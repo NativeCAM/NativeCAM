@@ -69,15 +69,21 @@ struct RotarySimulationTests {
         #expect(tl.steps.filter { $0.turn == nil }.count == job.toolpaths.reduce(0) { $0 + $1.motions.count })
     }
 
-    @Test func theEstimateStillTimesTheCuts() {
-        // Turns sit between the estimated motions without shifting their durations.
+    @Test func theEstimateStillTimesTheCuts() throws {
+        // Turns and the time between toolpaths sit between the estimated motions without shifting their durations, so
+        // the simulation takes the estimate's time.
         let p = RotaryIndexTests.leg()
         let job = CAMEngine.generate(p)
-        let durations = job.estimate?.motionSeconds
-        let s = SimulationSession(toolpaths: job.toolpaths, stock: p.stock, rapidRate: 10_000, cellSize: 1, durations: durations)
-        let turnTime = s.timeline.steps.filter { $0.turn != nil }.reduce(0) { $0 + $1.duration }
-        let motionTime = durations?.joined().reduce(0, +) ?? 0
-        #expect(abs(s.timeline.duration - turnTime - motionTime) < 1e-6)
+        let e = try #require(job.estimate)
+        let s = SimulationSession(toolpaths: job.toolpaths, stock: p.stock, rapidRate: 10_000, cellSize: 1, estimate: e)
+        let between = e.leadInSeconds.reduce(0, +) + e.endSeconds
+        let motionTime = e.motionSeconds.joined().reduce(0, +)
+        #expect(abs(e.total - between - motionTime) < 1e-6)
+        #expect(abs(s.timeline.duration - e.total) < 1e-6)
+        // Each cut keeps its own time.
+        let cut = try #require(s.timeline.steps.first { $0.toolpathIndex == 1 && $0.motion.kind == .feed })
+        let k = try #require(job.toolpaths[1].motions.firstIndex { $0.kind == .feed })
+        #expect(abs(cut.duration - e.motionSeconds[1][k]) < 1e-12)
     }
 
     @Test func flatJobsKeepOneGridAndNoTurns() {

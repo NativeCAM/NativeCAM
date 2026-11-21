@@ -216,6 +216,8 @@ case "sim":
     let path = args[1]
     var project: Project
     var toolpaths: [Toolpath]
+    // A project's simulation runs at its run-time estimate's pace, as in the app.
+    var estimate: CycleTimeEstimate?
     let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
     if ["tap", "nc", "gcode", "ngc", "cnc", "txt", "sbp"].contains(ext) {
         project = Project()
@@ -236,11 +238,13 @@ case "sim":
     } else {
         project = loadProject(path)
         if args.contains("--no-arcs") { project.machine.outputArcs = false }
-        toolpaths = CAMEngine.generate(project).toolpaths
+        let job = CAMEngine.generate(project)
+        toolpaths = job.toolpaths
+        estimate = job.estimate
     }
     let cell = option("--cell", in: args).flatMap(Double.init)
     var session = SimulationSession(toolpaths: toolpaths, stock: project.stock,
-                                    rapidRate: project.machine.rapidRateForEstimates, cellSize: cell,
+                                    rapidRate: project.machine.rapidRateForEstimates, cellSize: cell, estimate: estimate,
                                     turnSpeed: project.machine.rotary?.drivenTurnSpeed)
     let start = Date()
     session.runToEnd()

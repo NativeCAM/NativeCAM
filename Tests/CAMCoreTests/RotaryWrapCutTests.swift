@@ -50,7 +50,7 @@ struct RotaryWrapCutTests {
         let op = p.operations[1]
         let ctx = GenerationContext(stock: p.stock, machine: p.machine, flattenTolerance: 0.01, arcTolerance: 0.005)
         let raw = try #require(CAMEngine.generate(op, shapes: p.shapes(for: op), context: ctx).first)
-        let prepared = RotaryWrap.prepare(raw, diameter: 50, clearanceZ: p.stock.clearanceHeight, tolerance: 0.01)
+        let prepared = RotaryWrap.prepare(raw, diameter: 50, clearanceZ: p.stock.clearanceHeight, context: ctx)
         let feeds = { (t: Toolpath) in t.motions.filter { $0.kind != .rapid && $0.kind != .dwell }.count }
         #expect(feeds(prepared) < feeds(raw), "\(feeds(prepared)) of \(feeds(raw))")
         // No carved move is so short that its time would be capped.

@@ -50,17 +50,16 @@ public struct AvidMach4Post: Sendable {
             w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")
             w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
         }
+        // Wrapped toolpaths (every one on a wrapped job; rounding and 3D rotary finishing on faces) keep Y on the axis
+        // centreline: their sheet Y range is a range of A. With any of them, the line gives the range of A the program
+        // cuts at, from the A words as written, and Y only for the other toolpaths. The A words are known only once the
+        // program is written (a toolpath starts a whole number of turns on from where the one before left the blank),
+        // so the line is filled in at the end.
+        var extentsLine: (index: Int, extents: Toolpath.Extents)?
         if let ext = extents(paths) {
-            // Wrapped toolpaths (every one on a wrapped job; rounding and 3D rotary finishing on faces) keep Y on the axis
-            // centreline: their sheet Y range is a range of A. Y is only given for the others.
-            let wrapped = paths.compactMap { tp -> [Double]? in
-                guard let rotary, let d = tp.wrapDiameter, let e = tp.cuttingExtents else { return nil }
-                return [e.min.y, e.max.y].map { rotary.value(RotaryWrap.angle(y: stock.toWork(Vec3($0, $0, 0)).y, centerY: 0, diameter: d)) }
-            }.flatMap { $0 }
-            if let rotary, let lo = wrapped.min(), let hi = wrapped.max() {
-                let a = { (v: Double) in "\(rotary.letter)\(String(format: "%.3f", v))" }
-                let flat = extents(paths.filter { $0.wrapDiameter == nil }).map { "Y\(num($0.min.y)) to Y\(num($0.max.y))  " } ?? ""
-                w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  \(flat)\(a(lo)) to \(a(hi))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
+            if rotary != nil, paths.contains(where: { $0.wrapDiameter != nil && $0.cuttingExtents != nil }) {
+                extentsLine = (w.lines.count, ext)
+                w.line("")
             } else {
                 w.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  Y\(num(ext.min.y)) to Y\(num(ext.max.y))  Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
             }
@@ -89,6 +88,11 @@ public struct AvidMach4Post: Sendable {
         var lastA: Double?
         // On a blank turned by hand, the angle the operator was last asked for; nil until the first stop.
         var dial: Double?
+        // The A values the program cuts at, as written: a wrapped toolpath's A words, and the angle a face is cut at.
+        var cutA: ClosedRange<Double>?
+        func cuts(_ r: ClosedRange<Double>) {
+            cutA = cutA.map { min($0.lowerBound, r.lowerBound)...max($0.upperBound, r.upperBound) } ?? r
+        }
 
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
@@ -128,6 +132,7 @@ public struct AvidMach4Post: Sendable {
                 for line in approach.lines + cut.lines { w.line(line) }
                 if approach.turned || cut.turned { turned = true }
                 lastA = state.a ?? lastA
+                if let a = cut.cutA { cuts(a) }
                 continue
             }
             let startWork = stock.toWork(tp.start)
@@ -143,6 +148,7 @@ public struct AvidMach4Post: Sendable {
                 lastA = target
                 turned = true
             }
+            if let a = state.a, tp.motions.contains(where: { $0.kind != .rapid && $0.kind != .dwell }) { cuts(a...a) }
             emitMotions(tp, writer: &w, state: &state)
         }
 
@@ -158,6 +164,13 @@ public struct AvidMach4Post: Sendable {
         w.line("M05")
         w.line("M09")
         w.line("M30")
+        if let line = extentsLine {
+            let ext = line.extents
+            var a = ""
+            if let rotary, let cutA { a = "\(rotary.word(value: cutA.lowerBound)) to \(rotary.word(value: cutA.upperBound))  " }
+            let flat = extents(paths.filter { $0.wrapDiameter == nil }).map { "Y\(num($0.min.y)) to Y\(num($0.max.y))  " } ?? ""
+            w.lines[line.index] = Writer.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  \(flat)\(a)Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
+        }
         return w.text
     }
 
@@ -325,19 +338,27 @@ public struct AvidMach4Post: Sendable {
 
     struct Writer {
         var lineNumbers: Bool
-        var n = 10
-        var text = ""
+        /// The program's lines so far, without their line numbers.
+        var lines: [String] = []
 
-        mutating func line(_ s: String) {
-            if lineNumbers {
-                text += "N\(n) "
-                n += 10
+        mutating func line(_ s: String) { lines.append(s) }
+
+        mutating func comment(_ s: String) { line(Self.comment(s)) }
+
+        /// The program: each line ended with CRLF and, when line numbers are on, numbered N10, N20 and so on.
+        var text: String {
+            var out = ""
+            out.reserveCapacity(lines.reduce(0) { $0 + $1.utf8.count + (lineNumbers ? 10 : 2) })
+            for (i, l) in lines.enumerated() {
+                if lineNumbers { out += "N\(10 * (i + 1)) " }
+                out += l
+                out += "\r\n"
             }
-            text += s + "\r\n"
+            return out
         }
 
         /// Mach4 comment; parentheses inside are swapped for braces (as Avid's posts do) and non-ASCII dropped.
-        mutating func comment(_ s: String) {
+        static func comment(_ s: String) -> String {
             let cleaned = s.replacingOccurrences(of: "(", with: "{")
                 .replacingOccurrences(of: ")", with: "}")
                 .replacingOccurrences(of: "\"", with: "in")
@@ -347,7 +368,7 @@ public struct AvidMach4Post: Sendable {
                 .replacingOccurrences(of: "—", with: "-")
                 .unicodeScalars.filter { $0.isASCII && $0.value >= 32 }
                 .map(String.init).joined()
-            line("(\(cleaned))")
+            return "(\(cleaned))"
         }
     }
 }
