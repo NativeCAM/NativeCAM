@@ -87,6 +87,7 @@ enum TileSplitter {
             for (raw, op) in pieces {
                 var tp = raw
                 tp.tile = k
+                let uncut = op.map { $0.adjustsFeedsForLoad && FeedScheduler.suits(tp.tool) } == true ? model.grid : nil
                 if stock.retract == .minimum {
                     var s = settings
                     s.stayDownLimit = max(3 * tp.tool.diameter, 10)
@@ -96,6 +97,11 @@ enum TileSplitter {
                 }
                 issues.append(contentsOf: CAMEngine.keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
                 if machine.outputArcs { tp = ArcFitter.fit(tp, tolerance: machine.arcFitTolerance) }
+                if let op {
+                    let (scheduled, notes) = FeedScheduler.apply(tp, operation: op, uncut: uncut, wrapped: false, project: project)
+                    tp = scheduled
+                    issues.append(contentsOf: notes)
+                }
                 if let op { issues.append(contentsOf: CAMEngine.validate(tp, operation: op, project: project, checkTravel: false)) }
                 tiles[k].append(tp)
             }

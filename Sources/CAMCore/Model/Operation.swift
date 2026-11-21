@@ -1029,8 +1029,15 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// means the shapes selected when it's applied.
     public var vectorSelection: VectorSelection?
 
+    // MARK: Feed scheduling
+    /// Profiles and pockets: "Adjust feeds for load", slowing the feed where the bit cuts more than in the toolpath's
+    /// usual cut (see `FeedScheduler`). nil or false keeps the programmed feed throughout. An older build ignores it and
+    /// posts the programmed feed, which the scheduler never exceeds, so it doesn't raise the file format.
+    public var adjustFeedsForLoad: Bool?
+
     public init(id: UUID = UUID(), name: String? = nil, enabled: Bool = true, kind: OperationKind,
-                shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil, vectorSelection: VectorSelection? = nil) {
+                shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil, vectorSelection: VectorSelection? = nil,
+                adjustFeedsForLoad: Bool? = nil) {
         self.id = id
         self.name = name ?? kind.label
         self.enabled = enabled
@@ -1039,6 +1046,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         self.tool = tool
         self.indexAngles = indexAngles
         self.vectorSelection = vectorSelection
+        self.adjustFeedsForLoad = adjustFeedsForLoad
     }
 
     /// The angles this operation cuts at on rotary stock.
@@ -1072,4 +1080,21 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         }
         return max(own, indexAngles == nil ? 1 : 3)
     }
+}
+
+// MARK: Feed scheduling
+
+public extension OperationKind {
+    /// The operations "Adjust feeds for load" applies to.
+    var takesLoadFeeds: Bool {
+        switch self {
+        case .profile, .pocket: true
+        default: false
+        }
+    }
+}
+
+public extension CAMOperation {
+    /// True when this operation's feeds follow the load (`adjustFeedsForLoad`, on a profile or pocket).
+    var adjustsFeedsForLoad: Bool { adjustFeedsForLoad == true && kind.takesLoadFeeds }
 }
