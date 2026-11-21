@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var alert: AlertInfo?
     @State private var debugSetup: DebugSetup?
     @State private var debugPost: DebugPost?
+    @State private var pendingTemplate: PendingTemplate?
     @Environment(ToolLibraryStore.self) private var library
     @Environment(\.openWindow) private var openWindow
 
@@ -81,6 +82,12 @@ struct ContentView: View {
         .sheet(item: $debugSetup) { d in
             MachineSetupView(offerUseHere: true, start: (d.selection, d.step)) { _, _, _ in }
         }
+        .sheet(item: $pendingTemplate) { pending in
+            ApplyTemplateSheet(template: pending.template, project: project, library: ToolLibrary(tools: library.tools),
+                               selection: pending.selection) { result, addTools in
+                finishApplying(result, addTools: addTools)
+            }
+        }
         .alert(item: $alert) { info in
             Alert(title: Text(info.title), message: Text(info.message))
         }
@@ -143,10 +150,14 @@ struct ContentView: View {
             exportGCode: exportGCode,
             exportAirCut: exportAirCut,
             exportSetupSheet: exportSetupSheet,
-            regenerate: { workspace.regenerate(project, debounce: false) },
+            regenerate: recalculateAll,
             simulate: simulate,
             stopSimulation: { workspace.stopSimulation(project) },
             optimizeOrder: optimizeOrder,
+            saveTemplate: saveTemplate,
+            applyTemplate: applyTemplate,
+            chooseTemplate: chooseTemplate,
+            hasToolpaths: !project.operations.isEmpty,
             setView: { workspace.viewPreset = $0 },
             fit: { workspace.fitRequest += 1 },
             duplicate: { canvas.viewportPerform(.duplicate) },
@@ -272,7 +283,7 @@ struct ContentView: View {
                 } else {
                     let result = try VectorImporter.importFile(at: url, tolerance: 0.01)
                     warnings.append(contentsOf: result.warnings.map { "\(url.lastPathComponent): \($0)" })
-                    let shapes = ShapeFactory.imported(result.polylines, points: result.points, name: name, stock: project.stock)
+                    let shapes = result.shapes(name: name, stock: project.stock)
                     if shapes.isEmpty { warnings.append("\(url.lastPathComponent): no usable vectors found.") }
                     document.project.shapes.append(contentsOf: shapes)
                     added.append(contentsOf: shapes.map(\.id))
@@ -281,10 +292,79 @@ struct ContentView: View {
                 warnings.append("\(url.lastPathComponent): \(error.localizedDescription)")
             }
         }
-        if !added.isEmpty { workspace.selection = Set(added.map { .shape($0) }) }
+        if !added.isEmpty {
+            // Toolpaths that find their vectors by layer or kind pick up the new ones.
+            var p = document.project
+            if p.bindVectors() { document.project = p }
+            workspace.selection = Set(added.map { .shape($0) })
+        }
         if !warnings.isEmpty {
             alert = AlertInfo(title: "Import notes", message: warnings.prefix(12).joined(separator: "\n"))
         }
+    }
+
+    /// Toolpaths ▸ Recalculate All: toolpaths that find their vectors by layer or kind look again (one change, so ⌘Z
+    /// puts the old shapes back), then everything is regenerated at once.
+    private func recalculateAll() {
+        var p = project
+        if p.bindVectors() { document.project = p }
+        workspace.regenerate(document.project, debounce: false)
+    }
+
+    // MARK: Templates
+
+    private func saveTemplate() {
+        let selected = project.operations.filter { workspace.selection.contains(.operation($0.id)) }.map(\.id)
+        let options = TemplateSaveOptions(selectedCount: selected.count, totalCount: project.operations.count)
+        let panel = NSSavePanel()
+        panel.title = "Save Toolpaths as Template"
+        panel.message = "Templates in this folder are listed under Toolpaths ▸ Apply Template."
+        panel.prompt = "Save Template"
+        panel.allowedContentTypes = [.nativecamTemplate]
+        panel.directoryURL = TemplateLibrary.ensureFolder()
+        panel.nameFieldStringValue = project.name
+        let accessory = NSHostingView(rootView: TemplateSaveAccessory(options: options))
+        accessory.frame.size = accessory.fittingSize
+        panel.accessoryView = accessory
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let ids = options.offersSelection && options.onlySelected ? Set(selected) : nil
+        let template = ToolpathTemplate(name: url.deletingPathExtension().lastPathComponent, project: project, operationIDs: ids,
+                                        includeJobSetup: options.includeJobSetup)
+        do {
+            try template.encoded().write(to: url, options: .atomic)
+            TemplateLibrary.shared.refresh()
+        } catch {
+            alert = AlertInfo(title: "Couldn't save the template", message: error.localizedDescription)
+        }
+    }
+
+    private func chooseTemplate() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.nativecamTemplate]
+        panel.directoryURL = TemplateLibrary.ensureFolder()
+        panel.message = "Choose a toolpath template to add its toolpaths to this job"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        applyTemplate(url)
+    }
+
+    /// Reads a template and shows what it would add; nothing changes until Add Toolpaths.
+    private func applyTemplate(_ url: URL) {
+        do {
+            let template = try ToolpathTemplate.decode(Data(contentsOf: url))
+            pendingTemplate = PendingTemplate(template: template, selection: workspace.selectedShapeIDs)
+        } catch {
+            alert = AlertInfo(title: "Couldn't open “\(url.deletingPathExtension().lastPathComponent)”", message: error.localizedDescription)
+        }
+    }
+
+    /// One document change, so a single ⌘Z takes the template's toolpaths (and job setup) off again.
+    private func finishApplying(_ result: ToolpathTemplate.Application, addTools: Bool) {
+        if addTools {
+            let known = Set(library.tools.map(\.id))
+            library.tools.append(contentsOf: result.newTools.filter { !known.contains($0.id) })
+        }
+        document.project = result.project
+        if let first = result.addedOperationIDs.first { workspace.selection = [.operation(first)] }
     }
 
     private func simulateGCodeFile() {
@@ -442,6 +522,13 @@ struct ContentView: View {
             alert = AlertInfo(title: "Couldn't save the setup sheet", message: error.localizedDescription)
         }
     }
+}
+
+/// A template read and waiting for Add Toolpaths, with the shapes selected when it was chosen.
+struct PendingTemplate: Identifiable {
+    let id = UUID()
+    var template: ToolpathTemplate
+    var selection: [UUID]
 }
 
 /// Developer capture state for the Vectric post sheet.

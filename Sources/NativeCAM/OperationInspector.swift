@@ -15,10 +15,7 @@ struct OperationInspector: View {
                 TextField("Name", text: $op.name)
                 Toggle("Include in output", isOn: $op.enabled)
                 if op.kind.needsShapes {
-                    LabeledContent("Shapes", value: "\(op.shapeIDs.count)")
-                    Button("Use Selected Shapes") { op.shapeIDs = workspace.selectedShapeIDs }
-                        .disabled(workspace.selectedShapeIDs.isEmpty)
-                        .help("Select shapes in the Design list, then click to assign them to this toolpath")
+                    VectorRows(op: $op, project: project, selected: workspace.selectedShapeIDs)
                 }
             }
             if let blank = project.stock.rotary, blank.isWrapped, op.indexAngles == nil, op.kind.needsShapes, !op.kind.turnsWholeBlank {
@@ -26,7 +23,9 @@ struct OperationInspector: View {
             } else if (project.stock.rotary != nil && op.kind.takesIndexAngles) || op.indexAngles != nil {
                 IndexAnglesSection(angles: $op.indexAngles, blank: project.stock.rotary)
             }
-            ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine)
+            ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
+                        loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
+                        wrapped: project.stock.rotary?.isWrapped == true)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
@@ -40,6 +39,7 @@ struct OperationInspector: View {
                     LabeledContent("Estimated time", value: formatDuration(seconds.reduce(0, +)))
                     ForEach(Array(tps.enumerated()), id: \.element.id) { i, tp in
                         LabeledContent("   \(tp.tile.map { "Tile \($0 + 1) · " } ?? "")T\(tp.tool.number) \(tp.tool.name)", value: formatDuration(seconds[i]))
+                        if let lf = tp.loadFeeds, lf.varies { LoadFeedsRow(feeds: lf, units: units, indent: true) }
                     }
                     if let deepest = tps.compactMap({ $0.cuttingExtents.map { -$0.min.z } }).max() {
                         LabeledContent("Deepest cut", value: "\(units.format(deepest)) \(units.symbol)")
@@ -50,6 +50,7 @@ struct OperationInspector: View {
                     LabeledContent("Cutting length", value: "\(units.format(tp.cuttingLength, decimals: 1)) \(units.symbol)")
                     LabeledContent("Estimated time", value: formatDuration(workspace.job?.estimatedSeconds(toolpath: tp.id)
                                                                           ?? tp.estimatedSeconds(rapidRate: project.machine.rapidRateForEstimates)))
+                    if let lf = tp.loadFeeds, lf.varies { LoadFeedsRow(feeds: lf, units: units) }
                     if let e = tp.cuttingExtents {
                         LabeledContent("Deepest cut", value: "\(units.format(-e.min.z)) \(units.symbol)")
                     }
@@ -114,8 +115,10 @@ struct OperationInspector: View {
         case let .drill(p):
             let set: (DrillParams) -> Void = { op.kind = .drill($0) }
             Section("Drilling") {
-                LengthField(title: "Hole depth", mm: Binding(get: { p.depth }, set: { var q = p; q.depth = max(0.01, $0); set(q) }), units: units)
-                Button("Through material (+0.02 in)") { var q = p; q.depth = project.stock.thickness + 0.02.inch; set(q) }
+                MaterialDepthRows(title: "Hole depth",
+                                  value: Binding(get: { MaterialDepthValue(depth: p.depth, fromBottom: p.fromBottom) },
+                                                 set: { var q = p; q.depth = max(0.01, $0.depth); q.fromBottom = $0.fromBottom; set(q) }),
+                                  stock: project.stock, units: units)
                 LengthField(title: "Peck depth", mm: Binding(get: { p.peckDepth }, set: { var q = p; q.peckDepth = max(0, $0); set(q) }), units: units,
                             help: "0 = single plunge")
                 Toggle("Full retract between pecks", isOn: Binding(get: { p.fullRetract }, set: { var q = p; q.fullRetract = $0; set(q) }))
@@ -703,12 +706,10 @@ struct DepthSection: View {
     var body: some View {
         Section("Depth") {
             LengthField(title: "Start depth", mm: $depth.startDepth, units: units, minimum: 0)
-            LengthField(title: "Cut depth", mm: $depth.cutDepth, units: units, minimum: 0.01)
-            HStack {
-                Spacer()
-                Button("Through (+0.02 in)") { depth.cutDepth = stock.thickness + 0.02.inch }
-                    .help("Material thickness plus a small breakthrough into the spoilboard")
-            }
+            MaterialDepthRows(title: "Cut depth",
+                              value: Binding(get: { MaterialDepthValue(depth: depth.cutDepth, fromBottom: depth.fromBottom) },
+                                             set: { var d = depth; d.cutDepth = max(0.01, $0.depth); d.fromBottom = $0.fromBottom; depth = d }),
+                              stock: stock, units: units)
             LengthField(title: "Pass depth", mm: Binding(get: { depth.passDepth ?? tool.cutting.stepdown }, set: { depth.passDepth = max(0.05, $0) }),
                         units: units, help: "Defaults to the tool's stepdown")
             let passes = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum).count
@@ -927,6 +928,10 @@ struct ToolSection: View {
     let library: ToolLibraryStore
     var material: MaterialKind = .plywood
     var machine: MachineProfile = .avidPRO6060
+    /// Profiles and pockets: the operation's "Adjust feeds for load" (nil hides it).
+    var loadFeeds: Binding<Bool?>? = nil
+    /// On a wrapped rotary job, where feeds are inverse time and don't follow the load.
+    var wrapped = false
 
     var body: some View {
         Section("Tool") {
@@ -954,6 +959,7 @@ struct ToolSection: View {
             NumberField(title: "Spindle", value: $tool.cutting.spindleRPM, suffix: "RPM", decimals: 0, range: 1000...60000)
             FeedField(title: "Feed", mmPerMin: $tool.cutting.feedRate, units: units)
             FeedField(title: "Plunge", mmPerMin: $tool.cutting.plungeRate, units: units)
+            if let loadFeeds { LoadFeedsToggle(on: loadFeeds, tool: tool, wrapped: wrapped) }
             LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
             PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
@@ -1060,5 +1066,46 @@ struct RotaryRoughSection: View {
             Text("A flat or bull-nose end mill clears the stock round the model in layers, each a stepdown nearer the axis, from a square bar or a round blank. Each layer clears only where there's material left: over a square bar's faces it skips the air, and after a Rounding it starts from the rounded size. Near the model it rides on it, no closer than the allowance. Finish with 3D Rotary Finishing.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+// MARK: Feeds that follow the load
+
+/// "Adjust feeds for load" under a profile's or pocket's feeds (see `FeedScheduler`).
+struct LoadFeedsToggle: View {
+    @Binding var on: Bool?
+    let tool: Tool
+    let wrapped: Bool
+
+    var body: some View {
+        let applies = FeedScheduler.suits(tool) && !wrapped
+        Toggle("Adjust feeds for load", isOn: Binding(get: { on == true }, set: { on = $0 ? true : nil }))
+            .disabled(!applies && on != true)
+            .help("Slows the feed only where the bit cuts more than in this toolpath's usual cut: a pocket's first pass, "
+                + "inside corners, tight inside arcs. Never faster than the feed above, and never so slow the chip burns.")
+        if on == true || !applies {
+            if wrapped {
+                SectionNote(text: "Wrapped rotary moves are fed in inverse time, so they keep this feed.", warning: on == true)
+            } else if !FeedScheduler.suits(tool) {
+                SectionNote(text: "Only with end mills, bull noses and surfacing bits: a \(tool.shape.label.lowercased())'s engagement depends on its depth.",
+                            warning: on == true)
+            } else {
+                SectionNote(text: "Down to 55% where the bit cuts more of its width than usual, and on a profile's inside arcs so "
+                    + "the edge keeps this feed. The estimate, simulation and G-code use the slower feeds.")
+            }
+        }
+    }
+}
+
+/// The range of feeds a toolpath runs at with "Adjust feeds for load".
+struct LoadFeedsRow: View {
+    let feeds: LoadFeeds
+    let units: LengthUnit
+    var indent = false
+
+    var body: some View {
+        let low = Int((feeds.lowest / feeds.programmed * 100).rounded())
+        LabeledContent(indent ? "      Feed" : "Feed",
+                       value: "\(units.format(feeds.lowest, decimals: 0))–\(units.format(feeds.programmed, decimals: 0)) \(units.feedSymbol) (\(low)–100%)")
     }
 }

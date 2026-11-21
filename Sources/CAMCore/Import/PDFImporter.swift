@@ -41,8 +41,8 @@ public enum PDFImporter {
         scanner.scan(page)
 
         let tolJoin = PathChainer.joinTolerance(for: tol)
-        let chained = PathChainer.chain(scanner.closed + scanner.open.map { closeIfEndsMeet($0, tolJoin) },
-                                        tolerance: tolJoin)
+        let (chained, layers) = PathChainer.chainByLayer(scanner.closed + scanner.open.map { closeIfEndsMeet($0, tolJoin) },
+                                                         layers: scanner.closedLayers + scanner.openLayers, tolerance: tolJoin)
         let fromIllustrator = isFromIllustrator(document, page)
         // A .ai saved without PDF compatibility is a PDF whose only page is a text notice saying so.
         if scanner.textLooksLikeIllustratorPlaceholder && (fromIllustrator || chained.polylines.isEmpty) {
@@ -69,7 +69,7 @@ public enum PDFImporter {
             }
         }
         return ImportResult(polylines: chained.polylines, points: [], warnings: warnings,
-                            sourceUnits: nil, unitScale: mmPerUnit)
+                            sourceUnits: nil, unitScale: mmPerUnit, polylineLayers: layers)
     }
 
     // MARK: Document and page
@@ -222,6 +222,20 @@ struct PDFLayers {
         return visible ? [] : (offGroups.isEmpty ? groups : offGroups)
     }
 
+    /// The layer content marked with `dict` is on, for keeping layers on import: an optional content group's name,
+    /// or a membership dictionary's first group's. nil when it names none.
+    static func layerName(of dict: CGPDFDictionaryRef) -> String? {
+        var type: UnsafePointer<CChar>?
+        let group = CGPDFDictionaryGetName(dict, "Type", &type) && type.map { String(cString: $0) } == "OCMD"
+            ? dictionaries(dict, "OCGs").first : dict
+        var s: CGPDFStringRef?
+        guard let group, CGPDFDictionaryGetString(group, "Name", &s), let s, let text = CGPDFStringCopyTextString(s) as String? else {
+            return nil
+        }
+        let name = text.trimmingCharacters(in: .whitespaces)
+        return name.isEmpty ? nil : name
+    }
+
     /// A layer's display name.
     static func name(of group: CGPDFDictionaryRef) -> String {
         var s: CGPDFStringRef?
@@ -260,6 +274,9 @@ final class PDFContentScanner {
 
     private(set) var closed: [Polyline] = []
     private(set) var open: [Polyline] = []
+    /// The layer (optional content group) each closed and open path is on; nil outside any.
+    private(set) var closedLayers: [String?] = []
+    private(set) var openLayers: [String?] = []
 
     private var state = GraphicsState()
     private var stateStack: [GraphicsState] = []
@@ -272,6 +289,8 @@ final class PDFContentScanner {
     private var pendingClip: Clipper.FillRule?
     /// Open marked-content sequences (`BMC`/`BDC` … `EMC`): the hidden layer's name, or nil when visible.
     private var markedContent: [String?] = []
+    /// The same sequences' layer names, nil for ones that aren't layers.
+    private var markedLayers: [String?] = []
 
     private var table: CGPDFOperatorTableRef?
     /// Form XObject streams being scanned (recursion guard).
@@ -299,6 +318,9 @@ final class PDFContentScanner {
 
     /// The hidden layer the current content is on, if any.
     private var hidingLayer: String? { markedContent.lazy.compactMap { $0 }.first }
+
+    /// The layer the current content is on: the innermost one marked.
+    private var currentLayer: String? { markedLayers.last { $0 != nil } ?? nil }
 
     /// True when the page's text is Illustrator's "saved without PDF content" placeholder message.
     var textLooksLikeIllustratorPlaceholder: Bool {
@@ -372,9 +394,13 @@ final class PDFContentScanner {
     func beginMarkedContent(optionalContent: CGPDFDictionaryRef?) {
         let hiding = optionalContent.map { layers.hidingGroups($0) } ?? []
         markedContent.append(hiding.isEmpty ? nil : hiding.map(PDFLayers.name(of:)).joined(separator: " + "))
+        markedLayers.append(optionalContent.flatMap(PDFLayers.layerName(of:)))
     }
 
-    func endMarkedContent() { _ = markedContent.popLast() }
+    func endMarkedContent() {
+        _ = markedContent.popLast()
+        _ = markedLayers.popLast()
+    }
 
     // MARK: Path construction
 
@@ -464,7 +490,13 @@ final class PDFContentScanner {
     }
 
     private func add(_ poly: Polyline) {
-        if poly.isClosed { closed.append(poly) } else { open.append(poly) }
+        if poly.isClosed {
+            closed.append(poly)
+            closedLayers.append(currentLayer)
+        } else {
+            open.append(poly)
+            openLayers.append(currentLayer)
+        }
     }
 
     /// Adds a painted path trimmed to the clip. A fill keeps the part of its area inside the clip; a stroke keeps

@@ -28,6 +28,15 @@ import Foundation
 //   nativecam-cli tools <library.tools|.vtdb|.json> [-o out.json]
 //                                                      read a Fusion 360, Vectric or NativeCAM tool library, print what
 //                                                      came across, optionally save it as a NativeCAM library (T1, T2, …)
+//   nativecam-cli template save <project.nativecam> -o <out.nativecamtemplate> [--no-setup]
+//                                                      save the project's toolpaths (and job setup) as a template
+//   nativecam-cli template apply <template.nativecamtemplate> <project.nativecam> [-o out.nativecam | --in-place]
+//                     [--setup] [--tools library.json]
+//                                                      add a template's toolpaths to a project, matching tools to the
+//                                                      library (the starter library unless --tools), and print what
+//                                                      each toolpath found; --setup uses the template's job setup.
+//                                                      Writes "<project> + <template>.nativecam" beside the project
+//                                                      unless -o names the file or --in-place overwrites the project
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
@@ -45,6 +54,23 @@ func loadProject(_ path: String) -> Project {
 func option(_ name: String, in args: [String]) -> String? {
     guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
     return args[i + 1]
+}
+
+/// "1 vector", "2 vectors".
+func counted(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+
+/// Where `template apply` writes without -o: "<project> + <template>.nativecam" beside the project, or with " 2",
+/// " 3"… when that file is already there.
+func templatedPath(project: String, template: String) -> String {
+    let projectURL = URL(fileURLWithPath: project)
+    let dir = projectURL.deletingLastPathComponent()
+    let stem = "\(projectURL.deletingPathExtension().lastPathComponent) + \(URL(fileURLWithPath: template).deletingPathExtension().lastPathComponent)"
+    var n = 1
+    while true {
+        let url = dir.appendingPathComponent(n == 1 ? stem : "\(stem) \(n)").appendingPathExtension("nativecam")
+        if !FileManager.default.fileExists(atPath: url.path) { return url.path }
+        n += 1
+    }
 }
 
 func formatTime(_ s: Double) -> String {
@@ -209,6 +235,55 @@ case "tools":
         for i in lib.tools.indices { lib.tools[i].number = i + 1 }
         do { try lib.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
         print("Wrote \(lib.tools.count) tools to \(out)")
+    }
+
+case "template":
+    let usage = "usage: nativecam-cli template save <project> -o <out.nativecamtemplate> [--no-setup]"
+        + " | template apply <template> <project> [-o out.nativecam | --in-place] [--setup] [--tools library.json]"
+    switch args.count >= 3 ? args[1] : "" {
+    case "save":
+        guard let out = option("-o", in: args) else { fail(usage) }
+        let project = loadProject(args[2])
+        let name = URL(fileURLWithPath: out).deletingPathExtension().lastPathComponent
+        let template = ToolpathTemplate(name: name, project: project, includeJobSetup: !args.contains("--no-setup"))
+        do { try template.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
+        print("Saved \(template.operations.count) toolpaths to \(out) (format \(template.formatVersion))")
+        for op in template.operations { print("  \(op.name): \(op.vectorSelection?.label ?? "no vectors needed")") }
+    case "apply":
+        guard args.count >= 4 else { fail(usage) }
+        let template: ToolpathTemplate
+        do { template = try ToolpathTemplate.decode(Data(contentsOf: URL(fileURLWithPath: args[2]))) } catch {
+            fail("Can't read template \(args[2]): \(error.localizedDescription)")
+        }
+        let project = loadProject(args[3])
+        var library = ToolLibrary.starter
+        if let path = option("--tools", in: args) {
+            do { library = try ToolLibrary.decode(Data(contentsOf: URL(fileURLWithPath: path))) } catch {
+                fail("Can't read tool library \(path): \(error.localizedDescription)")
+            }
+        }
+        let result = template.apply(to: project, library: library, useJobSetup: args.contains("--setup"))
+        let u = project.displayUnits
+        for row in result.rows {
+            let found = row.rule.map { "\($0.label): \(counted(row.shapeCount, "vector"))\(row.isEmpty ? ", added empty" : "")" }
+                ?? "needs no vectors"
+            print("  \(row.name): \(found)")
+        }
+        for use in result.tools {
+            let was = use.templateNumber.map { ", T\($0) in the template" } ?? ""
+            print("  T\(use.tool.number) \(use.tool.name): \(use.inLibrary ? "in the library" : "not in the library")\(was)")
+        }
+        for change in result.setupChanges { print("  \(change.setting): \(change.from) → \(change.to)") }
+        if let note = result.machineNote { print("  \(note)") }
+        let empty = result.emptyCount == 0 ? "every toolpath found its vectors" : "\(counted(result.emptyCount, "toolpath")) found no vectors"
+        print("Material \(u.format(result.project.stock.thickness)) \(u.symbol); \(empty)")
+        if option("-o", in: args) != nil && args.contains("--in-place") { fail("Pass -o or --in-place, not both.") }
+        // Never over the project unless asked: by default a new file beside it, numbered if the name is taken.
+        let out = option("-o", in: args) ?? (args.contains("--in-place") ? args[3] : templatedPath(project: args[3], template: args[2]))
+        do { try result.project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
+        print("Wrote \(out)")
+    default:
+        fail(usage)
     }
 
 case "sim":

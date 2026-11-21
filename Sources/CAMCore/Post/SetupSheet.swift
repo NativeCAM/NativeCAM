@@ -131,6 +131,7 @@ public enum SetupSheet {
         var current: Int?
         var step = 0
         var lastTile: Int?
+        var loadFeedsNote = false
         let export = job.tiling == nil ? nil : JobExport.files(project, job: job, date: date)
         let names = export.map { JobExport.fileNames($0.files, base: gcodeFile ?? ((project.name.isEmpty ? "Untitled" : project.name) + "." + $0.post.fileExtension), fileExtension: $0.post.fileExtension) } ?? []
         func files(ofTile t: Int) -> [String] {
@@ -173,10 +174,20 @@ public enum SetupSheet {
             let seconds = job.estimatedSeconds(toolpath: tp.id).map(time) ?? "–"
             let angle = angleColumn
                 ? "<td class=\"num\">\(tp.wrapDiameter != nil ? "all round" : tp.indexAngle.map { esc(RotaryIndex.label($0)) } ?? "–")</td>" : ""
+            // Feeds that follow the load: the range, marked.
+            var feedCell = feed(maxFeed)
+            if let lf = tp.loadFeeds, lf.varies {
+                feedCell = "\(u.format(lf.lowest, decimals: 0))–\(feed(maxFeed)) *"
+                loadFeedsNote = true
+            }
             h += "<tr><td>\(step)</td><td>\(esc(tp.name))</td><td>T\(tp.tool.number)</td>\(angle)<td class=\"num\">\(Int(rpm.rounded()))\(machine.spindle == .router ? " (dial)" : "")</td>"
-                + "<td class=\"num\">\(feed(maxFeed))</td><td class=\"num\">\(len(max(0, depth)))</td><td class=\"num\">\(seconds)</td></tr>\n"
+                + "<td class=\"num\">\(feedCell)</td><td class=\"num\">\(len(max(0, depth)))</td><td class=\"num\">\(seconds)</td></tr>\n"
         }
         h += "</table>\n"
+        if loadFeedsNote {
+            h += "<p>* Adjust feeds for load: the feed slows in full-width cuts, inside corners and tight inside arcs, and "
+                + "runs at the higher feed elsewhere.</p>\n"
+        }
 
         // 3D rotary roughing and finishing: the model each one works on, how it sits on the blank and how it's cut.
         let rotary3D = project.operations.filter { op in

@@ -4,7 +4,9 @@ import Foundation
 ///
 /// Supported: LINE, ARC, CIRCLE, LWPOLYLINE and POLYLINE/VERTEX (with bulges), SPLINE (NURBS via de Boor,
 /// or fit points), ELLIPSE, POINT, and INSERT/MINSERT of BLOCKS (nested). Loose open pieces are chained
-/// end to end afterwards so that, e.g., a rectangle drawn as four LINEs becomes one closed loop.
+/// end to end afterwards so that, e.g., a rectangle drawn as four LINEs becomes one closed loop, layer by layer: each
+/// polyline and point keeps its layer (group code 8; a block's entities on layer 0 take the INSERT's layer, as in
+/// AutoCAD), and layer 0, AutoCAD's default, counts as no layer.
 public enum DXFImporter {
     /// - Parameters:
     ///   - tolerance: maximum chord deviation (mm) when flattening arcs and curves.
@@ -24,7 +26,8 @@ public enum DXFImporter {
         }
         builder.process(entities, transform: .scale(units.mmPerUnit, units.mmPerUnit), depth: 0, stack: [])
 
-        let chained = PathChainer.chain(builder.pieces, tolerance: PathChainer.joinTolerance(for: tol))
+        let (chained, layers) = PathChainer.chainByLayer(builder.pieces, layers: builder.pieceLayers,
+                                                         tolerance: PathChainer.joinTolerance(for: tol))
         warnings.append(contentsOf: builder.warningMessages())
         if chained.duplicatesRemoved > 0 {
             warnings.append("Removed \(chained.duplicatesRemoved) duplicate path\(chained.duplicatesRemoved == 1 ? "" : "s") " +
@@ -38,7 +41,8 @@ public enum DXFImporter {
             warnings.append("No supported geometry found in the DXF file.")
         }
         return ImportResult(polylines: chained.polylines, points: builder.points, warnings: warnings,
-                            sourceUnits: units.declared, unitScale: units.mmPerUnit)
+                            sourceUnits: units.declared, unitScale: units.mmPerUnit, polylineLayers: layers,
+                            pointLayers: builder.pointLayers)
     }
 
     /// `$INSUNITS` code → (mm per unit, name, nearest LengthUnit).
@@ -297,6 +301,11 @@ struct DXFGeometryBuilder {
     /// Output pieces in mm (open pieces are chained afterwards).
     var pieces: [Polyline] = []
     var points: [Vec2] = []
+    /// The layer of each piece and point (nil for layer 0).
+    var pieceLayers: [String?] = []
+    var pointLayers: [String?] = []
+    /// The layer of the entity being read.
+    private var layer: String?
     private var skipped: [String: Int] = [:]
     private var notes: [String] = []
     private var noteSet: Set<String> = []
@@ -339,9 +348,12 @@ struct DXFGeometryBuilder {
 
     // MARK: Entity dispatch
 
-    mutating func process(_ entities: [DXFEntity], transform: Transform2D, depth: Int, stack: [String]) {
+    /// `inherited` is the layer of the INSERT whose block `entities` are, for those on layer 0.
+    mutating func process(_ entities: [DXFEntity], transform: Transform2D, depth: Int, stack: [String], inherited: String? = nil) {
         for e in entities {
             if e.int(67) == 1 { paperSpaceCount += 1; continue }
+            let own = e.layer.trimmingCharacters(in: .whitespaces)
+            layer = own == "0" || own.isEmpty ? inherited : own
             switch e.type {
             case "LINE": line(e, transform)
             case "ARC": arc(e, transform)
@@ -350,7 +362,9 @@ struct DXFGeometryBuilder {
             case "POLYLINE": polyline(e, transform)
             case "SPLINE": spline(e, transform)
             case "ELLIPSE": ellipse(e, transform)
-            case "POINT": points.append(transform.apply(e.point(10)))
+            case "POINT":
+                points.append(transform.apply(e.point(10)))
+                pointLayers.append(layer)
             case "INSERT": insert(e, transform, depth: depth, stack: stack)
             case "BLOCK", "ENDBLK": break
             default: skipped[e.type, default: 0] += 1
@@ -367,6 +381,7 @@ struct DXFGeometryBuilder {
         } else {
             pieces.append(poly)
         }
+        pieceLayers.append(layer)
     }
 
     /// Maps an entity's object coordinate system (OCS) onto the XY plane of the WCS.
@@ -589,10 +604,12 @@ struct DXFGeometryBuilder {
             .then(ocs(e, elevation: ins.z))
             .then(parent)
         let local = Transform2D.translation(-block.base).then(.scale(sx, sy))
+        let insertLayer = layer
         for r in 0..<rows {
             for c in 0..<cols {
                 let cell = Transform2D.translation(Vec2(Double(c) * colSpacing, Double(r) * rowSpacing))
-                process(block.entities, transform: local.then(cell).then(toWorld), depth: depth + 1, stack: stack + [key])
+                process(block.entities, transform: local.then(cell).then(toWorld), depth: depth + 1, stack: stack + [key],
+                        inherited: insertLayer)
             }
         }
     }
