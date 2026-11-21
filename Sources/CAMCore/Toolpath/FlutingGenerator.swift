@@ -32,8 +32,8 @@ enum FlutingGenerator {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         if tool.shape.isTapered, params.startDepth + params.depth > min(tool.taperHeight, tool.fluteLength) + 1e-6 {
-            warnings.append("The flutes are \(LengthUnit.mm.format(params.startDepth + params.depth)) mm deep, deeper than '\(tool.name)''s "
-                + "V (\(LengthUnit.mm.format(min(tool.taperHeight, tool.fluteLength))) mm), so their sides come out as steps.")
+            warnings.append("The flutes are \(context.length(params.startDepth + params.depth)) deep, deeper than '\(tool.name)''s "
+                + "V (\(context.length(min(tool.taperHeight, tool.fluteLength)))), so their sides come out as steps.")
         }
         let step = max(0.05, params.passDepth ?? tool.cutting.stepdown)
         let passes = max(1, Int((params.depth / step - 1e-9).rounded(.up)))

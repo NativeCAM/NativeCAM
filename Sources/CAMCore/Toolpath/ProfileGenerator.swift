@@ -39,7 +39,7 @@ enum ProfileGenerator {
             let delta = params.side == .outside ? offset : -offset
             offsetRegions = regions.flatMap { $0.offset(by: delta, arcTolerance: context.arcTolerance) }
             if params.side == .inside && offsetRegions.isEmpty && !regions.isEmpty {
-                warnings.append("The tool (\(String(format: "%.3f", tool.diameter)) mm) is too large to fit inside the selected shape(s).")
+                warnings.append("The tool (\(context.length(tool.diameter))) is too large to fit inside the selected shape(s).")
             }
             // Region loops have the region interior on their left (outer CCW, holes CW).
             // Outside: the part is the region → climb needs it on the right → reverse.
