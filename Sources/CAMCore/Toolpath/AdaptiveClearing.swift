@@ -8,8 +8,8 @@ import Foundation
 /// description of the approach FreeCAD's Adaptive and the commercial "adaptive clearing" toolpaths take (no code
 /// from any of them):
 ///
-/// - **The cleared region** is kept as polygons (Clipper2): the tool's swept discs, merged in every bit of travel. The
-///   few moves since the last merge are kept as capsules and counted too.
+/// - **The cleared region** is kept as polygons (Clipper2): the tool's swept discs, merged every 1.5 radii of travel or
+///   45° of turn. The few moves since the last merge are kept as capsules and counted too.
 /// - **Each step** tries headings within ±45° of the last until the area the bit cuts per millimetre — the material
 ///   in its new disc that its old disc and the cleared region don't cover — is within 5% of the optimal load's width.
 ///   The area is integrated exactly along lines parallel to the step (`ClearedModel.uncut`), not counted on a
@@ -21,9 +21,10 @@ import Foundation
 ///   else a straight line or back along its own path — and lifts otherwise.
 /// - **Entry** is a helix at the deepest point of each area (as wide as the bit's radius allows, so it bores a hole
 ///   with no core), ramping 2°, or a ramp along a chord where no helix fits.
-/// - **The walls.** The walk stays a hair (a tenth of the load) off the walls, then one pass round them — with any
-///   corner reliefs — finishes them as an offset pocket's would. Where the walk couldn't hold its load (slots or
-///   corners too tight for its loops) whatever it left is cleared in passes of the bit's stepdown first.
+/// - **The walls.** The walk stays a hair (a tenth of the load) off the walls, then one pass round them at the full
+///   depth finishes them as an offset pocket's last ring would. Where the walk couldn't hold its load (slots or corners
+///   too tight for its loops), or the walls have corner reliefs (which swing the bit sideways into each corner), what
+///   it left and the walls are cut at the bit's stepdown instead, as an offset pocket would.
 enum AdaptiveClearing {
     /// Helix and ramp descent, radians.
     static let rampAngle = 2.0 * .pi / 180
@@ -111,8 +112,7 @@ enum AdaptiveClearing {
     static func cut(boundary: [Region], tool: Tool, params: PocketParams, levels: [Double], context: GenerationContext,
                     reliefs: [CornerRelief.Relief], safe: [Region], builder b: inout ToolpathBuilder) -> [String] {
         let s = Settings(tool: tool, params: params, machine: context.machine, arcTolerance: context.arcTolerance)
-        var warnings = loopWarnings(tool: tool, params: params, settings: s, context: context)
-        warnings += chipWarnings(tool: tool, settings: s, context: context)
+        var warnings = loopWarnings(tool: tool, settings: s, context: context)
         let plan = plan(boundary: boundary, tool: tool, params: params, levels: levels, context: context)
         let r = tool.radius
         let tol = context.arcTolerance
@@ -241,7 +241,7 @@ enum AdaptiveClearing {
     // MARK: Warnings
 
     /// Loops of the minimum radius cap the feed at √(a·ρ): say so when that's below the programmed feed.
-    static func loopWarnings(tool: Tool, params: PocketParams, settings s: Settings, context: GenerationContext) -> [String] {
+    static func loopWarnings(tool: Tool, settings s: Settings, context: GenerationContext) -> [String] {
         let feed = tool.cutting.feedRate
         let cap = AdaptiveSettings.loopFeedCap(radius: s.loopRadius, machine: context.machine)
         guard cap < 0.95 * feed else { return [] }
@@ -251,24 +251,6 @@ enum AdaptiveClearing {
         return ["Adaptive loops \(context.length(s.loopRadius)) in radius hold the feed to \(context.feed(cap)) with this machine's "
             + "\(accel) X/Y acceleration, below the programmed \(context.feed(feed)). A minimum loop radius of "
             + "\(context.length(full)), or more acceleration in Machine Setup, lets them run at full feed."]
-    }
-
-    /// A light radial cut thins the chip: the chip at the optimal load is the feed per tooth × 2√(k(1−k)) (k = the
-    /// load's share of the diameter, below half). Say so when that's below the chart's range for the bit.
-    static func chipWarnings(tool: Tool, settings s: Settings, context: GenerationContext) -> [String] {
-        guard ChipLoad.applies(to: tool), tool.cutting.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
-        let k = min(0.5, s.load / tool.diameter)
-        let thinning = 2 * (k * (1 - k)).squareRoot()
-        let perTooth = tool.cutting.feedRate / (tool.cutting.spindleRPM * Double(tool.fluteCount))
-        let chip = perTooth * thinning
-        let material = context.stock.material
-        let range = ChipLoad.range(material, diameter: tool.diameter)
-        guard chip < 0.9 * range.lowerBound else { return [] }
-        let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
-        let feed = min(context.machine.maxFeedRate, range.lowerBound / thinning * tool.cutting.spindleRPM * Double(tool.fluteCount))
-        return ["At an optimal load of \(Int((100 * k).rounded()))% the chip thins to \(inch(chip)), below the \(inch(range.lowerBound))–"
-            + "\(inch(range.upperBound)) range for this bit in \(material.label.lowercased()); thin chips rub and burn. A feed of about "
-            + "\(context.feed(feed)) at \(Int(tool.cutting.spindleRPM)) RPM, or a higher load, keeps the chip in range."]
     }
 }
 
@@ -288,10 +270,12 @@ struct SegmentGrid {
     private var tick: UInt32 = 0
 
     init(bounds: Rect2, cell: Double) {
-        let c = max(cell, 1e-3)
+        let w0 = bounds.isEmpty ? 1 : bounds.width, h0 = bounds.isEmpty ? 1 : bounds.height
+        // At most about two million cells, however big the area and small the bit.
+        let c = max(cell, 1e-3, ((w0 + 2 * cell) * (h0 + 2 * cell) / 2e6).squareRoot())
         origin = bounds.isEmpty ? .zero : bounds.min - Vec2(c, c)
         self.cell = c
-        let w = bounds.isEmpty ? 1 : bounds.width + 2 * c, h = bounds.isEmpty ? 1 : bounds.height + 2 * c
+        let w = w0 + 2 * c, h = h0 + 2 * c
         cols = max(1, min(4096, Int((w / c).rounded(.up))))
         rows = max(1, min(4096, Int((h / c).rounded(.up))))
         start = [Int32](repeating: 0, count: cols * rows + 1)

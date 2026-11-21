@@ -20,6 +20,7 @@ enum PocketGenerator {
         let result = clear(regions: regions, tool: tool, params: params, context: context, shapes: shapes, builder: &b)
         var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: result.warnings)
         toolpath.reliefCorners = result.corners
+        if params.strategy == .adaptive { toolpath.radialLoad = params.adaptiveSettings.load }
         return [toolpath]
     }
 
@@ -66,6 +67,7 @@ enum PocketGenerator {
             var tp = cb.build(id: VCarveGenerator.deterministicID(op.id, salt: 1), name: "\(op.name) – clearing", tool: large,
                               rpm: large.cutting.spindleRPM, warnings: cleared.warnings)
             tp.operationID = op.id
+            if params.strategy == .adaptive { tp.radialLoad = params.adaptiveSettings.load }
             // Without depths both toolpaths would say so; the operation's own does.
             if !tp.isEmpty { toolpaths.append(tp) }
             reached = centres.flatMap { $0.offset(by: large.radius, arcTolerance: tol) }

@@ -25,7 +25,7 @@ struct OperationInspector: View {
             }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
                         loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
-                        wrapped: project.stock.rotary?.isWrapped == true)
+                        wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
@@ -58,6 +58,12 @@ struct OperationInspector: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// An adaptive pocket's optimal load, which thins its chip.
+    private var adaptiveLoad: Double? {
+        if case let .pocket(p) = op.kind, p.strategy == .adaptive { return p.adaptiveSettings.load }
+        return nil
     }
 
     @ViewBuilder
@@ -1003,6 +1009,8 @@ struct ToolSection: View {
     var loadFeeds: Binding<Bool?>? = nil
     /// On a wrapped rotary job, where feeds are inverse time and don't follow the load.
     var wrapped = false
+    /// An adaptive pocket's optimal load (a share of the diameter), which thins the chip.
+    var radialLoad: Double? = nil
 
     var body: some View {
         Section("Tool") {
@@ -1034,7 +1042,7 @@ struct ToolSection: View {
             LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
             PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
-                ChipLoadRow(tool: $tool, material: material, machine: machine, units: units)
+                ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad)
             }
         }
     }
@@ -1046,10 +1054,13 @@ struct ChipLoadRow: View {
     let material: MaterialKind
     let machine: MachineProfile
     let units: LengthUnit
+    /// An adaptive pocket's optimal load: the chip is thinner than the feed per tooth.
+    var radialLoad: Double? = nil
 
     var body: some View {
         let r = ChipLoad.range(material, diameter: tool.diameter)
-        let chip = tool.chipLoad
+        let thin = radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
+        let chip = tool.chipLoad * thin
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         let status: (String, Color) = chip < floor ? ("exclamationmark.triangle.fill", .orange)
             : chip > r.upperBound * 1.25 ? ("exclamationmark.circle", .secondary) : ("checkmark.circle.fill", .green)
@@ -1060,9 +1071,13 @@ struct ChipLoadRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Chip load")
                 Text("\(material.label): \(inch(r.lowerBound))–\(inch(r.upperBound)) in").font(.caption).foregroundStyle(.secondary)
+                if let radialLoad, thin < 1 {
+                    Text("Thinned to \(Int((100 * thin).rounded()))% at the \(Int((100 * radialLoad).rounded()))% adaptive load")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine)
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine, thinning: thin)
         HStack {
             Spacer()
             Button("Use Recommended: \(units.format(rec.feed, decimals: 0)) \(units == .inch ? "ipm" : "mm/min") @ \(Int(rec.rpm.rounded())) RPM") {

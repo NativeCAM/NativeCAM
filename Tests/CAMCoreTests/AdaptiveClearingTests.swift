@@ -484,18 +484,33 @@ struct AdaptiveClearingTests {
         #expect(slowed <= 0.1 * (full + slowed), "\(Int(slowed)) of \(Int(full + slowed)) mm slowed")
     }
 
-    /// At a light load the chip thins: below the chart for the bit the job says so, with a feed that fixes it.
-    @Test func warnsWhenTheLoadThinsTheChipTooMuch() {
-        func messages(_ tool: Tool, _ load: Double) -> [String] {
+    /// At a light load the chip thins: the chip-load check allows for it, says so when it's below the chart for the
+    /// bit, and suggests a feed for the thinner chip, so raising the feed for adaptive doesn't then read as too thick.
+    @Test func chipLoadCheckAllowsForTheThinnerChip() throws {
+        func job(_ tool: Tool, _ load: Double) -> JobResult {
             let op = Self.pocket([Self.rectangle], tool: tool, Self.params(depth: 6, adaptive: AdaptiveSettings(optimalLoad: load)))
-            return CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [op])).issues.map(\.message)
+            return CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [op]))
         }
+        func chip(_ job: JobResult) -> [String] { job.issues.map(\.message).filter { $0.hasPrefix("Chip load") } }
         // The starter 1/8" at 120 in/min, 18,000 RPM: 0.0033 in a tooth, 0.0022 in at 12%.
-        #expect(messages(Self.eighth, 0.12).contains { $0.hasPrefix("At an optimal load of 12% the chip thins to 0.0022 in") })
-        #expect(!messages(Self.eighth, 0.4).contains { $0.hasPrefix("At an optimal load") })
+        let thin = chip(job(Self.eighth, 0.12))
+        #expect(thin.count == 1)
+        #expect(thin.first?.hasPrefix("Chip load 0.0022 in at the 12% adaptive load (a light cut thins the chip to 65% of the feed per tooth) "
+            + "is below the 0.0030 in–0.0050 in range for this bit in plywood") == true)
+        #expect(try #require(job(Self.eighth, 0.12).toolpaths.first).radialLoad == 0.12)
+        // At 40% the chip is nearly the feed per tooth, in range.
+        #expect(chip(job(Self.eighth, 0.4)).isEmpty)
+        // The suggested feed for the thinner chip.
+        let rec = ChipLoad.recommend(for: Self.eighth, material: .plywood, machine: .avidPRO6060, thinning: ChipLoad.radialThinning(load: 0.12))
         var fast = Self.eighth
-        fast.cutting.feedRate = 180.inch
-        #expect(!messages(fast, 0.12).contains { $0.hasPrefix("At an optimal load") })
+        fast.cutting.feedRate = rec.feed
+        fast.cutting.spindleRPM = rec.rpm
+        #expect(chip(job(fast, 0.12)).isEmpty)
+        // The same feed in an offset pocket, where the chip isn't thinned, is in range or thick, never thin.
+        let offset = CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle], tool: fast,
+                                                                                                    Self.params(depth: 6, strategy: .offset))]))
+        #expect(!chip(offset).contains { $0.contains("below") })
+        #expect(ChipLoad.radialThinning(load: 0.5) == 1 && abs(ChipLoad.radialThinning(load: 0.12) - 0.65) < 0.001)
     }
 
     /// Wrapped round a rotary blank, the strategy isn't available yet: the pocket says so and cuts nothing.
