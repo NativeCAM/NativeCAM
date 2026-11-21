@@ -22,6 +22,9 @@ final class ViewportRenderer {
 
     var camera = ViewportCamera()
     private(set) var scene = ViewportScene()
+    /// How far the view turns for a scene whose machine frame is the world turned (`ViewportScene.turned`): a quarter
+    /// turn, so the machine's +X is to the right on screen in the top and front views.
+    static let turnAzimuth = Float.pi / 2
     private var hasScene = false
 
     // Scene lines.
@@ -35,6 +38,7 @@ final class ViewportRenderer {
         var stock: SIMD3<Float>
         var travel: SIMD2<Float>?
         var spacing: Float
+        var turned: Bool
     }
     private var bedKey: BedKey?
     private var bedBuffer: MTLBuffer?
@@ -103,7 +107,12 @@ final class ViewportRenderer {
             linesVersion = new.geometryVersion
         }
 
-        let bk = BedKey(stock: new.stockSize, travel: new.machineTravel, spacing: new.gridSpacing)
+        let bk = BedKey(stock: new.stockSize, travel: new.machineTravel, spacing: new.gridSpacing, turned: new.turned)
+        // Turn the view with the machine's frame, so the operator's side of the machine stays toward the viewer when a
+        // job's rotary axis is along Y (the camera starts unturned).
+        if new.turned != scene.turned {
+            camera.azimuth += new.turned ? -Self.turnAzimuth : Self.turnAzimuth
+        }
         if bk != bedKey {
             rebuildBed(bk)
             bedKey = bk
@@ -180,7 +189,7 @@ final class ViewportRenderer {
     }
 
     private func rebuildBed(_ key: BedKey) {
-        let bed = ViewportMeshes.bed(stockSize: key.stock, travel: key.travel, spacing: key.spacing)
+        let bed = ViewportMeshes.bed(stockSize: key.stock, travel: key.travel, spacing: key.spacing, turned: key.turned)
         var all: [LineVertex] = []
         func append(_ part: [LineVertex]) -> Range<Int> {
             let start = all.count
@@ -337,7 +346,8 @@ final class ViewportRenderer {
         var c = camera
         if let preset {
             let a = ViewportCamera.angles(for: preset)
-            c.azimuth = a.azimuth
+            // Front is the operator's side of the machine, whichever way the world is turned on it.
+            c.azimuth = a.azimuth - (scene.turned ? Self.turnAzimuth : 0)
             c.elevation = a.elevation
         }
         let b = stockBounds

@@ -421,7 +421,8 @@ struct ContentView: View {
             let program = url.pathExtension.lowercased() == "sbp" ? OpenSBPParser.parse(text)
                 : try GCodeParser.parse(text, controller: Dialect.for(project.machine))
             let fallback = library.tools.first ?? ToolLibrary.starter.tools[0]
-            let tps = program.toolpaths(tools: library.tools, stock: project.stock, fallback: fallback)
+            // Read in the project's frame, so a file for a rotary axis along Y lands on the design the right way round.
+            let tps = program.toolpaths(tools: library.tools, frame: RotaryFrame(project), fallback: fallback)
             workspace.simulateProgram(tps, name: url.lastPathComponent, project: project)
             if !program.warnings.isEmpty {
                 alert = AlertInfo(title: "G-code notes", message: program.warnings.joined(separator: "\n"))

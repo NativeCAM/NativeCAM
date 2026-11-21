@@ -66,7 +66,10 @@ public enum GCodeCheck {
 
         let machine = project.machine, stock = project.stock
         let expected = machine.outputUnits
+        // The lowest Z that counts as safe Z: as written it can be up to half the last decimal below the real one
+        // (0.00127 mm in inches to 4 places), and at least a micron is allowed.
         let safeZ = stock.toWork(Vec3(0, 0, stock.clearanceHeight)).z
+            - max(1e-3, expected.toMM(pow(10, -Double(dialect.coordinateDecimals(expected)))) / 2 + 1e-6)
         let unsupported: Severity = dialect.strict ? .error : .warning
         let name = dialect.name
         let crlf = dialect.lineEnding == "\r\n"
@@ -231,7 +234,7 @@ public enum GCodeCheck {
                     }
                 case 0, 1:
                     if byHand, message.flatMap(RotaryOutput.manualTurn) != nil {
-                        if let z = rotaryZ, z < safeZ - 1e-3 {
+                        if let z = rotaryZ, z < safeZ {
                             add(.error, n, "turn below safe Z", "Stops for the blank to be turned by hand with the tool below "
                                 + "safe Z, where the blank could swing into it.")
                         }
@@ -284,7 +287,7 @@ public enum GCodeCheck {
                 let target = v["Z"].map { absolute ? u.toMM($0) : (rotaryZ ?? 0) + u.toMM($0) }
                 // Only a rapid can swing the blank into the tool: a wrapped cut turns it on purpose, at a feed.
                 if v["A"] != nil && motion == 0 {
-                    let low = { (z: Double) in z < safeZ - 1e-3 }
+                    let low = { (z: Double) in z < safeZ }
                     if rotaryZ.map(low) ?? true || target.map(low) ?? false {
                         add(.error, n, "A below safe Z", "Turns the rotary axis below safe Z, or before the tool has lifted to "
                             + "it, so the blank could swing into the tool.")
@@ -322,7 +325,7 @@ public enum GCodeCheck {
                             : "Moves sideways before lifting to safe Z.")
                     }
                     awaitingLift = false
-                } else if let z = tz, v["Z"] != nil, z >= safeZ - 1e-3 {
+                } else if let z = tz, v["Z"] != nil, z >= safeZ {
                     lifted = true
                 }
             }
@@ -452,6 +455,7 @@ public enum GCodeCheck {
         }
         let safe = stock.toWork(Vec3(0, 0, stock.clearanceHeight)).z
         let rotary = RotaryOutput(project)
+        let frame = RotaryFrame(project)
         var out: [ExpectedMove] = []
         var tool: Int?, speed: Double?
         // The A value last written: a toolpath more than a turn away from it starts the shorter way round, as the post
@@ -460,12 +464,9 @@ public enum GCodeCheck {
         // A blank turned by hand: the post stops the spindle for each turn, so it spins up again afterwards.
         var dial: Double?
         for tp in toolpaths where !tp.isEmpty {
-            // A wrapped toolpath keeps the tool over the axis (Y0) and turns its sheet Y into A.
+            // A wrapped toolpath keeps the tool over the axis centreline and turns its sheet Y into A.
             let wrap = tp.wrapDiameter.flatMap { d in rotary.map { (d, $0) } }
-            func work(_ p: Vec3) -> Vec3 {
-                let w = stock.toWork(p)
-                return wrap == nil ? w : Vec3(w.x, 0, w.z)
-            }
+            func work(_ p: Vec3) -> Vec3 { wrap == nil ? frame.toWork(p) : frame.overAxis(p) }
             let a = tp.indexAngle.flatMap { angle in rotary?.position(angle) }
             func written(_ p: Vec3) -> Double? {
                 if let (d, out) = wrap { return out.value(RotaryWrap.angle(y: p.y, centerY: stock.originPoint.y, diameter: d)) }
@@ -495,7 +496,7 @@ public enum GCodeCheck {
                 let ex = r(e.x), ey = r(e.y), ez = r(e.z), ea = angle(m.end)
                 let turns = wrap != nil && ea != sa
                 var move = ExpectedMove(kind: m.kind, end: e, start: work(position),
-                                        center: m.kind.isArc ? stock.toWork(Vec3(m.center, 0)).xy : .zero,
+                                        center: m.kind.isArc ? frame.toWork(Vec3(m.center, 0)).xy : .zero,
                                         feed: m.feed, tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: ea)
                 move.turnsA = turns
                 switch m.kind {
@@ -518,6 +519,7 @@ public enum GCodeCheck {
         let tol = step / 2 + 1e-6
         let feedTol = (dialect.feedPerSecond ? 60 : 1) * units.toMM(pow(10, -Double(dialect.feedDecimals(units)))) / 2 + 1e-6
         let expected = expectedMoves(toolpaths, project: project, dialect: dialect).filter { dialect.comparesDwells || $0.kind != .dwell }
+        let frame = RotaryFrame(project)
         var written: [(motion: Motion, start: Vec3, startA: Double?, tool: Int, rpm: Double, line: Int)] = []
         var lastA: Double?
         for seg in program.segments {
@@ -579,6 +581,7 @@ public enum GCodeCheck {
             }
             if e.turnsA {
                 if let problem = wrappedFeedProblem(w.motion, start: w.start, startA: w.startA, expected: e, dialect: dialect,
+                                                    frame: frame,
                                                     units: units, feedTolerance: feedTol, turnSpeed: RotaryWrap.turnSpeed(project.machine)) {
                     fail(line, problem)
                 }
@@ -627,11 +630,12 @@ public enum GCodeCheck {
     /// What's wrong with the feed of a wrapped move that turns the blank, read back from the file; nil when it gives
     /// the toolpath's feed at the tool tip, no faster than the blank turns at `turnSpeed` (degrees per minute). The tip's
     /// path is worked out from the coordinates as written, the way the post does, so only a wrong value (not rounding)
-    /// shows.
+    /// shows. The tool moves along the blank in X, or in Y on an axis along Y (`frame`).
     static func wrappedFeedProblem(_ m: Motion, start: Vec3, startA: Double?, expected e: ExpectedMove, dialect: Dialect,
-                                   units: LengthUnit, feedTolerance: Double, turnSpeed: Double) -> String? {
+                                   frame: RotaryFrame, units: LengthUnit, feedTolerance: Double, turnSpeed: Double) -> String? {
         guard let a0 = startA, let a1 = m.a else { return "Turns the blank without a known A position (“\(e.toolpath)”)." }
-        let length = RotaryWrap.tipLength(x0: start.x, r0: start.z, degrees0: a0, x1: m.end.x, r1: m.end.z, degrees1: a1)
+        let x0 = frame.along(start), x1 = frame.along(m.end)
+        let length = RotaryWrap.tipLength(x0: x0, r0: start.z, degrees0: a0, x1: x1, r1: m.end.z, degrees1: a1)
         switch RotaryWrap.feedMode(dialect) {
         case .inverseTime?:
             guard let f = m.inverseTime else {
@@ -642,7 +646,7 @@ public enum GCodeCheck {
                 return "Inverse-time F\(String(format: "%.4f", f)) reads back where “\(e.toolpath)” needs F\(String(format: "%.4f", want))."
             }
         case let .perMinute(rule)?:
-            let want = units.toMM(RotaryWrap.perMinuteFeed(rule, dx: units.fromMM(m.end.x - start.x), dz: units.fromMM(m.end.z - start.z),
+            let want = units.toMM(RotaryWrap.perMinuteFeed(rule, dx: units.fromMM(x1 - x0), dz: units.fromMM(m.end.z - start.z),
                                                            da: a1 - a0, length: units.fromMM(length), feed: units.fromMM(e.feed),
                                                            turnSpeed: turnSpeed))
             if abs(m.feed - want) > feedTolerance {

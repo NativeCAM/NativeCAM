@@ -31,9 +31,13 @@ public enum SetupSheet {
                 }
                 return "<dt>Rotary</dt><dd>Designs wrap around \(len(blank.wrapDiameterOrBlank)): the middle of the sheet is the top of the blank at \(letter)0, and \(letter) turns while the tool cuts. Raise the tool clear of the chuck and tailstock before starting.</dd>"
             }
+            // On an axis along Y the blank's length runs along machine Y, and X zero is on the centreline.
+            let mounting = RotaryFrame(project).alignment
+            let zero = "\(mounting.axisName) at the \(RotaryOutput.xZero(stock, alignment: mounting)), "
+                + "\(mounting.acrossName) on the rotation axis centreline"
             setupRows = """
-            <dt>Material</dt><dd>\(esc(stock.materialName)) rotary blank: \(shape), \(len(blank.length)) long</dd>
-            <dt>XY zero</dt><dd>X at the \(RotaryOutput.xZero(stock)), Y on the rotation axis centreline</dd>
+            <dt>Material</dt><dd>\(esc(stock.materialName)) rotary blank: \(shape), \(len(blank.length)) long\(mounting == .x ? "" : ", along machine Y")</dd>
+            <dt>XY zero</dt><dd>\(zero)</dd>
             <dt>Z zero</dt><dd class="error">On the rotation axis\(avid ? " (Avid: Rotary tab ▸ Z Axis Touch)" : ""), not the top of the blank</dd>
             \(rotaryRow(blank))
             <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the \(blank.isWrapped ? "wrap diameter" : "top face") (\(len(blank.topRadius + stock.clearanceHeight)) from the axis)</dd>
@@ -86,7 +90,7 @@ public enum SetupSheet {
 
         """
         if job.tiling == nil, let ext = extents(job.toolpaths) {
-            let lo = stock.toWork(ext.min), hi = stock.toWork(ext.max)
+            let (lo, hi) = RotaryFrame(project).workBox(min: ext.min, max: ext.max)
             if let wrapped = wrappedExtents(project: project, job: job, len: len) {
                 h += "<dt>Cutting extents</dt><dd>\(wrapped)</dd>\n"
             } else {
@@ -333,20 +337,25 @@ public enum SetupSheet {
     /// rounding and 3D rotary roughing and finishing on faces), as the machine sees them: X along the blank, the range
     /// of A the program cuts at (as the posts write it, and the Avid post's program-extents comment gives it), and Z
     /// from the rotation axis. Their sheet Y is an angle, not a move: Y stays on the axis centreline, so Y is given
-    /// only for the toolpaths cut on faces. nil on any other job.
+    /// only for the toolpaths cut on faces. On an axis along Y (`RotaryFrame`) the blank runs along Y and X is the
+    /// axis across it. nil on any other job.
     static func wrappedExtents(project: Project, job: JobResult, len: (Double) -> String) -> String? {
         let stock = project.stock, machine = project.machine
+        let frame = RotaryFrame(project)
         let paths = job.toolpaths.filter { !$0.isEmpty }
         guard stock.rotary != nil, let rotary = RotaryOutput(project), let ext = extents(paths),
               paths.contains(where: { $0.wrapDiameter != nil && $0.cuttingExtents != nil }) else { return nil }
+        // Along the blank and Z, in the blank's own frame: its X is the machine's along the axis either way.
         let lo = stock.toWork(ext.min), hi = stock.toWork(ext.max)
-        var parts = ["X \(len(lo.x)) to \(len(hi.x)) along the blank"]
+        var parts = ["\(frame.alignment.axisName) \(len(lo.x)) to \(len(hi.x)) along the blank"]
         if let flat = extents(paths.filter { $0.wrapDiameter == nil }) {
-            parts.append("Y \(len(stock.toWork(flat.min).y)) to \(len(stock.toWork(flat.max).y)) on the faces")
+            let (a, b) = frame.workBox(min: flat.min, max: flat.max)
+            let across = frame.alignment == .x ? (a.y, b.y) : (a.x, b.x)
+            parts.append("\(frame.alignment.acrossName) \(len(across.0)) to \(len(across.1)) on the faces")
         }
         let units = machine.outputUnits
         let decimals = (Dialect.for(machine) ?? .avidMach4).coordinateDecimals(units)
-        if let a = rotary.cutRange(paths, stock: stock, units: units, decimals: decimals) {
+        if let a = rotary.cutRange(paths, frame: frame, units: units, decimals: decimals) {
             func degrees(_ v: Double) -> String { String(format: "%.3f°", v == 0 ? 0 : v) }
             parts.append("\(esc(rotary.letter)) \(degrees(a.lowerBound)) to \(degrees(a.upperBound))")
         }

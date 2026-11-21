@@ -31,6 +31,8 @@ public struct AvidMach4Post: Sendable {
     public func post(_ toolpaths: [Toolpath]) -> String {
         var w = Writer(lineNumbers: machine.lineNumbers)
         let paths = toolpaths.filter { !$0.isEmpty }
+        // Machine X and Y: the blank's own frame turned for an axis along Y.
+        let frame = RotaryFrame(project)
 
         // Header comments
         w.comment("\(project.name)")
@@ -50,13 +52,13 @@ public struct AvidMach4Post: Sendable {
             w.comment("Material: \(stock.materialName) X=\(num(stock.width)) Y=\(num(stock.height)) Z=\(num(stock.thickness)) \(units.symbol)")
             w.comment("Z zero: \(stock.zZero.label)   XY zero: \(stock.xyOrigin.label)")
         }
-        // Wrapped toolpaths (every one on a wrapped job; rounding and 3D rotary finishing on faces) keep Y on the axis
-        // centreline: their sheet Y range is a range of A. With any of them, the line gives the range of A the program
-        // cuts at, from the A words as written, and Y only for the other toolpaths. The A words are known only once the
-        // program is written (a toolpath starts a whole number of turns on from where the one before left the blank),
-        // so the line is filled in at the end.
+        // Wrapped toolpaths (every one on a wrapped job; rounding and 3D rotary finishing on faces) keep the tool on the
+        // axis centreline (Y0, or X0 on an axis along Y): their sheet Y range is a range of A. With any of them, the line
+        // gives the range of A the program cuts at, from the A words as written, and the axis across the blank only for
+        // the other toolpaths. The A words are known only once the program is written (a toolpath starts a whole number
+        // of turns on from where the one before left the blank), so the line is filled in at the end.
         var extentsLine: (index: Int, extents: Toolpath.Extents)?
-        if let ext = extents(paths) {
+        if let ext = extents(paths, frame: frame) {
             if rotary != nil, paths.contains(where: { $0.wrapDiameter != nil && $0.cuttingExtents != nil }) {
                 extentsLine = (w.lines.count, ext)
                 w.line("")
@@ -97,7 +99,7 @@ public struct AvidMach4Post: Sendable {
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
             if toolChanged {
-                toolChange(tp, first: currentTool == nil, writer: &w, state: &state)
+                toolChange(tp, first: currentTool == nil, frame: frame, writer: &w, state: &state)
                 currentTool = tp.tool.number
                 currentRPM = nil
             }
@@ -126,7 +128,7 @@ public struct AvidMach4Post: Sendable {
             state.z = round(safe)
             // Wrapped: the tool stays over the axis and the blank turns under it as it cuts.
             if let rotary, tp.wrapDiameter != nil {
-                let writer = wrappedWriter(rotary)
+                let writer = wrappedWriter(rotary, frame: frame)
                 let approach = writer.approach(tp, state: &state, after: lastA)
                 let cut = writer.motions(tp, state: &state, offset: approach.offset)
                 for line in approach.lines + cut.lines { w.line(line) }
@@ -135,7 +137,7 @@ public struct AvidMach4Post: Sendable {
                 if let a = cut.cutA { cuts(a) }
                 continue
             }
-            let startWork = stock.toWork(tp.start)
+            let startWork = frame.toWork(tp.start)
             w.line("G00 X\(num(startWork.x)) Y\(num(startWork.y))")
             state.x = round(startWork.x)
             state.y = round(startWork.y)
@@ -149,11 +151,11 @@ public struct AvidMach4Post: Sendable {
                 turned = true
             }
             if let a = state.a, tp.motions.contains(where: { $0.kind != .rapid && $0.kind != .dwell }) { cuts(a...a) }
-            emitMotions(tp, writer: &w, state: &state)
+            emitMotions(tp, frame: frame, writer: &w, state: &state)
         }
 
         // Footer
-        let home = stock.toWork(stock.parkPosition)
+        let home = frame.toWork(stock.parkPosition)
         w.line("G00 Z\(num(home.z, isZ: true))")
         if let rotary, turned {
             let home = RotaryOutput.home(after: lastA ?? 0)
@@ -168,15 +170,19 @@ public struct AvidMach4Post: Sendable {
             let ext = line.extents
             var a = ""
             if let rotary, let cutA { a = "\(rotary.word(value: cutA.lowerBound)) to \(rotary.word(value: cutA.upperBound))  " }
-            let flat = extents(paths.filter { $0.wrapDiameter == nil }).map { "Y\(num($0.min.y)) to Y\(num($0.max.y))  " } ?? ""
-            w.lines[line.index] = Writer.comment("Program extents: X\(num(ext.min.x)) to X\(num(ext.max.x))  \(flat)\(a)Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
+            // Along the blank: every toolpath. Across it: only the ones cut on faces, the rest staying on the centreline.
+            let flat = extents(paths.filter { $0.wrapDiameter == nil }, frame: frame)
+            let x = frame.alignment == .x ? ext : flat, y = frame.alignment == .x ? flat : ext
+            let xs = x.map { "X\(num($0.min.x)) to X\(num($0.max.x))  " } ?? ""
+            let ys = y.map { "Y\(num($0.min.y)) to Y\(num($0.max.y))  " } ?? ""
+            w.lines[line.index] = Writer.comment("Program extents: \(xs)\(ys)\(a)Z\(num(ext.min.z)) to Z\(num(ext.max.z))")
         }
         return w.text
     }
 
     // MARK: Blocks
 
-    private func toolChange(_ tp: Toolpath, first: Bool, writer w: inout Writer, state: inout ModalState) {
+    private func toolChange(_ tp: Toolpath, first: Bool, frame: RotaryFrame, writer w: inout Writer, state: inout ModalState) {
         let tool = tp.tool
         if !first {
             let safe = workZ(stock.clearanceHeight)
@@ -195,7 +201,7 @@ public struct AvidMach4Post: Sendable {
             if first {
                 w.comment("Load T\(tool.number) \(tool.name) and zero Z\(stock.rotary == nil ? "" : " on the rotation axis") before starting")
             } else {
-                let park = stock.toWork(stock.parkPosition)
+                let park = frame.toWork(stock.parkPosition)
                 w.line("G00 Z\(num(park.z, isZ: true))")
                 w.line("G00 X\(num(park.x)) Y\(num(park.y))")
                 w.comment("Change to T\(tool.number) \(tool.name), \(stock.rotary == nil ? "re-zero Z with the touch plate" : RotaryOutput.rezero(stock, avid: true)), then Cycle Start")
@@ -218,10 +224,10 @@ public struct AvidMach4Post: Sendable {
         }
     }
 
-    private func emitMotions(_ tp: Toolpath, writer w: inout Writer, state: inout ModalState) {
+    private func emitMotions(_ tp: Toolpath, frame: RotaryFrame, writer w: inout Writer, state: inout ModalState) {
         var position = tp.start
         for m in tp.motions {
-            let e = stock.toWork(m.end)
+            let e = frame.toWork(m.end)
             let ex = round(e.x), ey = round(e.y), ez = round(e.z)
             switch m.kind {
             case .rapid:
@@ -241,8 +247,8 @@ public struct AvidMach4Post: Sendable {
                     w.line(words)
                 }
             case .arcCW, .arcCCW:
-                let s = stock.toWork(position)
-                let c = stock.toWork(Vec3(m.center, 0))
+                let s = frame.toWork(position)
+                let c = frame.toWork(Vec3(m.center, 0))
                 // I/J relative to the start point exactly as written, so Mach4's radius check sees consistent values.
                 let sx = state.x ?? round(s.x), sy = state.y ?? round(s.y)
                 let cx = round(c.x), cy = round(c.y)
@@ -278,8 +284,8 @@ public struct AvidMach4Post: Sendable {
     }
 
     /// Writes wrapped toolpaths in this post's number formats, fed in G93 inverse time.
-    private func wrappedWriter(_ rotary: RotaryOutput) -> WrappedWriter {
-        WrappedWriter(stock: stock, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
+    private func wrappedWriter(_ rotary: RotaryOutput, frame: RotaryFrame) -> WrappedWriter {
+        WrappedWriter(frame: frame, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
                       feeds: .inverseTime, turnSpeed: RotaryWrap.turnSpeed(machine), rapidWord: "G00", feedWord: "G01",
                       dwell: { "G04 P\(String(format: "%.2f", $0))" })
     }
@@ -313,12 +319,12 @@ public struct AvidMach4Post: Sendable {
     /// Material-relative height → work Z.
     private func workZ(_ zAboveTop: Double) -> Double { stock.toWork(Vec3(0, 0, zAboveTop)).z }
 
-    private func extents(_ paths: [Toolpath]) -> Toolpath.Extents? {
+    private func extents(_ paths: [Toolpath], frame: RotaryFrame) -> Toolpath.Extents? {
         var lo: Vec3?
         var hi: Vec3?
         for tp in paths {
             guard let e = tp.cuttingExtents else { continue }
-            let a = stock.toWork(e.min), b = stock.toWork(e.max)
+            let (a, b) = frame.workBox(min: e.min, max: e.max)
             lo = lo.map { Vec3(min($0.x, a.x), min($0.y, a.y), min($0.z, a.z)) } ?? a
             hi = hi.map { Vec3(max($0.x, b.x), max($0.y, b.y), max($0.z, b.z)) } ?? b
         }

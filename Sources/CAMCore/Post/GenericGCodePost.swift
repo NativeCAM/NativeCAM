@@ -76,6 +76,8 @@ public struct GenericGCodePost: PostProcessor {
         var w = Writer(lineNumbers: machine.lineNumbers, ending: dialect.lineEnding, limit: dialect.maxLineLength,
                        comments: dialect.writesComments)
         let paths = prepared(toolpaths.filter { !$0.isEmpty })
+        // Machine X and Y: the blank's own frame turned for an axis along Y.
+        let frame = RotaryFrame(project)
 
         w.comment(project.name)
         w.comment("Post: \(dialect.name) - NativeCAM \(version)")
@@ -121,7 +123,7 @@ public struct GenericGCodePost: PostProcessor {
         for tp in paths {
             let toolChanged = currentTool != tp.tool.number
             if toolChanged {
-                toolChange(tp, first: currentTool == nil, writer: &w)
+                toolChange(tp, first: currentTool == nil, frame: frame, writer: &w)
                 state = ModalState()
                 currentTool = tp.tool.number
                 currentRPM = nil
@@ -152,7 +154,7 @@ public struct GenericGCodePost: PostProcessor {
             state.z = round(safe)
             // Wrapped: the tool stays over the axis and the blank turns under it as it cuts.
             if let rotary, tp.wrapDiameter != nil {
-                guard let writer = wrappedWriter(rotary) else {
+                guard let writer = wrappedWriter(rotary, frame: frame) else {
                     // The job checks report this as an error; never write the sheet's Y as if it were flat.
                     w.comment("SKIPPED: \(dialect.name) can't be given the right feed for wrapped moves")
                     continue
@@ -164,7 +166,7 @@ public struct GenericGCodePost: PostProcessor {
                 lastA = state.a ?? lastA
                 continue
             }
-            let start = stock.toWork(tp.start)
+            let start = frame.toWork(tp.start)
             w.line("G0 X\(fmt(round(start.x))) Y\(fmt(round(start.y)))")
             state.x = round(start.x)
             state.y = round(start.y)
@@ -176,10 +178,10 @@ public struct GenericGCodePost: PostProcessor {
                 lastA = target
                 turned = true
             }
-            emitMotions(tp, writer: &w, state: &state)
+            emitMotions(tp, frame: frame, writer: &w, state: &state)
         }
 
-        let home = stock.toWork(stock.parkPosition)
+        let home = frame.toWork(stock.parkPosition)
         w.line("G0 Z\(fmt(round(home.z)))")
         if let rotary, turned {
             let home = RotaryOutput.home(after: lastA ?? 0)
@@ -193,7 +195,7 @@ public struct GenericGCodePost: PostProcessor {
         return w.text
     }
 
-    private func toolChange(_ tp: Toolpath, first: Bool, writer w: inout Writer) {
+    private func toolChange(_ tp: Toolpath, first: Bool, frame: RotaryFrame, writer w: inout Writer) {
         let tool = tp.tool
         if !first {
             w.line("G0 Z\(fmt(round(workZ(stock.clearanceHeight))))")
@@ -207,7 +209,7 @@ public struct GenericGCodePost: PostProcessor {
         } else if first {
             w.comment("Load T\(tool.number) \(tool.name) and zero Z\(stock.rotary == nil ? "" : " on the rotation axis") before starting")
         } else {
-            let park = stock.toWork(stock.parkPosition)
+            let park = frame.toWork(stock.parkPosition)
             w.line("G0 Z\(fmt(round(park.z)))")
             w.line("G0 X\(fmt(round(park.x))) Y\(fmt(round(park.y)))")
             w.comment("Change to T\(tool.number) \(tool.name), \(stock.rotary == nil ? "re-zero Z" : RotaryOutput.rezero(stock, avid: false)), then resume")
@@ -246,10 +248,10 @@ public struct GenericGCodePost: PostProcessor {
         }
     }
 
-    private func emitMotions(_ tp: Toolpath, writer w: inout Writer, state: inout ModalState) {
+    private func emitMotions(_ tp: Toolpath, frame: RotaryFrame, writer w: inout Writer, state: inout ModalState) {
         var position = tp.start
         for m in tp.motions {
-            let e = stock.toWork(m.end)
+            let e = frame.toWork(m.end)
             let ex = round(e.x), ey = round(e.y), ez = round(e.z)
             switch m.kind {
             case .rapid, .feed:
@@ -266,8 +268,8 @@ public struct GenericGCodePost: PostProcessor {
                     w.line(words)
                 }
             case .arcCW, .arcCCW:
-                let s = stock.toWork(position)
-                let c = stock.toWork(Vec3(m.center, 0))
+                let s = frame.toWork(position)
+                let c = frame.toWork(Vec3(m.center, 0))
                 let sx = state.x ?? round(s.x), sy = state.y ?? round(s.y)
                 let cx = round(c.x), cy = round(c.y)
                 let f = roundFeed(m.feed)
@@ -303,9 +305,9 @@ public struct GenericGCodePost: PostProcessor {
 
     /// Writes wrapped toolpaths in this dialect's number formats; nil when the controller can't be given the
     /// right feed for them (the job checks report it).
-    private func wrappedWriter(_ rotary: RotaryOutput) -> WrappedWriter? {
+    private func wrappedWriter(_ rotary: RotaryOutput, frame: RotaryFrame) -> WrappedWriter? {
         guard let feeds = RotaryWrap.feedMode(dialect) else { return nil }
-        return WrappedWriter(stock: stock, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
+        return WrappedWriter(frame: frame, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
                              feeds: feeds, turnSpeed: RotaryWrap.turnSpeed(machine), rapidWord: "G0", feedWord: "G1",
                              dwell: { dwell($0) })
     }

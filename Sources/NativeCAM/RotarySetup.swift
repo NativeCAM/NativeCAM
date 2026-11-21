@@ -38,7 +38,8 @@ struct RotaryBlankRows: View {
             LengthField(title: blank.shape == .cylinder ? "Diameter" : "Size across faces", mm: value(\.diameter), units: units,
                         help: blank.shape == .cylinder ? "Measure the blank with calipers" : "Width of the bar from one face to the opposite face",
                         minimum: 1)
-            LengthField(title: "Length", mm: value(\.length), units: units, help: "Along the rotation axis (machine X)", minimum: 1)
+            LengthField(title: "Length", mm: value(\.length), units: units,
+                        help: "Along the rotation axis (machine \((project.machine.rotary?.alignment ?? .x).axisName))", minimum: 1)
             Picker("Designs", selection: Binding(get: { blank.layout ?? .faces }, set: { layout in
                 guard var b = project.stock.rotary else { return }
                 b.layout = layout == .faces ? nil : layout
@@ -126,8 +127,8 @@ struct LengthValue: View {
 
 // MARK: Rotary zero
 
-/// Where X zero sits along a rotary blank. Y zero is always on the axis centreline, so the flat job's corner
-/// choices collapse to these three.
+/// Where zero sits along a rotary blank (X zero, or Y zero on an axis along Y). The other axis's zero is always on the
+/// axis centreline, so the flat job's corner choices collapse to these three.
 enum RotaryXZero: String, CaseIterable, Identifiable {
     case left, middle, right
     var id: String { rawValue }
@@ -148,51 +149,67 @@ enum RotaryXZero: String, CaseIterable, Identifiable {
         }
     }
 
-    var label: String {
+    /// "Left end" or "Front end" (the end at design X = 0, where Avid's chuck is), "Middle", "Right end" or "Back end".
+    func label(_ alignment: RotaryAxis.Alignment) -> String {
         switch self {
-        case .left: "Left end"
+        case .left: alignment.endName(start: true).capitalized + " end"
         case .middle: "Middle"
-        case .right: "Right end"
+        case .right: alignment.endName(start: false).capitalized + " end"
         }
     }
 }
 
-/// The Zero section's rows for a rotary job: X zero along the blank, and Y and Z on the rotation axis.
+/// The Zero section's rows for a rotary job: zero along the blank (X, or Y on an axis along Y), and the other axis and
+/// Z on the rotation axis.
 struct RotaryZeroRows: View {
     @Binding var stock: Stock
     let machine: MachineProfile
 
     var body: some View {
         let blank = stock.rotary ?? RotaryStock()
+        let mounting = machine.rotary?.alignment ?? .x
         // Avid's Mach4 profile and its EX (CNC12) controller both have a Rotary tab with these touch-off routines.
         let avid = machine.isLegacyAvidMach4 || machine.controller?.family == .centroid
-        Picker("X zero", selection: Binding(get: { RotaryXZero(stock.xyOrigin) }, set: { stock.xyOrigin = $0.origin })) {
-            ForEach(RotaryXZero.allCases) { Text($0.label).tag($0) }
+        Picker("\(mounting.axisName) zero", selection: Binding(get: { RotaryXZero(stock.xyOrigin) }, set: { stock.xyOrigin = $0.origin })) {
+            ForEach(RotaryXZero.allCases) { Text($0.label(mounting)).tag($0) }
         }
-        RotaryOriginDiagram(shape: blank.shape, xZero: RotaryXZero(stock.xyOrigin))
-            .frame(height: 70)
-        LabeledContent("Y zero", value: "Axis centreline")
+        RotaryOriginDiagram(shape: blank.shape, xZero: RotaryXZero(stock.xyOrigin), alignment: mounting)
+            .frame(height: mounting == .x ? 70 : 190)
+        LabeledContent("\(mounting.acrossName) zero", value: "Axis centreline")
         LabeledContent("Z zero", value: "Rotation axis")
         if blank.shape == .squareBar {
             LabeledContent("A zero", value: "A face square to the spindle")
         }
-        Text("Touch off Z on the rotation axis and Y on its centreline"
-             + (avid ? " (Avid: Rotary tab ▸ Z Axis Touch, then Y Axis Touch)" : "")
-             + ", and set X by hand. Every Z in the file is measured from the axis, not the top of the blank."
+        // Avid's Rotary tab names Y Axis Touch for an axis along X; nothing here says which routine centres X on one
+        // along Y, so none is named.
+        Text("Touch off Z on the rotation axis and \(mounting.acrossName) on its centreline"
+             + (avid ? (mounting == .x ? " (Avid: Rotary tab ▸ Z Axis Touch, then Y Axis Touch)" : " (Avid: Rotary tab ▸ Z Axis Touch)") : "")
+             + ", and set \(mounting.axisName) by hand. Every Z in the file is measured from the axis, not the top of the blank."
              + (blank.shape == .squareBar ? (avid ? " Home A to square the jaws, and so the bar's faces, to the spindle." : "") : ""))
             .font(.caption).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-/// Small picture of the blank seen from above, with X zero marked on the axis centreline.
+/// Small picture of the blank seen from above, with zero along it marked on the axis centreline: lying left to right
+/// on an axis along X, front to back (up the picture) on one along Y, the chuck at the end at design X = 0 either way.
 struct RotaryOriginDiagram: View {
     let shape: RotaryStock.Shape
     let xZero: RotaryXZero
+    var alignment: RotaryAxis.Alignment = .x
 
     var body: some View {
         Canvas { ctx, size in
-            let rect = CGRect(x: size.width / 2 - 75, y: 16, width: 150, height: size.height - 32)
+            // Drawn along X, then turned a quarter turn anticlockwise for an axis along Y.
+            let alongY = alignment == .y
+            let long = alongY ? size.height - 40 : 150.0
+            let across = alongY ? 38.0 : size.height - 32
+            if alongY {
+                ctx.translateBy(x: size.width / 2, y: size.height / 2)
+                ctx.rotate(by: .degrees(-90))
+                ctx.translateBy(x: -size.width / 2, y: -size.height / 2)
+            }
+            let rect = CGRect(x: size.width / 2 - long / 2, y: size.height / 2 - across / 2, width: long, height: across)
             let wood = Color(red: 0.85, green: 0.72, blue: 0.53)
             if shape == .cylinder {
                 // Shade a dowel so it reads as round.
@@ -219,19 +236,21 @@ struct RotaryOriginDiagram: View {
             }
             let p = CGPoint(x: x, y: rect.midY)
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)), with: .color(.red))
-            var xArrow = Path(); xArrow.move(to: p); xArrow.addLine(to: CGPoint(x: p.x + 22, y: p.y))
-            var yArrow = Path(); yArrow.move(to: p); yArrow.addLine(to: CGPoint(x: p.x, y: p.y - 22))
-            ctx.stroke(xArrow, with: .color(.red), lineWidth: 2)
-            ctx.stroke(yArrow, with: .color(.green), lineWidth: 2)
+            // Machine X red and Y green: along the blank and up the picture along X, turned with it along Y (where up
+            // the picture is X's negative side, so X points the other way).
+            var along = Path(); along.move(to: p); along.addLine(to: CGPoint(x: p.x + 22, y: p.y))
+            var up = Path(); up.move(to: p); up.addLine(to: CGPoint(x: p.x, y: p.y + (alongY ? 22 : -22)))
+            ctx.stroke(along, with: .color(alongY ? .green : .red), lineWidth: 2)
+            ctx.stroke(up, with: .color(alongY ? .red : .green), lineWidth: 2)
         }
-        .accessibilityLabel("X zero at the \(xZero.label.lowercased()) of the blank, on the axis centreline")
+        .accessibilityLabel("\(alignment.axisName) zero at the \(xZero.label(alignment).lowercased()) of the blank, on the axis centreline")
     }
 }
 
 // MARK: Machine rotary axis
 
-/// Whether the machine has a rotary axis, which way it turns and how high its centre is. NativeCAM can only turn
-/// an A axis along X so far, so the letter and alignment are shown but can't be changed to anything else.
+/// Whether the machine has a rotary axis, which way it runs and turns, and how high its centre is. NativeCAM can only
+/// turn an A axis so far, so the letter is shown but can't be changed to anything else.
 struct RotaryAxisRows: View {
     @Binding var machine: MachineProfile
     let units: LengthUnit
@@ -250,16 +269,17 @@ struct RotaryAxisRows: View {
                     }
                 }
             }
-            Picker("Runs along", selection: Binding(get: { axis.alignment }, set: { if $0 == .x { machine.rotary?.alignment = $0 } })) {
+            Picker("Runs along", selection: Binding(get: { axis.alignment }, set: { machine.rotary?.alignment = $0 })) {
                 ForEach(RotaryAxis.Alignment.allCases) { alignment in
-                    Text(alignment == .x ? "X" : "Y (not supported yet)").tag(alignment)
-                        .selectionDisabled(alignment != .x)
+                    Text(alignment == .x ? "X (chuck at the left)" : "Y (chuck at the front)").tag(alignment)
                 }
             }
+            .help("The machine axis the blank lies along: X for Avid's rotary mounted across the table's left end, Y for one mounted at the front (Vectric's Wrap X2A)")
+            let forward = axis.alignment.topRolls(reversed: false), back = axis.alignment.topRolls(reversed: true)
             Toggle("Reversed", isOn: Binding(get: { axis.reversed }, set: { machine.rotary?.reversed = $0 }))
                 .help(axis.turnsByHand
-                      ? "Turn on when the indexer's angles count up as the top of the blank rolls toward +Y, so each stop asks for the reading on your indexer."
-                      : "Jog A positive: the top of the blank should roll toward −Y. If it rolls toward +Y, turn this on, or anything around the blank comes out mirrored.")
+                      ? "Turn on when the indexer's angles count up as the top of the blank rolls toward \(back), so each stop asks for the reading on your indexer."
+                      : "Jog A positive: the top of the blank should roll toward \(forward). If it rolls toward \(back), turn this on, or anything around the blank comes out mirrored.")
             if !axis.turnsByHand {
                 OptionalRateField(title: "Turn speed", value: Binding(get: { axis.turnSpeed }, set: { machine.rotary?.turnSpeed = $0 }),
                                   unit: "°/min", prompt: "Not set",
@@ -269,8 +289,9 @@ struct RotaryAxisRows: View {
                                 units: units, prompt: "Not measured",
                                 help: "Height of the chuck centre above the spoilboard, so NativeCAM can check that a job fits under the Z travel")
             Text(axis.turnsByHand
-                 ? "The program stops before each new angle with the spindle off and says which angle to turn the blank to. Angles count up as the top of the blank rolls toward −Y."
-                 : "NativeCAM turns an A axis along X so far. To check Reversed, jog A positive: the top of the blank should roll toward −Y.")
+                 ? "The program stops before each new angle with the spindle off and says which angle to turn the blank to. Angles count up as the top of the blank rolls toward \(axis.alignment.topRolls(reversed: axis.reversed))."
+                 : "To check Reversed, jog A positive: the top of the blank should roll toward \(forward)"
+                    + (axis.alignment == .x ? "." : ", to your right as you face the machine. NativeCAM writes an axis along Y for Avid Mach4, LinuxCNC and grblHAL."))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

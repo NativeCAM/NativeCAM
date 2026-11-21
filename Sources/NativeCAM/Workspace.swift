@@ -297,6 +297,8 @@ final class Workspace {
         scene.stockSize = SIMD3(Float(project.stock.width), Float(project.stock.height), Float(project.stock.thickness))
         scene.machineTravel = SIMD2(Float(project.machine.travel.x), Float(project.machine.travel.y))
         scene.gridSpacing = project.displayUnits == .inch ? 25.4 : 10
+        // The 3D view is in the blank's frame; on a rotary axis along Y the machine is that turned a quarter turn.
+        scene.turned = RotaryFrame(project).alignment == .y
         scene.lines = lines
         scene.geometryVersion = geometryVersion
         scene.heightField = heightField ?? (showModelPreview ? modelPreview : nil)

@@ -71,9 +71,6 @@ public enum RotaryIndex {
         // with a stop (M0) for each turn when the blank is turned by hand.
         let manual = machine.rotary?.turnsByHand ?? false
         if let axis = machine.rotary {
-            if axis.alignment != .x {
-                issues.append(JobIssue(.error, "NativeCAM can only cut rotary stock on a rotary axis that runs along X so far."))
-            }
             if !manual, axis.letter.rawValue != String(letter) {
                 issues.append(JobIssue(.error, "NativeCAM can only turn a rotary axis driven by A words so far; this machine's "
                     + "is \(axis.letter.rawValue)."))
@@ -99,6 +96,10 @@ public enum RotaryIndex {
                 issues.append(JobIssue(.error, "\(dialect.name) has no A axis NativeCAM can write rotary moves for."
                     + (dialect.language == .gcode ? " If you turn the blank by hand or with an indexer, turn on Turn by hand "
                         + "under Rotary Axis." : "")))
+            } else if let axis = machine.rotary, !dialect.rotaryAlignments.contains(axis.alignment) {
+                issues.append(JobIssue(.error, "NativeCAM writes moves for a rotary axis along \(axis.alignment.axisName) only for "
+                    + "Avid Mach4, LinuxCNC and grblHAL so far, not \(dialect.name). If you turn the blank by hand or with an "
+                    + "indexer, turn on Turn by hand under Rotary Axis."))
             }
         }
         // Every turn happens at safe Z, which has to clear the blank's corners.
@@ -249,8 +250,10 @@ public enum RotaryIndex {
                 + "to size only at the wrap diameter: at the bottom of this cut it comes out \(shrink)% narrower around the "
                 + "blank.", operation: tp.name))
         }
+        let mounting = project.machine.rotary?.alignment ?? .x
         issues.append(JobIssue(.info, "Before the first wrapped cut, jog the rotary axis positive: the top of the blank should "
-            + "roll toward −Y. If it rolls toward +Y, tick Reversed, or wrapped designs come out mirrored."))
+            + "roll toward \(mounting.topRolls(reversed: false)). If it rolls toward \(mounting.topRolls(reversed: true)), tick "
+            + "Reversed, or wrapped designs come out mirrored."))
         return issues
     }
 
@@ -363,9 +366,10 @@ struct RotaryOutput {
     /// the blank (`WrappedWriter.approach`), and the angle each face is cut at. nil when the program writes no A for a
     /// cut (a blank turned by hand). `units` and `decimals` are the post's coordinates', which decide the moves it
     /// writes.
-    func cutRange(_ paths: [Toolpath], stock: Stock, units: LengthUnit, decimals: Int) -> ClosedRange<Double>? {
+    func cutRange(_ paths: [Toolpath], frame: RotaryFrame, units: LengthUnit, decimals: Int) -> ClosedRange<Double>? {
         struct State: WrapModalState { var x: Double?, y: Double?, z: Double?, feed: Double?, a: Double? }
-        let writer = WrappedWriter(stock: stock, rotary: self, units: units, decimals: decimals, feedDecimals: 1, feeds: .inverseTime,
+        let stock = frame.stock
+        let writer = WrappedWriter(frame: frame, rotary: self, units: units, decimals: decimals, feedDecimals: 1, feeds: .inverseTime,
                                    turnSpeed: .infinity, rapidWord: "G0", feedWord: "G1", dwell: { _ in "" })
         var state = State()
         var lastA: Double?
@@ -418,11 +422,11 @@ struct RotaryOutput {
         return Double(number)
     }
 
-    /// Where X zero is on the blank.
-    static func xZero(_ stock: Stock) -> String {
+    /// Where zero along the blank is: X zero, or Y zero on an axis along Y.
+    static func xZero(_ stock: Stock, alignment: RotaryAxis.Alignment = .x) -> String {
         switch stock.xyOrigin {
-        case .lowerLeft, .upperLeft: "left end of the blank"
-        case .lowerRight, .upperRight: "right end of the blank"
+        case .lowerLeft, .upperLeft: "\(alignment.endName(start: true)) end of the blank"
+        case .lowerRight, .upperRight: "\(alignment.endName(start: false)) end of the blank"
         case .center: "middle of the blank"
         }
     }
@@ -432,14 +436,19 @@ struct RotaryOutput {
     static func header(_ stock: Stock, units: LengthUnit, num: (Double) -> String, avid: Bool, axis: RotaryAxis? = nil,
                        feeds: RotaryWrap.FeedMode? = nil, turnsWhileCutting: Bool = false) -> [String] {
         guard let blank = stock.rotary else { return [] }
+        let mounting = axis?.alignment ?? .x
         let shape = blank.shape == .cylinder ? "round, D=\(num(blank.diameter))" : "square bar, \(num(blank.diameter)) across"
         var lines = [
             "Material: \(stock.materialName) rotary blank, \(shape), L=\(num(blank.length)) \(units.symbol)",
             "Z ZERO = CENTRE OF ROTATION" + (avid ? " (Avid: Rotary tab > Z Axis Touch)" : ""),
-            "Y ZERO = AXIS CENTRELINE   X ZERO = \(xZero(stock).uppercased())",
+            mounting == .x
+                ? "Y ZERO = AXIS CENTRELINE   X ZERO = \(xZero(stock).uppercased())"
+                : "X ZERO = AXIS CENTRELINE   Y ZERO = \(xZero(stock, alignment: mounting).uppercased())",
         ]
+        if mounting == .y { lines.append("Rotary axis along Y: A turns about +Y") }
         if blank.isWrapped {
-            lines.append("Wrapped: sheet Y wraps around D=\(num(blank.wrapDiameterOrBlank)), A = Y x 360 / (pi x D), A0 = middle of the sheet")
+            let sheet = mounting == .x ? "" : "sheet "
+            lines.append("Wrapped: sheet Y wraps around D=\(num(blank.wrapDiameterOrBlank)), A = \(sheet)Y x 360 / (pi x D), A0 = middle of the sheet")
         }
         if blank.isWrapped || turnsWhileCutting {
             switch feeds {
@@ -452,7 +461,7 @@ struct RotaryOutput {
         if let axis, axis.turnsByHand {
             lines += [
                 "TURN THE BLANK BY HAND AT EACH STOP (M0)",
-                "Angles count up as the top of the blank rolls toward \(axis.reversed ? "+Y" : "-Y")",
+                "Angles count up as the top of the blank rolls toward \(axis.alignment.topRolls(reversed: axis.reversed, ascii: true))",
             ]
         }
         return lines
@@ -465,7 +474,7 @@ struct RotaryOutput {
         }
         return "Turned by hand. The program stops with the spindle off and the tool at safe Z before each new angle, and "
             + "says which angle to turn the blank to. Angles count up as the top of the blank rolls toward "
-            + "\(axis.reversed ? "+Y" : "−Y"). Start with the blank at 0°."
+            + "\(axis.alignment.topRolls(reversed: axis.reversed)). Start with the blank at 0°."
     }
 
     /// The re-zero instruction after a tool change.

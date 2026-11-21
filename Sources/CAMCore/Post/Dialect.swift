@@ -186,6 +186,10 @@ public struct Dialect: Hashable, Sendable {
     /// Accepts G93 inverse-time feeds, where F is one over the move's time in minutes. It's the one way to give a
     /// rotary move an exact feed on every controller that has it.
     public var inverseTime: Bool = false
+    /// The machine axes a driven rotary axis may run along for NativeCAM to write its moves (`RotaryFrame`): along X
+    /// everywhere, and along Y where Avid's "Wrap X2A" mounting is written and checked (Avid Mach4, LinuxCNC and
+    /// grblHAL).
+    public var rotaryAlignments: Set<RotaryAxis.Alignment> = [.x]
 
     public var hasAAxis: Bool { rotaryAxes.contains("A") }
 
@@ -212,7 +216,8 @@ public struct Dialect: Hashable, Sendable {
         allowedLetters: Set("ABCDFGHIJKLMNPQRSTUVWXYZ"), strict: false, acceptedUnits: [.inch, .mm],
         dwell: .secondsWithDecimal, arcCheck: .absolute(0.0127), maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
         coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: true,
-        cannedCycles: CannedCycles(expanded: [74, 76, 84, 87, 88]), rotaryAxes: Set("ABC"), inverseTime: true)
+        cannedCycles: CannedCycles(expanded: [74, 76, 84, 87, 88]), rotaryAxes: Set("ABC"), inverseTime: true,
+        rotaryAlignments: [.x, .y])
 
     /// The dialect a machine's post writes; nil when NativeCAM has no post for its controller yet.
     public static func `for`(_ machine: MachineProfile) -> Dialect? {
@@ -296,6 +301,7 @@ public struct Dialect: Hashable, Sendable {
         d.rotaryAxes = Set("ABC")
         d.rotaryFeed = .linearAxesOnly
         d.inverseTime = true
+        d.rotaryAlignments = [.x, .y]
         // G74 and G84 tap with a floating holder (since 2.8) and feed out to the retract height; G76 threads on a lathe,
         // and G87 and G88 are "accepted, but the behavior is undefined".
         d.cannedCycles = CannedCycles(expanded: [74, 84],
@@ -409,6 +415,7 @@ public struct Dialect: Hashable, Sendable {
             d.allowedM = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 30, 56, 62, 63, 64, 65, 66, 67, 68]
             d.allowedLetters = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
             d.rotaryAxes = Set("ABC")
+            d.rotaryAlignments = [.x, .y]
             // Its README lists only the drilling cycles and lathe G76; the core parses an experimental G84.
             let rejected = "rejected as unsupported (error 20)"
             d.cannedCycles = CannedCycles(otherMeanings: [74: rejected, 76: "a lathe threading cycle",
