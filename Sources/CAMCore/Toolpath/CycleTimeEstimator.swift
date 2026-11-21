@@ -17,6 +17,11 @@ public struct CycleTimeEstimate: Sendable, Hashable {
     public var motionSeconds: [[Double]]
     /// What the old distance ÷ feed estimate would say, for comparison.
     public var constantVelocity: Double
+    /// Seconds before each toolpath's own motions (same order as the toolpaths): the retract after the one before, a
+    /// tool change, the spindle, the rapid over to its start and a turn of the blank.
+    public var leadInSeconds: [Double] = []
+    /// Seconds after the last toolpath: the retract, the turn of the blank home and the move to park.
+    public var endSeconds: Double = 0
 }
 
 /// Trapezoidal-velocity planner over the job's moves.
@@ -43,6 +48,8 @@ public enum CycleTimeEstimator {
         var isRapid: Bool
         /// (toolpath, motion) this block times, if any.
         var ref: (Int, Int)?
+        /// Otherwise, the toolpath whose lead-in it is part of; the toolpath count for the end of the program.
+        var leadIn = 0
     }
 
     public static func estimate(_ toolpaths: [Toolpath], project: Project) -> CycleTimeEstimate {
@@ -62,7 +69,13 @@ public enum CycleTimeEstimator {
         let rotary = RotaryOutput(project)
         let axis = machine.rotary ?? RotaryAxis()
         var blankAt = 0.0
+        var turnedYet = false
         var dial: Double?
+        // The toolpath whose lead-in the blocks added between toolpaths belong to.
+        var leadIn = 0
+        /// Where the tool is, for the moves between toolpaths: on a wrapped toolpath it stays over the axis, its sheet
+        /// Y being an angle of the blank, so no move in Y takes it there or back.
+        func machinePoint(_ p: Vec3, wrapped: Bool) -> Vec3 { wrapped ? Vec3(p.x, stock.originPoint.y, p.z) : p }
 
         func lineBlock(from a: Vec3, to b: Vec3, feed: Double?, ref: (Int, Int)?) -> Block? {
             let d = SIMD3(b.x - a.x, b.y - a.y, b.z - a.z)
@@ -83,7 +96,8 @@ public enum CycleTimeEstimator {
         }
 
         func addRapid(_ a: Vec3, _ b: Vec3) {
-            if let blk = lineBlock(from: a, to: b, feed: nil, ref: nil) {
+            if var blk = lineBlock(from: a, to: b, feed: nil, ref: nil) {
+                blk.leadIn = leadIn
                 blocks.append(blk)
                 constantVelocity += blk.length / (machine.rapidRateForEstimates / 60)
             }
@@ -124,11 +138,12 @@ public enum CycleTimeEstimator {
         func addPause(_ seconds: Double) {
             guard seconds > 0 else { return }
             blocks.append(Block(length: 0, vMax: 0, accel: 1, startDir: .zero, endDir: .zero, stopBefore: true, stopAfter: true,
-                                fixedSeconds: seconds, isRapid: false, ref: nil))
+                                fixedSeconds: seconds, isRapid: false, ref: nil, leadIn: leadIn))
             constantVelocity += seconds
         }
 
         for (ti, tp) in toolpaths.enumerated() where !tp.isEmpty {
+            leadIn = ti
             // What the post does between toolpaths: retract, tool change, spindle, rapid over to the start.
             if let p = position, p.z < clearance { addRapid(p, Vec3(p.xy, clearance)); position = Vec3(p.xy, clearance) }
             if currentTool != tp.tool.number {
@@ -141,9 +156,12 @@ public enum CycleTimeEstimator {
                 tp.wrapDiameter.flatMap { d in rotary?.value(RotaryWrap.angle(y: y, centerY: stock.originPoint.y, diameter: d)) }
             }
             // Like the post: the shorter way round from where the blank is when that's more than a turn away (after a
-            // long rounding pass, say).
+            // long rounding pass, say), and the first angle as it is.
             let wrapStart = wrappedAngle(tp.start.y)
-            let turnTo = (wrapStart ?? tp.indexAngle.flatMap { rotary?.position($0) }).map { RotaryOutput.nearestTurn($0, after: blankAt) }
+            let turnTo = (wrapStart ?? tp.indexAngle.flatMap { rotary?.position($0) }).map {
+                RotaryOutput.nearestTurn($0, after: turnedYet ? blankAt : nil)
+            }
+            if turnTo != nil { turnedYet = true }
             let wrapOffset = wrapStart.flatMap { start in turnTo.map { $0 - start } } ?? 0
             if let rotary, rotary.manual, let to = turnTo, to != dial {
                 // The program stops with the spindle off while the blank is turned by hand.
@@ -158,8 +176,9 @@ public enum CycleTimeEstimator {
                 addPause(1e-9)
                 currentRPM = tp.spindleRPM
             }
-            if let p = position { addRapid(p, Vec3(tp.start.xy, max(p.z, tp.start.z))) }
-            position = tp.start
+            let start = machinePoint(tp.start, wrapped: tp.wrapDiameter != nil)
+            if let p = position { addRapid(p, Vec3(start.xy, max(p.z, start.z))) }
+            position = start
             if let to = turnTo, to != blankAt {
                 addPause(axis.turnSeconds(from: blankAt, to: to))
                 blankAt = to
@@ -228,10 +247,11 @@ public enum CycleTimeEstimator {
                 }
                 p = m.end
             }
-            position = p
+            position = machinePoint(p, wrapped: tp.wrapDiameter != nil)
             if let end = wrappedAngle(p.y) { blankAt = end + wrapOffset }
         }
         // Footer: retract, turn a driven axis back to A0, and park.
+        leadIn = toolpaths.count
         if let p = position {
             let park = stock.parkPosition
             addRapid(p, Vec3(p.xy, max(p.z, park.z)))
@@ -241,15 +261,23 @@ public enum CycleTimeEstimator {
 
         let times = plan(blocks, deviation: delta, lookahead: machine.plannerLookahead)
         var motionSeconds = toolpaths.map { [Double](repeating: 0, count: $0.motions.count) }
+        var leadInSeconds = [Double](repeating: 0, count: toolpaths.count)
+        var endSeconds = 0.0
         var feedT = 0.0, rapidT = 0.0, overheadT = 0.0
         for (blk, t) in zip(blocks, times) {
-            if let (ti, mi) = blk.ref { motionSeconds[ti][mi] += t }
+            if let (ti, mi) = blk.ref {
+                motionSeconds[ti][mi] += t
+            } else if blk.leadIn < toolpaths.count {
+                leadInSeconds[blk.leadIn] += t
+            } else {
+                endSeconds += t
+            }
             if blk.length == 0 { overheadT += t } else if blk.isRapid { rapidT += t } else { feedT += t }
         }
         let total = times.reduce(0, +)
         return CycleTimeEstimate(total: total, feedSeconds: feedT, rapidSeconds: rapidT, overheadSeconds: overheadT,
                                  toolpathSeconds: motionSeconds.map { $0.reduce(0, +) }, motionSeconds: motionSeconds,
-                                 constantVelocity: constantVelocity)
+                                 constantVelocity: constantVelocity, leadInSeconds: leadInSeconds, endSeconds: endSeconds)
     }
 
     /// Plans entry speeds (backward then forward pass) and returns each block's duration.

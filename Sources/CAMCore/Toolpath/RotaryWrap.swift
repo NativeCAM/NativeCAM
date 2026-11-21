@@ -58,6 +58,24 @@ public enum RotaryWrap {
         return min(feed / length, maxInverseTime)
     }
 
+    /// Seconds a move of a wrapped toolpath takes at constant speed, from sheet coordinates (the sheet's line
+    /// `centerY` at A0, Z measured from the sheet's `radius`): a feed, the time the post's inverse time gives it (the
+    /// tool tip's path at its feed); a rapid, the longer of turning at `turnSpeed` (degrees per second) and moving X
+    /// and Z at `rapidRate` (mm/min).
+    static func seconds(_ m: Motion, from a: Vec3, centerY: Double, radius: Double, rapidRate: Double, turnSpeed: Double) -> Double {
+        let d0 = (a.y - centerY) / radius * 180 / .pi, d1 = (m.end.y - centerY) / radius * 180 / .pi
+        switch m.kind {
+        case .feed:
+            let length = tipLength(x0: a.x, r0: radius + a.z, degrees0: d0, x1: m.end.x, r1: radius + m.end.z, degrees1: d1)
+            return 60 / inverseTime(length: length, feed: m.feed)
+        case .rapid:
+            let linear = ((m.end.x - a.x) * (m.end.x - a.x) + (m.end.z - a.z) * (m.end.z - a.z)).squareRoot()
+            return max(abs(d1 - d0) / max(turnSpeed, 1e-9), linear / max(rapidRate, 1) * 60)
+        default:
+            return m.duration(from: a, rapidRate: rapidRate)
+        }
+    }
+
     /// How a controller is given the feed for a wrapped move.
     public enum FeedMode: Hashable, Sendable {
         /// G93 inverse time on every move that turns the rotary axis (exact everywhere it's supported).

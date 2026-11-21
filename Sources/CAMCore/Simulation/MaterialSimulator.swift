@@ -258,48 +258,87 @@ public struct SimulationTimeline: Sendable {
     /// True when the timeline turns the blank between toolpaths (a rotary job).
     public let turnsBlank: Bool
 
-    /// `durations`, when given (e.g. `CycleTimeEstimate.motionSeconds`), sets each motion's playback time so the
-    /// simulation runs at the machine's real pace; otherwise motions take distance ÷ feed.
+    /// `estimate`, when given, sets the pace the machine really runs at: each motion takes the time the run-time
+    /// estimate gives it (`CycleTimeEstimate.motionSeconds`), and its time between toolpaths (retracts, tool changes,
+    /// the spindle, rapids over to the next start) and after the last one (`leadInSeconds`, `endSeconds`) passes with
+    /// the tool waiting where the last toolpath left it, so the job takes the estimate's total. Otherwise motions take
+    /// distance ÷ feed (a wrapped move, the tool tip's path round the blank at its feed, as the post's inverse time
+    /// asks) and nothing passes between toolpaths.
     ///
     /// `turnSpeed` (degrees per second) makes it a rotary timeline: the blank starts at A0, turns to each
     /// toolpath's index angle before it cuts (with the tool over its start, as the post does), and turns back to
-    /// A0 at the end. Turns take at least a quarter of a second.
+    /// A0 at the end. Turns take at least a quarter of a second. Like the post, the blank turns the shorter way to an
+    /// angle more than a turn from where it is (after a long rounding, say; a wrapped toolpath then cuts that many whole
+    /// turns on), and at the end it stops on the nearest whole turn rather than wind back more than ten
+    /// (`RotaryOutput.home`).
     ///
     /// `wrap` (the sheet's Y at A0 and its radius) is for wrapped toolpaths: the blank turns to the angle of a wrapped
     /// toolpath's start before it, then with every move as the tool goes across the sheet.
-    public init(toolpaths: [Toolpath], rapidRate: Double, durations: [[Double]]? = nil, turnSpeed: Double? = nil,
+    public init(toolpaths: [Toolpath], rapidRate: Double, estimate: CycleTimeEstimate? = nil, turnSpeed: Double? = nil,
                 wrap: (centerY: Double, radius: Double)? = nil) {
         self.toolpaths = toolpaths
         var t = 0.0
         var steps: [Step] = []
         var a = 0.0
+        // Whether the blank has been turned yet: until then the post writes the first angle as it is.
+        var turned = false
+        func turnSeconds(to angle: Double) -> Double {
+            // The post writes A to a thousandth of a degree, so a wrapped toolpath that ends on a whole turn is there.
+            guard let speed = turnSpeed, abs(angle - a) > 1e-6 else { return 0 }
+            return max(0.25, abs(angle - a) / max(speed, 1))
+        }
         func turn(to angle: Double, toolpath i: Int, at p: Vec3) {
-            guard let speed = turnSpeed, angle != a else { return }
-            let d = max(0.25, abs(angle - a) / max(speed, 1))
+            let d = turnSeconds(to: angle)
+            guard d > 0 else { return }
             steps.append(Step(toolpathIndex: i, start: p, motion: Motion(kind: .dwell, end: p, feed: d), startTime: t, duration: d,
                               angle: angle, turn: Turn(from: a, to: angle)))
             t += d
             a = angle
         }
+        /// The estimate's time between toolpaths, less what the timeline's own turn there takes, with the tool waiting
+        /// where the last step left it.
+        func pause(_ seconds: Double, toolpath i: Int, at p: Vec3) {
+            guard seconds > 1e-9 else { return }
+            let last = steps.last
+            let at = last?.motion.end ?? p
+            steps.append(Step(toolpathIndex: last?.toolpathIndex ?? i, start: at, motion: Motion(kind: .dwell, end: at, feed: seconds),
+                              startTime: t, duration: seconds, angle: a))
+            t += seconds
+        }
         for (i, tp) in toolpaths.enumerated() {
             let wrapped = tp.wrapDiameter != nil ? wrap : nil
             func angle(_ p: Vec3) -> Double { wrapped.map { (p.y - $0.centerY) / $0.radius * 180 / .pi } ?? 0 }
-            turn(to: wrapped == nil ? tp.indexAngle ?? 0 : angle(tp.start), toolpath: i, at: tp.start)
+            let start = wrapped == nil ? tp.indexAngle ?? 0 : angle(tp.start)
+            let to = turnSpeed == nil ? start : RotaryOutput.nearestTurn(start, after: turned ? a : nil)
+            let offset = wrapped == nil ? 0 : to - start
+            if let lead = estimate?.leadInSeconds, i < lead.count { pause(lead[i] - turnSeconds(to: to), toolpath: i, at: tp.start) }
+            turn(to: to, toolpath: i, at: tp.start)
+            turned = true
             var k = 0
             tp.forEachMotion { s, m in
                 var d = m.duration(from: s, rapidRate: rapidRate)
-                if let dur = durations, i < dur.count, k < dur[i].count { d = dur[i][k] }
+                if let w = wrapped {
+                    d = RotaryWrap.seconds(m, from: s, centerY: w.centerY, radius: w.radius, rapidRate: rapidRate,
+                                           turnSpeed: turnSpeed ?? RotaryAxis.nominalTurnSpeed / 60)
+                }
+                if let dur = estimate?.motionSeconds, i < dur.count, k < dur[i].count { d = dur[i][k] }
                 k += 1
                 var step = Step(toolpathIndex: i, start: s, motion: m, startTime: t, duration: d, angle: a)
                 if wrapped != nil, m.kind != .dwell {
-                    a = angle(m.end)
+                    a = angle(m.end) + offset
                     step.endAngle = a
                 }
                 steps.append(step)
                 t += d
             }
         }
-        if let last = toolpaths.indices.last { turn(to: 0, toolpath: last, at: toolpaths[last].motions.last?.end ?? toolpaths[last].start) }
+        if let last = toolpaths.indices.last {
+            let end = toolpaths[last].motions.last?.end ?? toolpaths[last].start
+            let home = RotaryOutput.home(after: a)
+            let d = turnSeconds(to: home)
+            turn(to: home, toolpath: last, at: end)
+            if let seconds = estimate?.endSeconds { pause(seconds - d, toolpath: last, at: end) }
+        }
         self.steps = steps
         duration = t
         turnsBlank = turnSpeed != nil
@@ -384,20 +423,21 @@ public struct SimulationSession: Sendable {
     /// second. The run-time estimate assumes the same (`RotaryAxis.nominalTurnSpeed`).
     public static let turnSpeed = RotaryAxis.nominalTurnSpeed / 60
 
-    /// `turnSpeed` is the rotary axis's own speed in degrees per minute (`RotaryAxis.drivenTurnSpeed`); nil turns
-    /// the blank at the nominal pace.
-    public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, durations: [[Double]]? = nil,
+    /// `estimate` (the job's run-time estimate for these toolpaths) times the simulation as the machine runs it; see
+    /// `SimulationTimeline`. `turnSpeed` is the rotary axis's own speed in degrees per minute
+    /// (`RotaryAxis.drivenTurnSpeed`); nil turns the blank at the nominal pace.
+    public init(toolpaths: [Toolpath], stock: Stock, rapidRate: Double, cellSize: Double? = nil, estimate: CycleTimeEstimate? = nil,
                 turnSpeed: Double? = nil) {
         let wrapped = toolpaths.contains { $0.wrapDiameter != nil }
         // A program read from a file onto a wrapped job's sheet has no wrapped toolpaths: it's shown flat on the sheet.
         guard let blank = stock.rotary, !blank.isWrapped || wrapped else {
-            timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations)
+            timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, estimate: estimate)
             faces = [MaterialSimulator(stock: stock, cellSize: cellSize)]
             faceAngles = [0]
             faceOfToolpath = toolpaths.map { _ in 0 }
             return
         }
-        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, durations: durations,
+        timeline = SimulationTimeline(toolpaths: toolpaths, rapidRate: rapidRate, estimate: estimate,
                                       turnSpeed: turnSpeed.map { $0 / 60 } ?? Self.turnSpeed,
                                       wrap: wrapped ? (stock.originPoint.y, blank.topRadius) : nil)
         var angles: [Double] = []

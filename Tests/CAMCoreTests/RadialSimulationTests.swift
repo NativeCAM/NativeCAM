@@ -10,7 +10,7 @@ struct RadialSimulationTests {
     func session(_ p: Project) -> SimulationSession {
         let job = CAMEngine.generate(p)
         var s = SimulationSession(toolpaths: job.toolpaths, stock: p.stock, rapidRate: p.machine.rapidRateForEstimates,
-                                  cellSize: 0.25, durations: job.estimate?.motionSeconds)
+                                  cellSize: 0.25, estimate: job.estimate)
         s.runToEnd()
         return s
     }

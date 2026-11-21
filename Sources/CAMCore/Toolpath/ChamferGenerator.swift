@@ -71,9 +71,8 @@ enum ChamferGenerator {
         let depth = params.depth(with: tool)
         let reach = min(tool.taperHeight, tool.fluteLength)
         if params.startDepth + depth > reach + 1e-6 {
-            let u = LengthUnit.mm
-            warnings.append("The bevel reaches \(u.format(params.startDepth + depth)) mm deep, but '\(tool.name)' only cuts "
-                + "\(u.format(reach)) mm down its V, so its top comes out as a step instead. Use a narrower chamfer or a larger V-bit.")
+            warnings.append("The bevel reaches \(context.length(params.startDepth + depth)) deep, but '\(tool.name)' only cuts "
+                + "\(context.length(reach)) down its V, so its top comes out as a step instead. Use a narrower chamfer or a larger V-bit.")
         }
         let bevel = Bevel(regions: regions, side: params.side, edge: params.edge, width: params.width, startDepth: params.startDepth,
                           passDepth: params.passDepth, sharpCorners: params.sharpCorners, direction: params.direction)
@@ -252,9 +251,8 @@ enum PrismGenerator {
         let depth = params.depth ?? full
         guard depth > 1e-6 else { return empty(warnings + ["The prism's depth must be more than 0."]) }
         let reach = min(tool.taperHeight, tool.fluteLength)
-        let u = LengthUnit.mm
         if params.startDepth + depth > reach + 1e-6 {
-            warnings.append("The prism is \(u.format(params.startDepth + depth)) mm deep, but '\(tool.name)' only cuts \(u.format(reach)) mm "
+            warnings.append("The prism is \(context.length(params.startDepth + depth)) deep, but '\(tool.name)' only cuts \(context.length(reach)) "
                 + "down its V, so its slopes stop at a step. Use a larger V-bit, a smaller prism depth or smaller shapes.")
         }
         let bevel = ChamferGenerator.Bevel(regions: regions, side: .inside, edge: .bottom, width: depth * tool.halfAngleTangent,

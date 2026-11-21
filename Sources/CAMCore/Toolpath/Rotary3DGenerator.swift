@@ -45,8 +45,7 @@ enum Rotary3DGenerator {
         let clearance = max(stock.clearanceHeight, stock.plungeHeight)
         var tp = Toolpath(id: op.id, name: op.name, tool: tool, spindleRPM: tool.cutting.spindleRPM,
                           start: Vec3(0, stock.originPoint.y, clearance), motions: [])
-        let u = LengthUnit.mm
-        func mm(_ v: Double) -> String { "\(u.format(v)) mm" }
+        let len = ctx.length
         guard let blank = stock.rotary else {
             tp.warnings = ["3D rotary finishing needs a rotary blank."]
             return tp
@@ -94,14 +93,14 @@ enum Rotary3DGenerator {
             return tp
         }
         if p.startX == nil, cutter.minX < tool.radius - 1 {
-            warnings.append("The model starts \(mm(tool.radius - cutter.minX)) too close to the chuck end of the blank for the cutter; "
+            warnings.append("The model starts \(len(tool.radius - cutter.minX)) too close to the chuck end of the blank for the cutter; "
                 + "the finish stops short of it. Move the model along the blank or use a longer blank.")
         }
         if p.endX == nil, cutter.maxX > blank.length - tool.radius + 1 {
-            warnings.append("The model ends \(mm(cutter.maxX - blank.length + tool.radius)) too close to the tailstock end of the blank "
+            warnings.append("The model ends \(len(cutter.maxX - blank.length + tool.radius)) too close to the tailstock end of the blank "
                 + "for the cutter; the finish stops short of it. Move the model along the blank or use a longer blank.")
         }
-        warnings += fitWarnings(models, blank: blank, stockRadius: stockRadius, range: x0...x1)
+        warnings += fitWarnings(models, blank: blank, stockRadius: stockRadius, range: x0...x1, context: ctx)
 
         // Sampling: points along the blank and round it.
         let surfaceMax = min(cutter.maxRadius + p.allowance, blank.outerRadius)
@@ -120,7 +119,7 @@ enum Rotary3DGenerator {
             let f = Double(estimate()) / Double(maxPoints)
             step *= f.squareRoot()
             spacing *= f.squareRoot()
-            warnings.append("The sampling was widened to \(mm(spacing)) along the blank and \(String(format: "%.2f", step * 180 / .pi))° round it "
+            warnings.append("The sampling was widened to \(len(spacing)) along the blank and \(String(format: "%.2f", step * 180 / .pi))° round it "
                 + "to keep the toolpath to a size the machine can load.")
         }
         let perTurn = max(36, Int((2 * Double.pi / step).rounded(.up)))
@@ -232,43 +231,55 @@ enum Rotary3DGenerator {
         // Checks: reach, flutes, pass depth, the rotary's speed, the model's shape.
         let cutDeep = stockTop - max(0, deepest)
         if tool.stickout < cutDeep + 1 {
-            warnings.append("Cuts \(mm(cutDeep)) in from the stock's surface, but '\(tool.name)' sticks out only \(mm(tool.stickout)) "
+            warnings.append("Cuts \(len(cutDeep)) in from the stock's surface, but '\(tool.name)' sticks out only \(len(tool.stickout)) "
                 + "from the collet, so the collet nut could hit the blank. Let the bit out further (and set its stickout), or use a "
                 + "smaller blank.")
         }
         let perPass = engagement
         if perPass > tool.fluteLength + 1e-6 {
-            warnings.append("Cuts up to \(mm(perPass)) deep in one pass, more than the cutting length of '\(tool.name)' "
-                + "(\(mm(tool.fluteLength))). Lower the pass depth.")
+            warnings.append("Cuts up to \(len(perPass)) deep in one pass, more than the cutting length of '\(tool.name)' "
+                + "(\(len(tool.fluteLength))). Lower the pass depth.")
         } else if perPass > 1.5 * tool.cutting.stepdown + 1e-6 {
-            warnings.append("Cuts up to \(mm(perPass)) deep in one pass, more than '\(tool.name)' should take "
-                + "(its stepdown is \(mm(tool.cutting.stepdown))). Lower the pass depth.")
+            warnings.append("Cuts up to \(len(perPass)) deep in one pass, more than '\(tool.name)' should take "
+                + "(its stepdown is \(len(tool.cutting.stepdown))). Lower the pass depth.")
         }
         if slowest < feed * 0.5 {
             let speed = Int(aMax.rounded())
             warnings.append("The rotary axis turns at most \(speed.formatted())°/min\(ctx.machine.rotary?.drivenTurnSpeed == nil ? " (its Turn speed isn't set, so NativeCAM assumes 90° a second)" : ""), "
-                + "so near the axis the cut slows to keep up: down to \(Int(slowest.rounded()).formatted()) mm/min "
-                + "at \(mm(slowestRadius)) from the axis, from the \(Int(feed.rounded()).formatted()) mm/min set. If the wood burns there, "
+                + "so near the axis the cut slows to keep up: down to \(ctx.feed(slowest)) "
+                + "at \(len(slowestRadius)) from the axis, from the \(ctx.feed(feed)) set. If the wood burns there, "
                 + "lower the spindle speed.")
         }
         if blank.shape == .squareBar, ctx.rotaryStockRadius == nil {
             warnings.append("Starts from a square bar: add a Rounding toolpath before it, or the first layers cut the corners in "
                 + "interrupted passes.")
         }
-        warnings += reachWarnings(triangles, range: x0...x1)
+        warnings += reachWarnings(triangles, range: x0...x1, context: ctx)
         tp.warnings = warnings
         return tp
     }
 
     /// The feed for a move from `a` to `b`, mm/min: `feed`, or less when the rotary axis would have to turn faster than
     /// `turnSpeed` (degrees per minute) to keep it, which happens near the axis (research §2.3). Rounded down to a
-    /// whole mm/min, and kept half a percent under the limit so that joining and splitting the moves afterward
-    /// (`RotaryWrap.prepare`) and the post's rounding can't take them over it.
+    /// whole mm/min, and kept half a percent under the limit so that joining the moves afterward (`RotaryWrap.prepare`)
+    /// and the post's rounding can't take them over it.
+    ///
+    /// A move that turns more than a quarter turn is split into equal pieces afterward (`RotaryWrap.split`), each at
+    /// this feed. Where the move comes in toward the axis, the piece nearest it is the shortest and so turns the
+    /// fastest: the limit is that piece's.
     static func clampFeed(_ feed: Double, from a: Point, to b: Point, turnSpeed: Double) -> Double {
         let degrees = abs(b.angle - a.angle) * 180 / .pi
         guard degrees > 1e-9 else { return feed }
-        let length = RotaryWrap.tipLength(x0: a.x, r0: a.r, degrees0: a.angle * 180 / .pi, x1: b.x, r1: b.r, degrees1: b.angle * 180 / .pi)
-        let limit = 0.995 * turnSpeed * length / degrees
+        let pieces = max(1, Int((degrees / RotaryWrap.maxTurnPerMove - 1e-12).rounded(.up)))
+        var shortest = Double.infinity
+        for k in 0..<pieces {
+            let t0 = Double(k) / Double(pieces), t1 = Double(k + 1) / Double(pieces)
+            let a0 = (a.angle + (b.angle - a.angle) * t0) * 180 / .pi, a1 = (a.angle + (b.angle - a.angle) * t1) * 180 / .pi
+            let piece = RotaryWrap.tipLength(x0: a.x + (b.x - a.x) * t0, r0: a.r + (b.r - a.r) * t0, degrees0: a0,
+                                             x1: a.x + (b.x - a.x) * t1, r1: a.r + (b.r - a.r) * t1, degrees1: a1)
+            shortest = min(shortest, piece)
+        }
+        let limit = 0.995 * turnSpeed * shortest / (degrees / Double(pieces))
         guard limit < feed else { return feed }
         return max(1, limit.rounded(.down))
     }
@@ -426,14 +437,15 @@ enum Rotary3DGenerator {
     // MARK: Checks
 
     /// Whether the models fit the blank (or what a rounding leaves of it) and are on it.
-    static func fitWarnings(_ models: [DesignShape], blank: RotaryStock, stockRadius: (Double) -> Double, range: ClosedRange<Double>) -> [String] {
-        let u = LengthUnit.mm
+    static func fitWarnings(_ models: [DesignShape], blank: RotaryStock, stockRadius: (Double) -> Double, range: ClosedRange<Double>,
+                            context ctx: GenerationContext) -> [String] {
+        let len = ctx.length
         var out: [String] = []
         for m in models {
             guard let e = m.rotaryExtent, let spec = m.modelSpec else { continue }
             if e.minX < -1e-6 || e.maxX > blank.length + 1e-6 {
-                out.append("The model “\(m.name)” runs past the end of the blank (it's \(u.format(e.maxX - e.minX)) mm long, the blank "
-                    + "\(u.format(blank.length)) mm). Move it along the blank or scale it down.")
+                out.append("The model “\(m.name)” runs past the end of the blank (it's \(len(e.maxX - e.minX)) long, the blank "
+                    + "\(len(blank.length))). Move it along the blank or scale it down.")
             }
             // The farthest the model reaches against the round stock there, along its length.
             let mesh = spec.alongAxis
@@ -446,8 +458,8 @@ enum Rotary3DGenerator {
                 excess = max(excess, r - min(stockRadius(x), blank.radius))
             }
             if excess > 0.01 {
-                out.append("The model “\(m.name)” is up to \(u.format(2 * excess)) mm bigger across than the stock it's cut from "
-                    + "(\(u.format(2 * e.radius)) mm across at most): where it's bigger, the part comes out the stock's size. "
+                out.append("The model “\(m.name)” is up to \(len(2 * excess)) bigger across than the stock it's cut from "
+                    + "(\(len(2 * e.radius)) across at most): where it's bigger, the part comes out the stock's size. "
                     + "Scale it to fit the blank.")
             }
         }
@@ -456,7 +468,7 @@ enum Rotary3DGenerator {
 
     /// Where the model's surface is hidden from a tool coming in toward the axis: rays from the axis that cross the
     /// surface more than once (undercuts), or twice (the axis isn't inside the model there).
-    static func reachWarnings(_ triangles: [Double], range: ClosedRange<Double>) -> [String] {
+    static func reachWarnings(_ triangles: [Double], range: ClosedRange<Double>, context ctx: GenerationContext) -> [String] {
         guard let probe = RotaryDropCutter(probe: triangles, angleBins: 360) else { return [] }
         let stations = 200, angles = 180
         let lo = max(range.lowerBound, probe.minX), hi = min(range.upperBound, probe.maxX)
@@ -479,10 +491,10 @@ enum Rotary3DGenerator {
             lastX = max(lastX, x)
         }
         guard let from = first else { return [] }
-        let u = LengthUnit.mm
+        let u = ctx.units
         let share = Double(hidden + outside) / Double(all.count) * 100
         let percent = share < 1 ? "under 1" : "\(Int(share.rounded()))"
-        let where_ = "between X \(u.format(from)) and \(u.format(lastX)) mm"
+        let where_ = "between X \(u.format(from)) and \(u.format(lastX)) \(u.symbol)"
         if hidden >= outside {
             return ["Parts of the model are hidden from the tool behind other parts of it (undercuts a tool pointing at the axis "
                 + "can't reach), \(where_): about \(percent)% of the directions round it. The finish leaves them as the tool's shadow."]
