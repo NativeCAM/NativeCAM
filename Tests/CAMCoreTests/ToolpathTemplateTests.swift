@@ -88,7 +88,8 @@ struct ToolpathTemplateTests {
         ])
         let applied = try Self.roundTrip(template).apply(to: design, library: .starter)
         let ops = applied.project.operations
-        #expect(ops.map(\.shapeIDs) == [[design.shapes[1].id], [], [design.shapes[0].id]]) // letter case doesn't matter
+        let bound: [[UUID]] = [[design.shapes[1].id], [], [design.shapes[0].id]]
+        #expect(ops.map(\.shapeIDs) == bound) // letter case doesn't matter
         #expect(applied.rows.map(\.isEmpty) == [false, true, false])
         #expect(applied.emptyCount == 1)
 
@@ -135,10 +136,12 @@ struct ToolpathTemplateTests {
         // Everything on one layer: the text and the holes are found by kind, the rest take the selection.
         let sign = Project.demoSign()
         let rules = ToolpathTemplate(name: "Sign", project: sign).operations.map(\.vectorSelection)
-        #expect(rules == [.kind(.text), .selection, .kind(.circles), .selection])
+        let byKind: [VectorSelection?] = [.kind(.text), .selection, .kind(.circles), .selection]
+        #expect(rules == byKind)
         // On their own layers, by layer.
         let layered = ToolpathTemplate(name: "Sign", project: Self.layeredSign()).operations.map(\.vectorSelection)
-        #expect(layered == [.layers(["V-Carve"]), .layers(["Pocket"]), .layers(["Holes"]), .layers(["Cut Out"])])
+        let byLayer: [VectorSelection?] = [.layers(["V-Carve"]), .layers(["Pocket"]), .layers(["Holes"]), .layers(["Cut Out"])]
+        #expect(layered == byLayer)
         // A 3D toolpath on a model and its outline finds both layers; rounding needs no shapes.
         var relief = Project.demoRelief()
         for i in relief.shapes.indices { relief.shapes[i].layer = relief.shapes[i].modelSpec == nil ? "Outline" : "Model" }
