@@ -179,6 +179,8 @@ public enum CAMEngine {
                     let face = faceKey(angle)
                     var model = models.removeValue(forKey: face) ?? newModel()
                     defer { models[face] = model }
+                    // Feeds that follow the load measure the material as it is before this toolpath cuts.
+                    let uncut = layout == nil && wrap == nil && op.adjustsFeedsForLoad && FeedScheduler.suits(tp.tool) ? model.grid : nil
                     // Wrapped toolpaths link through safe Z: the blank turns as the tool moves across the sheet, and
                     // only safe Z is sure to clear it (and a square bar's corners) all the way round.
                     if case .rotaryFinish = op.kind {
@@ -208,6 +210,10 @@ public enum CAMEngine {
                     } else if project.machine.outputArcs {
                         tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
                     }
+                    // After arc fitting, so an arc keeps one feed.
+                    let (scheduled, notes) = FeedScheduler.apply(tp, operation: op, uncut: uncut, wrapped: wrap != nil, project: project)
+                    tp = scheduled
+                    issues.append(contentsOf: notes)
                     issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
                     issues.append(contentsOf: validate(tp, operation: op, project: project))
                     toolpaths.append(tp)
