@@ -25,7 +25,7 @@ struct OperationInspector: View {
             }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
                         loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
-                        wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad)
+                        wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad, loopFeedLimit: adaptiveLoopLimit)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
@@ -60,9 +60,18 @@ struct OperationInspector: View {
         .formStyle(.grouped)
     }
 
-    /// An adaptive pocket's optimal load, which thins its chip.
+    /// An adaptive pocket's optimal load, which thins its chip. (With a clearance tool, the pocket's own bit cuts offset
+    /// rings, so its chip isn't thinned.)
     private var adaptiveLoad: Double? {
-        if case let .pocket(p) = op.kind, p.strategy == .adaptive { return p.adaptiveSettings.load }
+        if case let .pocket(p) = op.kind, p.strategy == .adaptive, p.clearanceTool == nil { return p.adaptiveSettings.load }
+        return nil
+    }
+
+    /// The fastest an adaptive pocket's loops can run on this machine, which the recommended feed keeps to.
+    private var adaptiveLoopLimit: Double? {
+        if case let .pocket(p) = op.kind, p.strategy == .adaptive, p.clearanceTool == nil {
+            return p.adaptiveSettings.loopFeedLimit(tool: op.tool, machine: project.machine)
+        }
         return nil
     }
 
@@ -1011,6 +1020,8 @@ struct ToolSection: View {
     var wrapped = false
     /// An adaptive pocket's optimal load (a share of the diameter), which thins the chip.
     var radialLoad: Double? = nil
+    /// An adaptive pocket's loop feed limit, mm/min.
+    var loopFeedLimit: Double? = nil
 
     var body: some View {
         Section("Tool") {
@@ -1042,7 +1053,8 @@ struct ToolSection: View {
             LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
             PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
-                ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad)
+                ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad,
+                            loopFeedLimit: loopFeedLimit)
             }
         }
     }
@@ -1056,6 +1068,8 @@ struct ChipLoadRow: View {
     let units: LengthUnit
     /// An adaptive pocket's optimal load: the chip is thinner than the feed per tooth.
     var radialLoad: Double? = nil
+    /// An adaptive pocket's loop feed limit (mm/min): the recommended feed keeps to it, slowing the spindle instead.
+    var loopFeedLimit: Double? = nil
 
     var body: some View {
         let r = ChipLoad.range(material, diameter: tool.diameter)
@@ -1077,7 +1091,12 @@ struct ChipLoadRow: View {
                 }
             }
         }
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine, thinning: thin)
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine, thinning: thin, feedLimit: loopFeedLimit)
+        let held = loopFeedLimit.map { rec.feed >= $0 - 1e-6 && $0 < machine.maxFeedRate } ?? false
+        if held {
+            Text("Held to the fastest its loops can run with this machine's acceleration, with the spindle slowed to keep the chip in range.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
         HStack {
             Spacer()
             Button("Use Recommended: \(units.format(rec.feed, decimals: 0)) \(units == .inch ? "ipm" : "mm/min") @ \(Int(rec.rpm.rounded())) RPM") {

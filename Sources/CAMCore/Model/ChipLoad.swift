@@ -68,17 +68,21 @@ public enum ChipLoad {
     /// Spindle speed and feed that put the chip load a quarter of the way into the recommended range, keeping the
     /// feed within the machine's cutting cap by lowering RPM (on an Avid stepper the feed cap, not the chart, binds).
     /// `thinning` is the share of the feed per tooth the chip comes to (`radialThinning`, for a light radial cut).
+    /// `feedLimit` is a cap of the toolpath's own (adaptive clearing's loops, `AdaptiveSettings.loopFeedLimit`), held
+    /// to the same way. Never below the spindle's slowest speed: there, the feed stays at the cap and the chip may
+    /// come out thinner than the chart.
     public static func recommend(for tool: Tool, material: MaterialKind, machine: MachineProfile,
-                                 thinning: Double = 1) -> (rpm: Double, feed: Double) {
+                                 thinning: Double = 1, feedLimit: Double? = nil) -> (rpm: Double, feed: Double) {
         let r = range(material, diameter: tool.diameter)
         let target = r.lowerBound + (r.upperBound - r.lowerBound) * 0.25
         let z = Double(max(1, tool.fluteCount))
         let k = min(1, max(0.05, thinning))
+        let cap = min(machine.maxFeedRate, feedLimit ?? .infinity)
         var rpm = machine.clampRPM(tool.cutting.spindleRPM)
         var feed = target * z * rpm / k
-        if feed > machine.maxFeedRate {
-            rpm = machine.clampRPM(machine.maxFeedRate * k / (z * target))
-            feed = min(machine.maxFeedRate, target * z * rpm / k)
+        if feed > cap {
+            rpm = machine.clampRPM(cap * k / (z * target))
+            feed = min(cap, target * z * rpm / k)
         }
         return (rpm, feed)
     }

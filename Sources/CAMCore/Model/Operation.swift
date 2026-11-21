@@ -307,6 +307,12 @@ public struct AdaptiveSettings: Hashable, Codable, Sendable {
         if let r = minimumLoopRadius { return max(0.05, r) }
         return Self.automaticLoopRadius(tool: tool, feed: feed, machine: machine)
     }
+
+    /// The fastest feed `tool`'s loops can hold with the machine's X/Y acceleration, mm/min: √(a·ρ) at the minimum loop
+    /// radius, or, automatic, at the widest it goes (twice the bit's diameter). The chip-load recommendation keeps to it.
+    public func loopFeedLimit(tool: Tool, machine: MachineProfile) -> Double {
+        Self.loopFeedCap(radius: minimumLoopRadius.map { max(0.05, $0) } ?? 2 * tool.diameter, machine: machine)
+    }
 }
 
 public struct PocketParams: Hashable, Codable, Sendable {

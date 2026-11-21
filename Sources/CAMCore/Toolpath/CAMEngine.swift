@@ -654,7 +654,7 @@ public enum CAMEngine {
                                    operation: tp.name))
         }
         // Chip load against the chart for this material (thin chips rub and burn; very thick ones tear).
-        issues.append(contentsOf: chipLoadIssues(tp, project: project))
+        issues.append(contentsOf: chipLoadIssues(tp, project: project, operation: op))
         // Feeds.
         let maxFeed = tp.motions.filter { $0.kind != .rapid && $0.kind != .dwell }.map(\.feed).max() ?? 0
         if maxFeed > machine.maxFeedRate + 1e-6 {
