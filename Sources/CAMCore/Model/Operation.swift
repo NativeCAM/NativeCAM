@@ -16,14 +16,23 @@ public enum CutDirection: String, Codable, Sendable, CaseIterable, Identifiable 
 /// Depths are measured down from the material top (positive numbers, mm).
 public struct DepthSettings: Hashable, Codable, Sendable {
     public var startDepth: Double
+    /// The final depth below the material top. With `fromBottom` set it follows the material thickness
+    /// (`Project.fitDepthsToMaterial()` keeps it so), so a build that doesn't know `fromBottom` cuts the same depth.
     public var cutDepth: Double
     /// Max depth per pass; nil uses the tool's stepdown.
     public var passDepth: Double?
+    /// A cut depth tied to the material thickness: the cut stops this far above the material's bottom, mm. Negative
+    /// cuts through it, that far into the spoilboard ("through the material"); positive leaves that much ("thickness
+    /// − x"). nil = `cutDepth` is a plain depth below the top, whatever the thickness.
+    ///
+    /// No new file format: `cutDepth` is always saved fitted to the thickness, so an older build cuts the same depth.
+    public var fromBottom: Double?
 
-    public init(startDepth: Double = 0, cutDepth: Double, passDepth: Double? = nil) {
+    public init(startDepth: Double = 0, cutDepth: Double, passDepth: Double? = nil, fromBottom: Double? = nil) {
         self.startDepth = startDepth
         self.cutDepth = cutDepth
         self.passDepth = passDepth
+        self.fromBottom = fromBottom
     }
 
     /// Z levels (negative, relative to material top) for each pass, evenly distributed, last = final depth.
@@ -300,13 +309,18 @@ public struct DrillParams: Hashable, Codable, Sendable {
     public var fullRetract: Bool
     /// Dwell at the bottom of the hole, seconds.
     public var dwell: Double
+    /// A hole depth tied to the material thickness, as `DepthSettings.fromBottom`: the hole stops this far above the
+    /// material's bottom (negative goes through it). nil = `depth` is a plain depth. No new file format.
+    public var fromBottom: Double?
 
-    public init(depth: Double, peckDepth: Double = 0, fullRetract: Bool = true, dwell: Double = 0) {
+    public init(depth: Double, peckDepth: Double = 0, fullRetract: Bool = true, dwell: Double = 0, fromBottom: Double? = nil) {
         self.depth = depth
         self.peckDepth = peckDepth
         self.fullRetract = fullRetract
         self.dwell = dwell
+        self.fromBottom = fromBottom
     }
+
 }
 
 public struct VCarveParams: Hashable, Sendable {
@@ -1009,9 +1023,14 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// face under the spindle; the same shapes are cut at each angle. nil cuts at 0° only. Only rotary jobs take
     /// angles.
     public var indexAngles: [Double]?
+    /// How the toolpath finds its shapes: the shapes on a layer, or of a kind, which `Project.bindVectors()` picks up
+    /// again (applying a template, Recalculate All, changing a shape's layer); nil = chosen by hand. `shapeIDs` is
+    /// always what's cut, so a build that doesn't know the key cuts the same shapes. In a template, `.selection`
+    /// means the shapes selected when it's applied.
+    public var vectorSelection: VectorSelection?
 
     public init(id: UUID = UUID(), name: String? = nil, enabled: Bool = true, kind: OperationKind,
-                shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil) {
+                shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil, vectorSelection: VectorSelection? = nil) {
         self.id = id
         self.name = name ?? kind.label
         self.enabled = enabled
@@ -1019,6 +1038,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         self.shapeIDs = shapeIDs
         self.tool = tool
         self.indexAngles = indexAngles
+        self.vectorSelection = vectorSelection
     }
 
     /// The angles this operation cuts at on rotary stock.

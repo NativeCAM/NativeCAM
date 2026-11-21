@@ -1,0 +1,516 @@
+import Foundation
+
+// MARK: - How a toolpath finds its vectors
+
+/// Kinds of shape a toolpath can find for itself (see `VectorSelection.kind`). Keep-out shapes never count.
+public enum ShapeFilter: String, Codable, Sendable, CaseIterable, Identifiable {
+    case text, circles, models, open, closed, all
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .text: "Text"
+        case .circles: "Circles"
+        case .models: "3D models"
+        case .open: "Open vectors"
+        case .closed: "Closed vectors"
+        case .all: "All vectors"
+        }
+    }
+
+    /// What the design has none of, for messages: "no text", "no circles".
+    var noun: String {
+        switch self {
+        case .text: "text"
+        case .circles: "circles"
+        case .models: "3D models"
+        case .open: "open vectors"
+        case .closed: "closed vectors"
+        case .all: "vectors"
+        }
+    }
+
+    public func matches(_ shape: DesignShape) -> Bool {
+        guard !shape.isKeepOut else { return false }
+        switch self {
+        case .all: return true
+        case .text: if case .text = shape.kind { return true } else { return false }
+        case .circles: if case .circle = shape.kind { return true } else { return false }
+        case .models: return shape.modelSpec != nil
+        case .open: return shape.modelSpec == nil && shape.polylines(tolerance: 0.1).contains { !$0.isClosed }
+        case .closed:
+            guard shape.modelSpec == nil else { return false }
+            let outlines = shape.polylines(tolerance: 0.1)
+            return !outlines.isEmpty && outlines.allSatisfy(\.isClosed)
+        }
+    }
+
+    /// The order a template tries kinds in when a toolpath's shapes are exactly every shape of one: the narrowest first.
+    static let inferenceOrder: [ShapeFilter] = [.text, .circles, .models, .open, .closed, .all]
+}
+
+/// How a toolpath finds its shapes, so a template's toolpaths find theirs in another design (Vectric's "Automatic"
+/// vector selection, by layer or vector type).
+public enum VectorSelection: Hashable, Sendable {
+    /// The shapes on these layers (`DesignShape.layer`; letter case and surrounding spaces don't matter).
+    case layers([String])
+    /// Every shape of a kind.
+    case kind(ShapeFilter)
+    /// The shapes selected when the template is applied. In a project, the same as nil: chosen by hand.
+    case selection
+
+    public var label: String {
+        switch self {
+        case let .layers(names): (names.count == 1 ? "Layer " : "Layers ") + Self.quoted(names)
+        case let .kind(filter): filter.label
+        case .selection: "Selected vectors"
+        }
+    }
+
+    /// The warning Checks shows for a toolpath that found no shapes.
+    public var emptyMessage: String {
+        let fix = "then choose Toolpaths ▸ Recalculate All, or select vectors and click Use Selected Shapes."
+        switch self {
+        case let .layers(names):
+            return "No vectors on \(names.count == 1 ? "layer" : "layers") \(Self.quoted(names)). Put vectors on it, \(fix)"
+        case let .kind(filter):
+            return "The design has no \(filter.noun). Add some, \(fix)"
+        case .selection:
+            return "No shapes selected."
+        }
+    }
+
+    public func matches(_ shape: DesignShape) -> Bool {
+        guard !shape.isKeepOut else { return false }
+        switch self {
+        case let .layers(names): return names.contains { Self.sameLayer($0, shape.layer) }
+        case let .kind(filter): return filter.matches(shape)
+        case .selection: return false
+        }
+    }
+
+    public static func sameLayer(_ a: String, _ b: String) -> Bool {
+        a.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(b.trimmingCharacters(in: .whitespaces)) == .orderedSame
+    }
+
+    static func quoted(_ names: [String]) -> String { names.map { "“\($0)”" }.joined(separator: ", ") }
+}
+
+extension VectorSelection: Codable {
+    private enum CodingKeys: String, CodingKey { case layers, kind, selection }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let names = try c.decodeIfPresent([String].self, forKey: .layers) {
+            self = .layers(names)
+        } else if let filter = try c.decodeIfPresent(ShapeFilter.self, forKey: .kind) {
+            self = .kind(filter)
+        } else {
+            self = .selection
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .layers(names): try c.encode(names, forKey: .layers)
+        case let .kind(filter): try c.encode(filter, forKey: .kind)
+        case .selection: try c.encode(true, forKey: .selection)
+        }
+    }
+}
+
+extension Project {
+    /// The layers the design's shapes are on, in the order they first appear.
+    public var layerNames: [String] {
+        var names: [String] = []
+        for s in shapes where !names.contains(where: { VectorSelection.sameLayer($0, s.layer) }) { names.append(s.layer) }
+        return names
+    }
+
+    /// The shapes a rule finds, in design order; for `.selection`, the shapes of `selection` that can be machined.
+    public func shapeIDs(matching rule: VectorSelection, selection: [UUID] = []) -> [UUID] {
+        if case .selection = rule {
+            return selection.filter { id in shape(id: id).map { !$0.isKeepOut } ?? false }
+        }
+        return shapes.filter { rule.matches($0) }.map(\.id)
+    }
+
+    /// The rule a template would use for a toolpath whose shapes were chosen by hand: the layers its shapes are on
+    /// when it has every shape on them, else a kind when it has every shape of it, else the selection when applied.
+    /// nil for a toolpath that needs no shapes (rounding).
+    public func inferredVectorSelection(for op: CAMOperation) -> VectorSelection? {
+        guard op.kind.needsShapes else { return nil }
+        let mine = shapes(for: op).filter { !$0.isKeepOut }
+        guard !mine.isEmpty else { return .selection }
+        let ids = Set(mine.map(\.id))
+        var layers: [String] = []
+        for s in mine where !layers.contains(where: { VectorSelection.sameLayer($0, s.layer) }) { layers.append(s.layer) }
+        if Set(shapeIDs(matching: .layers(layers))) == ids { return .layers(layers) }
+        for filter in ShapeFilter.inferenceOrder where Set(shapeIDs(matching: .kind(filter))) == ids { return .kind(filter) }
+        return .selection
+    }
+
+    /// How a template saved from this project finds a toolpath's shapes: its own rule, or the inferred one.
+    public func templateVectorSelection(for op: CAMOperation) -> VectorSelection? {
+        guard op.kind.needsShapes else { return nil }
+        if let rule = op.vectorSelection, rule != .selection { return rule }
+        return inferredVectorSelection(for: op)
+    }
+
+    /// Gives every toolpath that finds its own shapes (by layer or kind) the shapes its rule finds now. Returns true
+    /// when any changed.
+    @discardableResult
+    public mutating func bindVectors() -> Bool {
+        var changed = false
+        for i in operations.indices {
+            guard operations[i].kind.needsShapes, let rule = operations[i].vectorSelection, rule != .selection else { continue }
+            let ids = shapeIDs(matching: rule)
+            if ids != operations[i].shapeIDs {
+                operations[i].shapeIDs = ids
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// Puts shapes on a layer, and has toolpaths that find their shapes by layer pick them up (or drop them).
+    public mutating func setLayer(_ name: String, of ids: Set<UUID>) {
+        let layer = name.trimmingCharacters(in: .whitespaces).isEmpty ? "Default" : name
+        for i in shapes.indices where ids.contains(shapes[i].id) { shapes[i].layer = layer }
+        bindVectors()
+    }
+}
+
+// MARK: - Tool matching
+
+extension Tool {
+    /// True when `other` is the same bit: shape, flute direction, diameter and, where the shape has them, angle, tip
+    /// and corner radius. Numbers, names, feeds and lengths don't count.
+    public func sameGeometry(as other: Tool) -> Bool {
+        func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) <= 0.005 }
+        guard shape == other.shape, fluteDirection == other.fluteDirection, near(diameter, other.diameter) else { return false }
+        if shape.usesAngle && abs(includedAngle - other.includedAngle) > 0.05 { return false }
+        if shape.isTapered && !near(tipDiameter, other.tipDiameter) { return false }
+        if shape.usesCornerRadius && !near(cornerRadius, other.cornerRadius) { return false }
+        return true
+    }
+}
+
+extension ToolLibrary {
+    /// The library's tool that is the same bit as `tool` (`Tool.sameGeometry`): the same entry if it's there, else
+    /// the one most like it (same flute count, then the same number), else the lowest numbered.
+    public func matching(_ tool: Tool) -> Tool? {
+        let candidates = tools.filter { $0.sameGeometry(as: tool) }
+        if let same = candidates.first(where: { $0.id == tool.id }) { return same }
+        return candidates.min { a, b in
+            func rank(_ t: Tool) -> (Int, Int, Int) { (t.fluteCount == tool.fluteCount ? 0 : 1, t.number == tool.number ? 0 : 1, t.number) }
+            return rank(a) < rank(b)
+        }
+    }
+}
+
+// MARK: - Templates
+
+/// A saved set of toolpaths, in run order, with their tools and every setting, to apply to another design (Vectric's
+/// toolpath templates). Saved as JSON with the `.nativecamtemplate` extension. Each toolpath keeps how it finds its
+/// shapes (`CAMOperation.vectorSelection`) instead of the shapes themselves; depths tied to the material thickness
+/// (`DepthSettings.fromBottom`) stay tied to it.
+public struct ToolpathTemplate: Hashable, Sendable {
+    public static let fileExtension = "nativecamtemplate"
+    static let fileType = "NativeCAM toolpath template"
+
+    public var name: String
+    /// The toolpaths, in run order, with no shapes (`shapeIDs` empty) and each one's rule for finding them.
+    public var operations: [CAMOperation]
+    /// The job's material, zero and heights, if saved with it.
+    public var jobSetup: JobSetup?
+
+    public init(name: String, operations: [CAMOperation], jobSetup: JobSetup? = nil) {
+        self.name = name
+        self.operations = operations
+        self.jobSetup = jobSetup
+    }
+
+    /// The toolpaths `operationIDs` picks from `project` (all of them when nil), in run order.
+    public init(name: String, project: Project, operationIDs: Set<UUID>? = nil, includeJobSetup: Bool = true) {
+        self.name = name
+        operations = project.operations.filter { operationIDs?.contains($0.id) ?? true }.map { Self.templateCopy(of: $0, in: project) }
+        jobSetup = includeJobSetup ? JobSetup(project) : nil
+    }
+
+    /// The project file format this template needs: the newest its toolpaths need. A build that reads an older
+    /// format refuses it, as it does projects.
+    public var formatVersion: Int { operations.map(\.requiredFormatVersion).reduce(1, max) }
+
+    /// `op` as a template keeps it: no shapes but the rule that finds them, no corner overrides (they belong to this
+    /// design's shapes), and a depth through the material on a flat sheet tied to the thickness, so the template cuts
+    /// through material of any thickness.
+    static func templateCopy(of op: CAMOperation, in project: Project) -> CAMOperation {
+        var copy = op
+        copy.vectorSelection = project.templateVectorSelection(for: op)
+        copy.shapeIDs = []
+        let t = project.stock.thickness
+        let flat = project.stock.rotary == nil
+        func through(_ depth: Double) -> Double? { flat && depth >= t - 1e-6 ? t - depth : nil }
+        switch copy.kind {
+        case var .profile(p):
+            p.cornerRelief?.overrides = nil
+            if p.depth.fromBottom == nil { p.depth.fromBottom = through(p.depth.cutDepth) }
+            copy.kind = .profile(p)
+        case var .pocket(p):
+            p.cornerRelief?.overrides = nil
+            if p.depth.fromBottom == nil { p.depth.fromBottom = through(p.depth.cutDepth) }
+            copy.kind = .pocket(p)
+        case var .drill(p):
+            if p.fromBottom == nil { p.fromBottom = through(p.depth) }
+            copy.kind = .drill(p)
+        default:
+            break
+        }
+        return copy
+    }
+
+    public func encoded() throws -> Data {
+        let e = JSONEncoder()
+        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try e.encode(self)
+    }
+
+    public static func decode(_ data: Data) throws -> ToolpathTemplate {
+        try JSONDecoder().decode(ToolpathTemplate.self, from: data)
+    }
+}
+
+extension ToolpathTemplate: Codable {
+    private enum CodingKeys: String, CodingKey { case type, formatVersion, name, toolpaths, jobSetup }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard (try? c.decode(String.self, forKey: .type)) == Self.fileType else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "This file isn't a NativeCAM toolpath template."])
+        }
+        let version = try c.decode(Int.self, forKey: .formatVersion)
+        guard version <= Project.currentFormatVersion else {
+            throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey:
+                "This template was saved by a newer version of NativeCAM (format \(version)). Update NativeCAM to use it."])
+        }
+        name = try c.decode(String.self, forKey: .name)
+        operations = try c.decode([CAMOperation].self, forKey: .toolpaths)
+        jobSetup = try c.decodeIfPresent(JobSetup.self, forKey: .jobSetup)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(Self.fileType, forKey: .type)
+        try c.encode(formatVersion, forKey: .formatVersion)
+        try c.encode(name, forKey: .name)
+        try c.encode(operations, forKey: .toolpaths)
+        try c.encodeIfPresent(jobSetup, forKey: .jobSetup)
+    }
+}
+
+extension ToolpathTemplate {
+    /// The job setup a template can carry: material, zero, heights and the machine it was made for. Not the
+    /// material's width and height (the design's own) or a rotary blank.
+    public struct JobSetup: Hashable, Codable, Sendable {
+        /// nil when saved from a rotary job, whose thickness is the blank's.
+        public var thickness: Double?
+        public var materialName: String
+        public var materialKind: MaterialKind?
+        public var xyOrigin: XYOrigin
+        public var zZero: ZZero
+        public var clearanceHeight: Double
+        public var plungeHeight: Double
+        public var parkHeight: Double
+        public var retractMode: RetractMode?
+        public var linkSafeDistance: Double?
+        /// The machine the template was made for: its library entry and a name for messages. Applying a template
+        /// never changes the machine.
+        public var machineName: String
+        public var machineLibraryID: String?
+
+        public init(_ project: Project) {
+            let s = project.stock
+            thickness = s.rotary == nil ? s.thickness : nil
+            materialName = s.materialName
+            materialKind = s.materialKind
+            xyOrigin = s.xyOrigin
+            zZero = s.zZero
+            clearanceHeight = s.clearanceHeight
+            plungeHeight = s.plungeHeight
+            parkHeight = s.homePosition.z
+            retractMode = s.retractMode
+            linkSafeDistance = s.linkSafeDistance
+            machineName = Self.machineName(project.machine)
+            machineLibraryID = project.machine.libraryID
+        }
+
+        static func machineName(_ m: MachineProfile) -> String { "\(m.model.shortName) (\(m.controllerLabel))" }
+
+        /// One setting applying it would change.
+        public struct Change: Hashable, Sendable {
+            public var setting: String
+            public var from: String
+            public var to: String
+            /// A change that moves where the G-code's zero is, which the machine has to be set up for.
+            public var movesZero: Bool
+        }
+
+        /// What applying this to `project` would change.
+        public func changes(to project: Project) -> [Change] {
+            var p = project
+            return apply(to: &p)
+        }
+
+        /// Sets `project`'s stock from this, returning what changed.
+        @discardableResult
+        public func apply(to project: inout Project) -> [Change] {
+            let u = project.displayUnits
+            func len(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
+            var changes: [Change] = []
+            var s = project.stock
+            func set<T: Equatable>(_ path: WritableKeyPath<Stock, T>, _ value: T, _ setting: String, zero: Bool = false,
+                                   describe: (T) -> String) {
+                guard s[keyPath: path] != value else { return }
+                changes.append(Change(setting: setting, from: describe(s[keyPath: path]), to: describe(value), movesZero: zero))
+                s[keyPath: path] = value
+            }
+            if let t = thickness, s.rotary == nil, abs(t - s.thickness) > 1e-6 {
+                set(\.thickness, t, "Thickness", describe: len)
+            }
+            set(\.materialName, materialName, "Material") { $0 }
+            set(\.materialKind, materialKind, "Material type") { ($0 ?? .plywood).label }
+            set(\.xyOrigin, xyOrigin, "XY zero", zero: true) { $0.label }
+            if s.rotary == nil { set(\.zZero, zZero, "Z zero", zero: true) { $0.label } }
+            set(\.clearanceHeight, clearanceHeight, "Safe Z", describe: len)
+            set(\.plungeHeight, plungeHeight, "Plunge height", describe: len)
+            set(\.homePosition.z, parkHeight, "Park height", describe: len)
+            set(\.retractMode, retractMode, "Retracts") { ($0 ?? .minimum).label }
+            set(\.linkSafeDistance, linkSafeDistance, "Link clearance") { len($0 ?? 0.2.inch) }
+            project.stock = s
+            return changes
+        }
+
+        /// A note when `project` is set up for another machine than the template was made for, else nil.
+        public func machineNote(for project: Project) -> String? {
+            let m = project.machine
+            let same = machineLibraryID != nil && m.libraryID != nil ? machineLibraryID == m.libraryID : machineName == Self.machineName(m)
+            return same ? nil : "Made for \(machineName); this job is for \(Self.machineName(m)). Check the feeds and speeds suit it."
+        }
+    }
+
+    /// What applying a template does: the project with its toolpaths added, and what the toolpaths found.
+    public struct Application: Sendable {
+        public struct Row: Hashable, Sendable, Identifiable {
+            public var id: UUID
+            public var name: String
+            public var kind: String
+            /// How the toolpath found its shapes; nil for one that needs none.
+            public var rule: VectorSelection?
+            public var shapeCount: Int
+            /// True when it needs shapes and found none: it's added empty, and Checks says why.
+            public var isEmpty: Bool
+        }
+
+        public struct ToolUse: Hashable, Sendable, Identifiable {
+            public var id: UUID { tool.id }
+            /// The tool as the toolpaths use it: the library's own when it has the same bit, with the template's feeds.
+            public var tool: Tool
+            /// True when the library has the same bit (`Tool.sameGeometry`).
+            public var inLibrary: Bool
+            /// The template's tool number, when the tool now has another one.
+            public var templateNumber: Int?
+            /// True when the library's bit has other feeds and speeds than the template's, which the toolpaths use.
+            public var feedsDiffer: Bool
+        }
+
+        public var project: Project
+        public var addedOperationIDs: [UUID]
+        public var rows: [Row]
+        public var tools: [ToolUse]
+        /// What the template's job setup changed (empty when not used).
+        public var setupChanges: [JobSetup.Change]
+        public var machineNote: String?
+
+        /// The template's tools the library doesn't have, to offer adding.
+        public var newTools: [Tool] { tools.filter { !$0.inLibrary }.map(\.tool) }
+        public var emptyCount: Int { rows.filter(\.isEmpty).count }
+    }
+
+    /// Adds the template's toolpaths after `project`'s own. Each finds its shapes by its rule (`selection` for those
+    /// that take the shapes selected now); one that finds none is added empty, and Checks says why. Each tool becomes
+    /// the library's (or the project's) tool with the same geometry, keeping the template's feeds and speeds; a tool
+    /// that's new keeps its number unless another bit has it. With `useJobSetup`, the template's material, zero and
+    /// heights replace the project's first, and depths tied to the thickness follow the new one.
+    public func apply(to project: Project, library: ToolLibrary, selection: [UUID] = [], useJobSetup: Bool = false) -> Application {
+        var p = project
+        let setupChanges = useJobSetup ? jobSetup.map { $0.apply(to: &p) } ?? [] : []
+
+        // Tools: the template's, resolved once each.
+        let projectTools = project.operations.flatMap { [$0.tool] + ($0.clearanceTool.map { [$0] } ?? []) }
+        var taken = library.tools + projectTools
+        var resolved: [UUID: Tool] = [:]
+        var uses: [Application.ToolUse] = []
+        func resolve(_ t: Tool) -> Tool {
+            if let done = resolved[t.id] { return done }
+            var use: Application.ToolUse
+            if let m = library.matching(t) {
+                var r = m
+                r.cutting = t.cutting
+                use = Application.ToolUse(tool: r, inLibrary: true, templateNumber: r.number == t.number ? nil : t.number, feedsDiffer: m.cutting != t.cutting)
+            } else if let m = projectTools.first(where: { $0.sameGeometry(as: t) }) {
+                var r = m
+                r.cutting = t.cutting
+                use = Application.ToolUse(tool: r, inLibrary: false, templateNumber: r.number == t.number ? nil : t.number, feedsDiffer: false)
+            } else {
+                var r = t
+                if taken.contains(where: { $0.number == r.number && !$0.sameGeometry(as: r) }) {
+                    r.number = (taken.map(\.number).max() ?? 0) + 1
+                }
+                use = Application.ToolUse(tool: r, inLibrary: false, templateNumber: r.number == t.number ? nil : t.number, feedsDiffer: false)
+            }
+            taken.append(use.tool)
+            if !uses.contains(where: { $0.tool.id == use.tool.id }) { uses.append(use) }
+            resolved[t.id] = use.tool
+            return use.tool
+        }
+
+        var added: [UUID] = []
+        var rows: [Application.Row] = []
+        for source in operations {
+            var op = source
+            op.id = UUID()
+            op.tool = resolve(op.tool)
+            switch op.kind {
+            case var .pocket(q):
+                q.clearanceTool = q.clearanceTool.map(resolve)
+                op.kind = .pocket(q)
+            case var .vcarve(q):
+                q.clearanceTool = q.clearanceTool.map(resolve)
+                op.kind = .vcarve(q)
+            default:
+                break
+            }
+            let rule = op.kind.needsShapes ? source.vectorSelection ?? .selection : nil
+            switch rule {
+            case .selection?:
+                op.shapeIDs = p.shapeIDs(matching: .selection, selection: selection)
+                op.vectorSelection = nil
+            case let rule?:
+                op.shapeIDs = p.shapeIDs(matching: rule)
+            case nil:
+                op.shapeIDs = []
+                op.vectorSelection = nil
+            }
+            p.operations.append(op)
+            added.append(op.id)
+            rows.append(Application.Row(id: op.id, name: op.name, kind: op.kind.label, rule: rule, shapeCount: op.shapeIDs.count,
+                            isEmpty: op.kind.needsShapes && op.shapeIDs.isEmpty))
+        }
+        p.fitDepthsToMaterial()
+        return Application(project: p, addedOperationIDs: added, rows: rows, tools: uses, setupChanges: setupChanges,
+                           machineNote: jobSetup?.machineNote(for: project))
+    }
+}

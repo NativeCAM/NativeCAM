@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 @main
 struct NativeCAMApp: App {
     @State private var toolLibrary = ToolLibraryStore.shared
+    @State private var templates = TemplateLibrary.shared
 
     init() {
         if let snap = DebugSnapshot.requested {
@@ -20,7 +21,7 @@ struct NativeCAMApp: App {
                 .frame(minWidth: 960, minHeight: 620)
         }
         .defaultSize(width: 1440, height: 900)
-        .commands { AppCommands() }
+        .commands { AppCommands(templates: templates) }
 
         Window("Tool Library", id: "tool-library") {
             ToolLibraryView()
@@ -73,6 +74,7 @@ struct NativeCAMDocument: FileDocument {
 
 /// Menu-bar commands routed to the focused document window.
 struct AppCommands: Commands {
+    let templates: TemplateLibrary
     @FocusedValue(\.workspaceActions) private var actions
     @Environment(\.openWindow) private var openWindow
     @Environment(\.newDocument) private var newDocument
@@ -111,6 +113,13 @@ struct AppCommands: Commands {
                 .disabled(actions == nil)
                 .help("Reorder toolpaths for the fewest tool changes, keeping inside work before cut-outs")
             Divider()
+            Button("Save Toolpaths as Template…") { actions?.saveTemplate() }
+                .disabled(!(actions?.hasToolpaths ?? false))
+            Menu("Apply Template") {
+                TemplateMenuItems(templates: templates, apply: { actions?.applyTemplate($0) }, choose: { actions?.chooseTemplate() })
+            }
+            .disabled(actions == nil)
+            Divider()
             Button("Tool Library") { openWindow(id: "tool-library") }
         }
         CommandGroup(after: .pasteboard) {
@@ -143,6 +152,10 @@ struct WorkspaceActions {
     var simulate: () -> Void
     var stopSimulation: () -> Void
     var optimizeOrder: () -> Void
+    var saveTemplate: () -> Void
+    var applyTemplate: (URL) -> Void
+    var chooseTemplate: () -> Void
+    var hasToolpaths: Bool
     var setView: (ViewPreset) -> Void
     var fit: () -> Void
     var duplicate: () -> Void

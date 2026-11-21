@@ -11,9 +11,14 @@ struct InspectorView: View {
             if let id = workspace.selectedOperationID, let index = project.operations.firstIndex(where: { $0.id == id }) {
                 OperationInspector(op: $project.operations[index], project: project, workspace: workspace)
             } else if workspace.selectedShapeIDs.count == 1, let index = project.shapes.firstIndex(where: { $0.id == workspace.selectedShapeIDs[0] }) {
-                ShapeInspector(shape: $project.shapes[index], units: project.displayUnits, stock: project.stock)
+                let id = project.shapes[index].id
+                ShapeInspector(shape: $project.shapes[index], units: project.displayUnits, stock: project.stock,
+                               layers: project.layerNames, setLayer: { project.setLayer($0, of: [id]) })
             } else if workspace.selectedShapeIDs.count > 1 {
-                MultiShapeInspector(count: workspace.selectedShapeIDs.count)
+                let ids = Set(workspace.selectedShapeIDs)
+                let layers = Set(project.shapes.filter { ids.contains($0.id) }.map(\.layer))
+                MultiShapeInspector(count: ids.count, layer: layers.count == 1 ? layers.first : nil, layers: project.layerNames,
+                                    setLayer: { project.setLayer($0, of: ids) })
             } else {
                 SetupInspector(project: $project)
             }
@@ -452,6 +457,10 @@ struct ShapeInspector: View {
     @Binding var shape: DesignShape
     let units: LengthUnit
     var stock: Stock? = nil
+    /// The design's layers, and how to put this shape on one (through the project, so toolpaths that find their
+    /// vectors by layer follow). Without it, no layer row.
+    var layers: [String] = []
+    var setLayer: ((String) -> Void)? = nil
 
     /// A model on a rotary blank: it lies along the axis, so only its place along the blank and its size are set here.
     private var onBlank: RotaryStock? {
@@ -467,6 +476,9 @@ struct ShapeInspector: View {
         Form {
             Section(shape.kind.label) {
                 TextField("Name", text: $shape.name)
+                if let setLayer {
+                    LayerField(current: shape.layer, layers: layers, commit: setLayer)
+                }
                 if onBlank != nil {
                     LengthField(title: "Middle (X)", mm: $shape.position.x, units: units, help: "Where the middle of the model's length is along the blank")
                 } else {
@@ -630,11 +642,24 @@ struct RotaryModelRows: View {
 
 struct MultiShapeInspector: View {
     let count: Int
+    /// The layer they're all on, or nil when they're on different ones.
+    var layer: String? = nil
+    var layers: [String] = []
+    var setLayer: ((String) -> Void)? = nil
+
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: "square.on.square").font(.largeTitle).foregroundStyle(.secondary)
             Text("\(count) shapes selected")
             Text("Use Add Toolpath to machine them together.").font(.caption).foregroundStyle(.secondary)
+            if let setLayer {
+                Form {
+                    LayerField(current: layer, layers: layers, commit: setLayer)
+                }
+                .formStyle(.grouped)
+                .scrollDisabled(true)
+                .frame(height: 76)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
