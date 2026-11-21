@@ -158,7 +158,9 @@ public enum CAMEngine {
                 opContext.keepOuts = keepOuts
                 opContext.rotaryStockRadius = stockRadius
                 if let grid = roughed {
-                    opContext.rotaryMaterial = { x, a, r in grid.highest(x: x, angle: a, reach: r) + 0.01 }
+                    // A surface per ray: allow for what can stand between rays (a square bar's corner).
+                    let between = grid.angleStep * Double(grid.initial.max() ?? 0) + 0.01
+                    opContext.rotaryMaterial = { x, a, r in grid.highest(x: x, angle: a, reach: r) + between }
                 }
                 opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
                 var generated: [Toolpath]
@@ -217,10 +219,9 @@ public enum CAMEngine {
                     }
                     issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
                     if let wrap {
-                        // 3D rotary finishing has already lowered its feeds for the rotary axis, and said so.
-                        var finish = false
-                        if case .rotaryFinish = op.kind { finish = true }
-                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !finish)
+                        // 3D rotary roughing and finishing have already lowered their feeds for the rotary axis, and said so.
+                        let own = op.kind.is3D && op.kind.turnsWholeBlank
+                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !own)
                     } else if project.machine.outputArcs {
                         tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
                     }

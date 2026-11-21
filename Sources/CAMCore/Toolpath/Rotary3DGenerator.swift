@@ -93,20 +93,7 @@ enum Rotary3DGenerator {
             let r = tool.radius
             var round = 0.0
             for i in 0...8 { round = max(round, stockRadius(x - r + 2 * r * Double(i) / 8)) }
-            var surface = blank.radius
-            if blank.shape == .squareBar {
-                // Over the angles the footprint spans: the faces, and any corner in it.
-                let w = asin(min(1, r / blank.radius))
-                var angles = (0...64).map { a - w + 2 * w * Double($0) / 64 }
-                for k in -4...4 {
-                    let corner = (Double(k) + 0.5) * .pi / 2 + (a / (.pi / 2)).rounded(.down) * .pi / 2
-                    if abs(corner - a) <= w { angles.append(corner) }
-                }
-                for phi in angles {
-                    let d = blank.surfaceRadius(atDegrees: phi * 180 / .pi)
-                    if d * abs(sin(phi - a)) <= r + 1e-9 { surface = max(surface, d * cos(phi - a)) }
-                }
-            }
+            let surface = highestOfBlank(blank, angle: a, reach: r)
             return min(round, surface, roughed?(x, a, r) ?? .infinity)
         }
 
@@ -446,6 +433,33 @@ enum Rotary3DGenerator {
                 strokes[k].points = run
             }
         }
+    }
+
+    /// The most of the blank's own section under a tool pointed at the axis at `angle` (radians), reaching `reach`
+    /// either side of its axis, measured along that axis (mm): the radius on a round blank; on a square bar the highest
+    /// of its faces and corners within the footprint (a face's highest point is at the footprint's edge, or a corner).
+    static func highestOfBlank(_ blank: RotaryStock, angle a: Double, reach: Double) -> Double {
+        guard blank.shape == .squareBar else { return blank.radius }
+        // In the section, along the tool's axis (height) and across it (lateral).
+        let corner = blank.outerRadius
+        func local(_ phi: Double) -> (l: Double, h: Double) { (corner * sin(phi - a), corner * cos(phi - a)) }
+        var most = 0.0
+        for k in 0..<4 {
+            let p = local(.pi / 4 + Double(k) * .pi / 2), q = local(.pi / 4 + Double(k + 1) * .pi / 2)
+            // The part of this face within the footprint, |l| ≤ reach; the height is linear along it.
+            var s0 = 0.0, s1 = 1.0
+            let dl = q.l - p.l
+            if abs(dl) < 1e-12 {
+                guard abs(p.l) <= reach else { continue }
+            } else {
+                let a0 = (-reach - p.l) / dl, a1 = (reach - p.l) / dl
+                s0 = max(s0, min(a0, a1))
+                s1 = min(s1, max(a0, a1))
+                guard s0 <= s1 else { continue }
+            }
+            most = max(most, p.h + (q.h - p.h) * s0, p.h + (q.h - p.h) * s1)
+        }
+        return most
     }
 
     // MARK: Checks

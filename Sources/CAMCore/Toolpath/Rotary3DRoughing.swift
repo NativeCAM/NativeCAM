@@ -141,6 +141,16 @@ enum Rotary3DRoughing {
         func sheet(_ q: Point, _ offset: Double) -> Vec3 { Vec3(q.x, cy + (q.angle + offset) * top, q.r - top) }
         let feed = tool.cutting.feedRate, plungeRate = tool.cutting.plungeRate
         let tolerance = max(0.002, ctx.flattenTolerance)
+        // Where a rapid down above the start of a cut stops: the most stock under the tool's footprint there, from what
+        // it was before this toolpath (exact for the blank) and from the stock model as cut so far (which holds a
+        // surface per ray, so allow for what can stand between rays: a square bar's corner).
+        let between = g0.angleStep * stockTop + 0.05
+        func highestUnder(_ q: Point) -> Double {
+            var round = 0.0
+            for i in 0...8 { round = max(round, stockRadius(q.x - R + 2 * R * Double(i) / 8)) }
+            let before = min(round, Rotary3DGenerator.highestOfBlank(blank, angle: q.angle, reach: R), earlier?(q.x, q.angle, R) ?? .infinity)
+            return min(before, sim.grid.highest(x: q.x, angle: q.angle, reach: R) + between)
+        }
         var motions: [Motion] = []
         var last: (point: Point, offset: Double)?
         var atSafe = true
@@ -250,7 +260,7 @@ enum Rotary3DRoughing {
                 if cut.last?.end ?? position != Vec3(over.x, over.y, clearance) { cut.append(.rapid(Vec3(over.x, over.y, clearance))) }
                 // Down to just above the most material under the tool's footprint there, then the plunge; straight down
                 // to a start that's already that far clear of it.
-                let plunge = sim.grid.highest(x: first.x, angle: first.angle, reach: R) + stock.plungeHeight - top
+                let plunge = highestUnder(first) + stock.plungeHeight - top
                 if plunge <= over.z + 1e-9 {
                     cut.append(.rapid(over))
                 } else {
@@ -288,14 +298,21 @@ enum Rotary3DRoughing {
         motions = RotaryWrap.merged(motions, start: tp.start, tolerance: ctx.flattenTolerance / 2)
         let turnSpeed = RotaryWrap.turnSpeed(ctx.machine)
         var at = tp.start
+        var slowest: RotaryWrap.Slowing?
         for i in motions.indices {
             defer { at = motions[i].end }
             guard motions[i].kind == .feed else { continue }
             let a = Point(x: at.x, angle: (at.y - cy) / top, r: top + at.z)
             let b = Point(x: motions[i].end.x, angle: (motions[i].end.y - cy) / top, r: top + motions[i].end.z)
-            motions[i].feed = turnLimitedFeed(motions[i].feed, from: a, to: b, turnSpeed: turnSpeed)
+            let f = turnLimitedFeed(motions[i].feed, from: a, to: b, turnSpeed: turnSpeed)
+            guard f < motions[i].feed else { continue }
+            if slowest.map({ f / motions[i].feed < $0.feed / $0.set }) ?? true {
+                slowest = RotaryWrap.Slowing(feed: f, set: motions[i].feed, radius: max(0, min(a.r, b.r)))
+            }
+            motions[i].feed = f
         }
         tp.motions = motions
+        if let slowest { warnings.append(RotaryWrap.slowingWarning(slowest, context: ctx)) }
 
         // Checks: reach, flutes, layer depth, the allowance against the ridges a flat bottom leaves on a round.
         let cutDeep = stockTop - deepestCut

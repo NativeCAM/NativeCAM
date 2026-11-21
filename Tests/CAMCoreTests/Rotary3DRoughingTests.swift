@@ -258,6 +258,38 @@ struct Rotary3DRoughingTests {
         }
     }
 
+    /// On a wrapped job the sheet's radius is the wrap diameter's, not the blank's: the roughing comes out the same.
+    @Test func itRoughsOnAWrappedJobToo() throws {
+        let p = Self.job(mesh: Self.cylinder(radius: 8, length: 40), blank: RotaryStock(diameter: 40, length: 80), start: 20,
+                         params: RotaryRoughParams(allowance: 0.5)) { p in
+            var b = p.stock.rotary!
+            b.layout = .wrapped
+            b.wrapDiameter = 36
+            p.stock.setRotary(b)
+            p.placeModelsOnBlank()
+        }
+        let job = CAMEngine.generate(p)
+        #expect(!job.hasErrors, "\(messages(job, .error))")
+        let tp = try #require(job.toolpaths.first)
+        #expect(tp.wrapDiameter == 36)
+        let sim = try Self.simulate([tp], p, cell: 0.3)
+        #expect(sim.collisions == 0)
+        let g = sim.grid
+        var lo = Double.infinity, hi = 0.0
+        for c in 0..<g.columns {
+            let x = g.originX + Double(c) * g.cellSize
+            guard x > 25, x < 55 else { continue }
+            for j in 0..<g.rows {
+                let r = Double(g.radii[j * g.columns + c])
+                lo = min(lo, r)
+                hi = max(hi, r)
+            }
+        }
+        // Down to the cylinder and its allowance (less its facets), and no more than the ridges left above that.
+        #expect(lo > 8.5 - 0.02, "\(lo)")
+        #expect(hi < 8.5 + RotaryRoughParams.cusp(Self.endMill, radius: 8.5) + 0.05, "\(hi)")
+    }
+
     // MARK: Run order
 
     /// Rounding, then roughing, then finishing: Optimize Run Order keeps it, and fixes a finish put before its roughing.
@@ -338,6 +370,8 @@ struct Rotary3DRoughingTests {
         bull.shape = .bullNose
         bull.cornerRadius = 1.5
         #expect(RotaryRoughParams.cusp(bull, radius: 7.7) < cusp - 0.3)
+        // Near the axis the 1/4" end mill's feed needs A faster than its nominal 90° a second.
+        has("rotary axis turns at most 5,400°/min")
         has("collet nut could hit") { $0.operations[0].tool.stickout = 5 }
         has("so its shank rubs") { p in
             p.operations[0].tool.fluteLength = 8
@@ -464,16 +498,42 @@ struct Rotary3DRoughingTests {
     // MARK: 3D rotary finishing on a square bar
 
     /// R3's rapids down stop above the most material under the tool, not just under its middle: off a square bar's
-    /// face, a corner can be under the edge of the tool, higher than the plunge height above the face there.
+    /// face, a corner can be under the edge of the tool, higher than the plunge height above the face there. (The
+    /// simulation checks rapids along the tool's axis only, so this measures the footprint itself.)
     @Test func aFinishOnASquareBarStopsItsRapidsAboveTheCorners() throws {
         let p = Self.legJob { p in
-            p.operations[0].kind = .rotaryFinish(RotaryFinishParams(pattern: .lines, stepoverFraction: 0.6, passDepth: 30))
+            // Layers whose first lines meet only the corners, each starting from safe Z beside a corner.
+            p.operations[0].kind = .rotaryFinish(RotaryFinishParams(pattern: .lines, stepoverFraction: 0.6))
             p.operations[0].tool = Self.endMill
             p.stock.plungeHeight = 0.5
         }
         let job = CAMEngine.generate(p)
         let tp = try #require(job.toolpaths.first)
-        let sim = try Self.simulate([tp], p, cell: 0.3)
-        #expect(sim.collisions == 0)
+        let blank = try #require(p.stock.rotary)
+        let top = blank.topRadius, cy = p.stock.originPoint.y, R = Self.endMill.radius
+        let clearance = max(p.stock.clearanceHeight, p.stock.plungeHeight)
+        /// The most of the bar under a tool pointed at the axis at `angle`, along its axis.
+        func under(_ angle: Double) -> Double {
+            var most = 0.0
+            for i in -720...720 {
+                let phi = angle + Double(i) / 720 * .pi / 2
+                let d = blank.surfaceRadius(atDegrees: phi * 180 / .pi)
+                if d * abs(sin(phi - angle)) <= R { most = max(most, d * cos(phi - angle)) }
+            }
+            return most
+        }
+        var checked = 0
+        var low: [String] = []
+        var at = tp.start
+        for m in tp.motions {
+            defer { at = m.end }
+            guard m.kind == .rapid, m.end.z < clearance - 1e-9, m.end.z < at.z - 1e-9, abs(m.end.x - at.x) < 1e-9 else { continue }
+            let angle = (m.end.y - cy) / top
+            let gap = top + m.end.z - under(angle)
+            if gap < 0.5 - 1e-3 { low.append("x \(m.end.x) angle \(angle * 180 / .pi)°: \(gap)") }
+            checked += 1
+        }
+        #expect(checked > 3)
+        #expect(low.isEmpty, "\(low.prefix(5))")
     }
 }
