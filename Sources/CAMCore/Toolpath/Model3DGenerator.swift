@@ -258,7 +258,9 @@ enum Model3DGenerator {
                 let p = sgm.a.lerp(to: sgm.b, Double(k) / Double(n))
                 pts.append(Vec3(p, max(floor, min(0, dropper.z(at: p, hint: &hint)))))
             }
-            box.paths[i] = simplify3D(pts, tolerance: tolerance)
+            box.paths[i] = simplify3D(refineDrops(pts, tolerance: tolerance, hint: &hint) { p, h in
+                max(floor, min(0, dropper.z(at: p, hint: &h)))
+            }, tolerance: tolerance)
         }
 
         // Zig-zag: alternate direction per row, link neighbours at depth when the hop is short.
@@ -272,12 +274,16 @@ enum Model3DGenerator {
             if b.position.z < s.stock.plungeHeight && hop <= stepover * 3 && i > 0 {
                 // Short hop: follow the surface (drop-cutter) so the link can't gouge.
                 let n = max(1, Int((hop / ds).rounded(.up)))
-                let from = b.position.xy
+                let from = b.position
                 var hint: Int32 = -1
+                var hopPoints = [from]
                 for k in 1...n {
-                    let p = from.lerp(to: first.xy, Double(k) / Double(n))
-                    b.feed(Vec3(p, max(floor, min(0, dropper.z(at: p, hint: &hint)))))
+                    let p = from.xy.lerp(to: first.xy, Double(k) / Double(n))
+                    hopPoints.append(Vec3(p, max(floor, min(0, dropper.z(at: p, hint: &hint)))))
                 }
+                b.follow(Array(refineDrops(hopPoints, tolerance: tolerance, hint: &hint) { p, h in
+                    max(floor, min(0, dropper.z(at: p, hint: &h)))
+                }.dropFirst()))
             } else {
                 b.enter(at: first)
             }
@@ -285,6 +291,39 @@ enum Model3DGenerator {
         }
         b.retract()
         return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+    }
+}
+
+extension Model3DGenerator {
+    /// Splits each move of a dropped path whose middle is more than `tolerance` below the surface `z` (it would cut into
+    /// the model), or which is steep (more than 3 in 1) with its middle that far off the surface either way, and its
+    /// halves in turn, until none is or they're under 2 µm long. Samples a fixed distance apart can straddle the place
+    /// where the tool rolls over a wall's top edge and drops to the floor (its height jumps there), and the straight
+    /// move between them would clip the edge; split, the tool goes straight up or down at the foot of the step
+    /// instead. A gentle move bridging a hollow is left alone: it leaves material rather than cutting any. `low` keeps
+    /// the surface from going below a height (a link that mustn't dip).
+    static func refineDrops(_ pts: [Vec3], tolerance: Double, above low: Double = -.infinity, hint: inout Int32,
+                            z: (Vec2, inout Int32) -> Double) -> [Vec3] {
+        guard pts.count >= 2 else { return pts }
+        var out: [Vec3] = [pts[0]]
+        out.reserveCapacity(pts.count)
+        func split(_ a: Vec3, _ b: Vec3, depth: Int, hint: inout Int32) {
+            if depth > 0, a.xy.distanceSquared(to: b.xy) > 4e-6 {
+                let m = a.xy.lerp(to: b.xy, 0.5)
+                let zm = max(low, z(m, &hint))
+                let off = zm - (a.z + b.z) / 2
+                let steep = abs(b.z - a.z) > 3 * a.xy.distance(to: b.xy)
+                if off > tolerance || (steep && -off > tolerance) {
+                    let mid = Vec3(m, zm)
+                    split(a, mid, depth: depth - 1, hint: &hint)
+                    split(mid, b, depth: depth - 1, hint: &hint)
+                    return
+                }
+            }
+            out.append(b)
+        }
+        for i in 1..<pts.count { split(pts[i - 1], pts[i], depth: 16, hint: &hint) }
+        return out
     }
 }
 
