@@ -302,3 +302,78 @@ public extension MeshModel {
         return MeshModel(name: "Relief medallion", positions: pos, indices: idx)
     }
 }
+
+// MARK: Shelf parts (nesting)
+
+public extension Project {
+    /// Parts for a small wall shelf, laid out loosely on a 48" × 48" sheet of 3/4" plywood for trying Toolpaths ▸ Nest
+    /// Parts: two sides with shelf-pin holes, two shelves, a top with a hand-hold slot, an arched apron, four curved
+    /// brackets and a round tray. Two 3/4" clamps hold the sheet at its left edge, under a 1" safe Z. The pin holes are
+    /// drilled, the slot cut out from inside and every part cut out with tabs, all with the 1/4" end mill.
+    static func demoNesting() -> Project {
+        let lib = ToolLibrary.starter
+        let endMill = lib.tool(number: 1)!
+        var stock = Stock(width: 48.inch, height: 48.inch, thickness: 0.75.inch, materialName: "Baltic birch plywood")
+        // Safe Z clears the clamps.
+        stock.clearanceHeight = 1.inch
+        var shapes: [DesignShape] = []
+        var n = 50
+        @discardableResult
+        func add(_ name: String, _ kind: ShapeKind, _ x: Double, _ y: Double) -> DesignShape {
+            var s = DesignShape(id: demoID(n), name: name, kind: kind, position: Vec2(x.inch, y.inch))
+            n += 1
+            if case .paths = kind { s.layer = "Parts" }
+            shapes.append(s)
+            return s
+        }
+        func rect(_ w: Double, _ h: Double, _ r: Double = 0) -> ShapeKind { .rectangle(width: w.inch, height: h.inch, cornerRadius: r.inch) }
+        // A bracket: a 5.5" square less a quarter circle, 1" thick along both legs.
+        let a = 5.5.inch, t = 1.inch
+        let arc = Curves.arc(center: Vec2(a, a), radius: a - t, startAngle: 1.5 * .pi, sweep: -.pi / 2, tolerance: 0.01)
+        let bracket = Polyline([Vec2(0, 0), Vec2(a, 0)] + arc + [Vec2(0, a)], closed: true).deduplicated()
+            .transformed(.translation(Vec2(-a / 2, -a / 2)))
+        // The apron: 18" × 3.5" with a shallow arch cut from its bottom edge, leaving a 3" foot each end.
+        let hw = 9.inch, hh = 1.75.inch
+        let arch = (0...32).map { k -> Vec2 in
+            let theta = Double.pi - .pi * Double(k) / 32
+            return Vec2(6.inch * cos(theta), -hh + 1.5.inch * sin(theta))
+        }
+        let apron = Polyline([Vec2(-hw, -hh)] + arch + [Vec2(hw, -hh), Vec2(hw, hh), Vec2(-hw, hh)], closed: true).deduplicated()
+
+        var outlines: [DesignShape] = []
+        var holes: [DesignShape] = []
+        for (i, y) in [6.0, 18.0].enumerated() {
+            outlines.append(add("Side \(i + 1)", rect(24, 9.25), 15.5, y))
+            for dx in [-9.0, 9.0] {
+                for dy in [-3.0, 3.0] { holes.append(add("Pin hole", .circle(radius: 0.125.inch), 15.5 + dx, y + dy)) }
+            }
+        }
+        outlines.append(add("Tray", .circle(radius: 5.5.inch), 38, 7))
+        outlines.append(add("Top", rect(18, 10, 0.75), 38, 20.5))
+        let slot = add("Hand hold", rect(4, 1, 0.5), 38, 20.5)
+        outlines.append(add("Shelf 1", rect(18, 9), 13, 31))
+        outlines.append(add("Shelf 2", rect(18, 9), 33, 31))
+        outlines.append(add("Apron", .paths([apron]), 13, 41))
+        for (i, x) in [26.5, 32.5, 38.5, 44.5].enumerated() { outlines.append(add("Bracket \(i + 1)", .paths([bracket]), x, 42.5)) }
+        for (i, y) in [11.5, 36.5].enumerated() {
+            var clamp = add("Clamp \(i + 1)", rect(2, 3), 1.25, y)
+            clamp.keepOutHeight = 0.75.inch
+            shapes[shapes.count - 1] = clamp
+        }
+        let ops: [CAMOperation] = [
+            CAMOperation(id: demoID(80), name: "Drill shelf-pin holes", kind: .drill(DrillParams(depth: 0.4.inch, peckDepth: 0.2.inch)),
+                         shapeIDs: holes.map(\.id), tool: endMill),
+            CAMOperation(id: demoID(81), name: "Cut hand hold",
+                         kind: .profile(ProfileParams(side: .inside, depth: DepthSettings(cutDepth: 0.77.inch),
+                                                      entry: EntrySettings(kind: .ramp, rampLength: 1.inch))),
+                         shapeIDs: [slot.id], tool: endMill),
+            CAMOperation(id: demoID(82), name: "Cut out parts",
+                         kind: .profile(ProfileParams(side: .outside, depth: DepthSettings(cutDepth: 0.77.inch),
+                                                      tabs: TabSettings(enabled: true, count: 4),
+                                                      entry: EntrySettings(kind: .ramp, rampLength: 1.5.inch))),
+                         shapeIDs: outlines.map(\.id), tool: endMill),
+        ]
+        return Project(name: "Demo shelf parts", displayUnits: .inch, stock: stock, machine: .avidPRO6060, shapes: shapes,
+                       operations: ops)
+    }
+}

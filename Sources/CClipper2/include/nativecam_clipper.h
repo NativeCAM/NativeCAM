@@ -46,6 +46,15 @@ ncl_paths *ncl_boolean(ncl_clip clip_type, ncl_fill fill,
                        ncl_paths_in subjects, ncl_paths_in open_subjects, ncl_paths_in clips,
                        ncl_paths **open_out);
 
+/// Minkowski sum of the first path of `pattern` swept along the first path of `path` (Clipper2's MinkowskiSum: the
+/// union, non-zero, of one quad per pair of edges). For closed paths that is the sum of the two boundaries; callers add
+/// the filled interiors themselves.
+ncl_paths *ncl_minkowski_sum(ncl_paths_in pattern, ncl_paths_in path, int closed);
+
+/// Triangles covering closed, non-intersecting paths (Clipper2's Triangulate, Delaunay). Null when they can't be
+/// triangulated (intersecting paths, say).
+ncl_paths *ncl_triangulate(ncl_paths_in paths);
+
 void ncl_paths_free(ncl_paths *paths);
 
 #ifdef __cplusplus
