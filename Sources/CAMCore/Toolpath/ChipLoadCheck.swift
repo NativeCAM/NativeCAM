@@ -5,32 +5,37 @@ import Foundation
 extension CAMEngine {
     /// The chip at the toolpath's set feed, and at the lowest feed it keeps up over a stretch of cutting
     /// (`sustainedFeed`) when it lowers its own feed: an A-rate limit on a wrapped toolpath, feeds that follow the load.
+    /// An adaptive toolpath's chip is thinned by its light radial cut (`Toolpath.radialLoad`).
     static func chipLoadIssues(_ tp: Toolpath, project: Project) -> [JobIssue] {
         let tool = tp.tool
         guard ChipLoad.applies(to: tool), tp.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
         let material = project.stock.material
         let r = ChipLoad.range(material, diameter: tool.diameter)
         let z = Double(tool.fluteCount)
+        let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         let set = tool.cutting.feedRate
-        let chip = set / (tp.spindleRPM * z)
+        let chip = set / (tp.spindleRPM * z) * thin
         let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
         let units = project.displayUnits
         let range = "the \(inch(r.lowerBound))–\(inch(r.upperBound)) range for this bit in \(material.label.lowercased())"
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine)
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine, thinning: thin)
         let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM."
+        // What the chip is: thinned, at an adaptive toolpath's light cut.
+        let what = thin < 1 ? "Chip load \(inch(chip)) at the \(Int((100 * (tp.radialLoad ?? 0)).rounded()))% adaptive load (a light cut thins "
+            + "the chip to \(Int((100 * thin).rounded()))% of the feed per tooth)" : "Chip load \(inch(chip))"
         // Ball and bull noses finish at light engagement, so allow them a little below the end-mill floor.
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         if chip < floor {
-            return [JobIssue(.warning, "Chip load \(inch(chip)) is below \(range); thin chips rub, burn and dull the bit. \(suggestion)",
+            return [JobIssue(.warning, "\(what) is below \(range); thin chips rub, burn and dull the bit. \(suggestion)",
                              operation: tp.name)]
         }
         var issues: [JobIssue] = []
-        if let low = sustainedFeed(tp), low.feed < set - 1e-6, low.feed / (tp.spindleRPM * z) < floor {
+        if let low = sustainedFeed(tp), low.feed < set - 1e-6, low.feed / (tp.spindleRPM * z) * thin < floor {
             issues.append(JobIssue(.warning, loweredChipMessage(tp, low: low, range: r, floor: floor, rangeText: range, project: project),
                                    operation: tp.name))
         }
         if chip > r.upperBound * 1.25 {
-            issues.append(JobIssue(.info, "Chip load \(inch(chip)) is above \(range); expect a rougher edge. \(suggestion)",
+            issues.append(JobIssue(.info, "\(what) is above \(range); expect a rougher edge. \(suggestion)",
                                    operation: tp.name))
         }
         return issues
@@ -42,9 +47,10 @@ extension CAMEngine {
                                    rangeText: String, project: Project) -> String {
         let tool = tp.tool, machine = project.machine
         let z = Double(tool.fluteCount)
+        let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         let ctx = GenerationContext(stock: project.stock, machine: machine, units: project.displayUnits)
         let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
-        let chip = low.feed / (tp.spindleRPM * z)
+        let chip = low.feed / (tp.spindleRPM * z) * thin
         let units = project.displayUnits
         let point = { (v: Double) in units.format(v) }
         let place: String
@@ -58,12 +64,12 @@ extension CAMEngine {
         }
         // The speed that puts the chip a quarter into the range at that feed, as the set feed's recommendation does.
         let target = r.lowerBound + (r.upperBound - r.lowerBound) * 0.25
-        let rpm = machine.clampRPM(low.feed / (z * target))
+        let rpm = machine.clampRPM(low.feed * thin / (z * target))
         var fix: String
-        if low.feed / (rpm * z) >= floor - 1e-12 {
+        if low.feed / (rpm * z) * thin >= floor - 1e-12 {
             fix = "At that feed, \(Int(rpm.rounded()).formatted()) RPM keeps the chip in range."
         } else {
-            fix = "Even at \(Int(rpm.rounded()).formatted()) RPM, the spindle's slowest, the chip there would be \(inch(low.feed / (rpm * z)))."
+            fix = "Even at \(Int(rpm.rounded()).formatted()) RPM, the spindle's slowest, the chip there would be \(inch(low.feed / (rpm * z) * thin))."
         }
         if tp.wrapDiameter != nil, machine.rotary?.drivenTurnSpeed == nil {
             fix += " " + Self.assumedTurnSpeedNote

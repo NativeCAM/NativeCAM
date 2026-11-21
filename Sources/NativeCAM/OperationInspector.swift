@@ -25,7 +25,7 @@ struct OperationInspector: View {
             }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
                         loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
-                        wrapped: project.stock.rotary?.isWrapped == true)
+                        wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
@@ -58,6 +58,12 @@ struct OperationInspector: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// An adaptive pocket's optimal load, which thins its chip.
+    private var adaptiveLoad: Double? {
+        if case let .pocket(p) = op.kind, p.strategy == .adaptive { return p.adaptiveSettings.load }
+        return nil
     }
 
     @ViewBuilder
@@ -104,13 +110,26 @@ struct OperationInspector: View {
                     ForEach(CutDirection.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction ?? op.tool.cutting.stepoverFraction },
-                                                                 set: { var q = p; q.stepoverFraction = $0; set(q) }))
+                if p.strategy == .adaptive {
+                    AdaptiveRows(params: p, tool: op.tool, machine: project.machine, units: units, set: set)
+                } else {
+                    PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction ?? op.tool.cutting.stepoverFraction },
+                                                                     set: { var q = p; q.stepoverFraction = $0; set(q) }))
+                }
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = $0; set(q) }), units: units)
             }
             RestMachiningSection(params: Binding(get: { p }, set: { set($0) }), tool: op.tool, units: units)
-            DepthSection(depth: Binding(get: { p.depth }, set: { var q = p; q.depth = $0; set(q) }), tool: op.tool, stock: project.stock, units: units)
-            EntrySection(entry: Binding(get: { p.entry }, set: { var q = p; q.entry = $0; set(q) }), units: units)
+            DepthSection(depth: Binding(get: { p.depth }, set: { var q = p; q.depth = $0; set(q) }), tool: op.tool, stock: project.stock, units: units,
+                         defaultPassDepth: p.defaultPassDepth(op.tool),
+                         passHelp: p.strategy == .adaptive ? "Defaults to the tool's flute length: adaptive cuts the full depth of its flutes at once" : nil)
+            if p.strategy == .adaptive {
+                Section("Entry") {
+                    Text("Enters each area on a 2° helix, or ramps along it where a helix doesn't fit.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                EntrySection(entry: Binding(get: { p.entry }, set: { var q = p; q.entry = $0; set(q) }), units: units)
+            }
             CornersSection(relief: Binding(get: { p.cornerRelief }, set: { var q = p; q.cornerRelief = $0; set(q) }), available: true)
         case let .drill(p):
             let set: (DrillParams) -> Void = { op.kind = .drill($0) }
@@ -702,17 +721,21 @@ struct DepthSection: View {
     let tool: Tool
     let stock: Stock
     let units: LengthUnit
+    /// The pass depth when none is set; nil = the tool's stepdown.
+    var defaultPassDepth: Double? = nil
+    var passHelp: String? = nil
 
     var body: some View {
+        let step = defaultPassDepth ?? tool.cutting.stepdown
         Section("Depth") {
             LengthField(title: "Start depth", mm: $depth.startDepth, units: units, minimum: 0)
             MaterialDepthRows(title: "Cut depth",
                               value: Binding(get: { MaterialDepthValue(depth: depth.cutDepth, fromBottom: depth.fromBottom) },
                                              set: { var d = depth; d.cutDepth = max(0.01, $0.depth); d.fromBottom = $0.fromBottom; depth = d }),
                               stock: stock, units: units)
-            LengthField(title: "Pass depth", mm: Binding(get: { depth.passDepth ?? tool.cutting.stepdown }, set: { depth.passDepth = max(0.05, $0) }),
-                        units: units, help: "Defaults to the tool's stepdown")
-            let passes = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum).count
+            LengthField(title: "Pass depth", mm: Binding(get: { depth.passDepth ?? step }, set: { depth.passDepth = max(0.05, $0) }),
+                        units: units, help: passHelp ?? "Defaults to the tool's stepdown")
+            let passes = depth.passLevels(toolStepdown: step, firstPassMinimum: tool.firstPassMinimum).count
             LabeledContent("Passes", value: "\(passes)")
             if depth.cutDepth > stock.thickness + 0.04.inch {
                 Label("Deeper than the material (\(units.format(stock.thickness)) \(units.symbol))", systemImage: "exclamationmark.triangle")
@@ -873,6 +896,60 @@ struct CornersSection: View {
 
 /// Rest machining for a pocket: a larger end mill clears it first, and this toolpath's tool only cuts what that
 /// one can't reach.
+/// The Pocket section's rows for adaptive clearing: the optimal load and the minimum loop radius, with what the
+/// machine's acceleration lets loops that tight run at.
+struct AdaptiveRows: View {
+    let params: PocketParams
+    let tool: Tool
+    let machine: MachineProfile
+    let units: LengthUnit
+    let set: (PocketParams) -> Void
+
+    var body: some View {
+        let s = params.adaptiveSettings
+        let radius = s.loopRadius(tool: tool, feed: tool.cutting.feedRate, machine: machine)
+        let cap = AdaptiveSettings.loopFeedCap(radius: radius, machine: machine)
+        let feed = { (mm: Double) in
+            "\(units.fromMM(mm).formatted(.number.precision(.fractionLength(0)))) \(units.feedSymbol)"
+        }
+        NumberField(title: "Optimal load", value: Binding(get: { s.load * 100 }, set: { v in
+            var a = s
+            a.optimalLoad = min(max(v / 100, AdaptiveSettings.loadRange.lowerBound), AdaptiveSettings.loadRange.upperBound)
+            var q = params
+            q.adaptive = a
+            set(q)
+        }), suffix: "%", decimals: 0)
+        .help("The share of the bit's width it cuts, held all the way. 10–15% suits a full-depth cut in hardwood or MDF")
+        LabeledContent("Cut width", value: "\(units.format(s.load * tool.diameter, decimals: units == .inch ? 4 : 2)) \(units.symbol)")
+        LengthField(title: "Min loop radius", mm: Binding(get: { radius }, set: { v in
+            var a = s
+            a.minimumLoopRadius = max(0.05, v)
+            var q = params
+            q.adaptive = a
+            set(q)
+        }), units: units, help: "The tightest the loops and links between cuts turn. Automatic: what lets the feed run at full speed "
+            + "with this machine's acceleration, between a quarter of the bit's diameter and twice it")
+        if s.minimumLoopRadius != nil {
+            Button("Automatic loop radius") {
+                var a = s
+                a.minimumLoopRadius = nil
+                var q = params
+                q.adaptive = a
+                set(q)
+            }
+            .controlSize(.small)
+        }
+        if cap < 0.95 * tool.cutting.feedRate {
+            Label("Loops this tight run at up to \(feed(cap)) with this machine's acceleration, below the \(feed(tool.cutting.feedRate)) feed",
+                  systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("Loops this tight can run at up to \(feed(cap)) with this machine's acceleration.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct RestMachiningSection: View {
     @Binding var params: PocketParams
     let tool: Tool
@@ -932,6 +1009,8 @@ struct ToolSection: View {
     var loadFeeds: Binding<Bool?>? = nil
     /// On a wrapped rotary job, where feeds are inverse time and don't follow the load.
     var wrapped = false
+    /// An adaptive pocket's optimal load (a share of the diameter), which thins the chip.
+    var radialLoad: Double? = nil
 
     var body: some View {
         Section("Tool") {
@@ -963,7 +1042,7 @@ struct ToolSection: View {
             LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
             PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
-                ChipLoadRow(tool: $tool, material: material, machine: machine, units: units)
+                ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad)
             }
         }
     }
@@ -975,10 +1054,13 @@ struct ChipLoadRow: View {
     let material: MaterialKind
     let machine: MachineProfile
     let units: LengthUnit
+    /// An adaptive pocket's optimal load: the chip is thinner than the feed per tooth.
+    var radialLoad: Double? = nil
 
     var body: some View {
         let r = ChipLoad.range(material, diameter: tool.diameter)
-        let chip = tool.chipLoad
+        let thin = radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
+        let chip = tool.chipLoad * thin
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         let status: (String, Color) = chip < floor ? ("exclamationmark.triangle.fill", .orange)
             : chip > r.upperBound * 1.25 ? ("exclamationmark.circle", .secondary) : ("checkmark.circle.fill", .green)
@@ -989,9 +1071,13 @@ struct ChipLoadRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Chip load")
                 Text("\(material.label): \(inch(r.lowerBound))–\(inch(r.upperBound)) in").font(.caption).foregroundStyle(.secondary)
+                if let radialLoad, thin < 1 {
+                    Text("Thinned to \(Int((100 * thin).rounded()))% at the \(Int((100 * radialLoad).rounded()))% adaptive load")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine)
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine, thinning: thin)
         HStack {
             Spacer()
             Button("Use Recommended: \(units.format(rec.feed, decimals: 0)) \(units == .inch ? "ipm" : "mm/min") @ \(Int(rec.rpm.rounded())) RPM") {
