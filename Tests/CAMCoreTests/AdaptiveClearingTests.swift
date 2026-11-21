@@ -283,10 +283,13 @@ struct AdaptiveClearingTests {
         let r = AdaptiveSettings.automaticLoopRadius(tool: tool, feed: tool.cutting.feedRate, machine: machine)
         // 220 in/min at 50 in/s²: (3.667 in/s)² / 50 in/s² = 0.269 in.
         #expect(abs(r - 0.2689.inch) < 0.001.inch)
-        #expect(abs(AdaptiveSettings.loopFeedCap(radius: r, machine: machine) - tool.cutting.feedRate) < 1)
+        let cap = AdaptiveSettings.loopFeedCap(radius: r, machine: machine)
+        #expect(abs(cap - tool.cutting.feedRate) < 1)
         // Kept between a quarter of the diameter and twice it.
-        #expect(AdaptiveSettings.automaticLoopRadius(tool: tool, feed: 10.inch, machine: machine) == 0.25 * tool.diameter)
-        #expect(AdaptiveSettings.automaticLoopRadius(tool: tool, feed: 2000.inch, machine: machine) == 2 * tool.diameter)
+        let slow = AdaptiveSettings.automaticLoopRadius(tool: tool, feed: 10.inch, machine: machine)
+        let fast = AdaptiveSettings.automaticLoopRadius(tool: tool, feed: 2000.inch, machine: machine)
+        #expect(slow == 0.25 * tool.diameter)
+        #expect(fast == 2 * tool.diameter)
     }
 
     /// A minimum loop radius tighter than the feed allows says what the loops will be held to.
@@ -296,7 +299,9 @@ struct AdaptiveClearingTests {
             return CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [op])).issues.map(\.message)
         }
         let tight = messages(2)
-        #expect(tight.contains { $0.hasPrefix("Adaptive loops 2.000 mm in radius hold the feed to") && $0.contains("below the programmed 5,588 mm/min") })
+        let held = tight.filter { $0.hasPrefix("Adaptive loops 2.000 mm in radius hold the feed to") }
+        #expect(held.count == 1)
+        #expect(held.first?.contains("below the programmed 5,588 mm/min") == true)
         #expect(!messages(nil).contains { $0.hasPrefix("Adaptive loops") })
     }
 
@@ -326,7 +331,8 @@ struct AdaptiveClearingTests {
             let run = s.xy.distance(to: m.end.xy), drop = s.z - m.end.z
             if drop > 1e-9 { steepest = max(steepest, atan2(drop, run)) }
         }
-        #expect(steepest > 0 && steepest <= AdaptiveClearing.rampAngle * 1.05)
+        #expect(steepest > 0)
+        #expect(steepest <= AdaptiveClearing.rampAngle * 1.05)
     }
 
     /// A slot too narrow for a helix ramps along itself instead.
@@ -338,7 +344,8 @@ struct AdaptiveClearingTests {
             return
         }
         #expect(p.distance(to: q) > 40)
-        #expect(abs(p.y - 75) < 0.5 && abs(q.y - 75) < 0.5)
+        #expect(abs(p.y - 75) < 0.5)
+        #expect(abs(q.y - 75) < 0.5)
     }
 
     /// Pass depth defaults to the flute length; deeper than that it clears in as few full-depth levels as fit.
@@ -349,12 +356,14 @@ struct AdaptiveClearingTests {
         var q = p
         q.depth.passDepth = 10
         #expect(q.passLevels(Self.quarter).count == 4)
-        #expect(Self.params(strategy: .offset).defaultPassDepth(Self.quarter) == Self.quarter.cutting.stepdown)
+        let offsetPass = Self.params(strategy: .offset).defaultPassDepth(Self.quarter)
+        #expect(offsetPass == Self.quarter.cutting.stepdown)
         let stock = Stock(width: 200, height: 150, thickness: 45, clearanceHeight: 10, plungeHeight: 2)
         let job = CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle], p)], stock: stock))
         let tp = try #require(job.toolpaths.first)
         let floors = Set(tp.motions.filter { $0.kind != .rapid }.map { ($0.end.z * 1000).rounded() / 1000 })
-        #expect(floors.contains(-20) && floors.contains(-40))
+        #expect(floors.contains(-20))
+        #expect(floors.contains(-40))
         #expect(!floors.contains(-Self.quarter.cutting.stepdown))
     }
 
@@ -406,7 +415,8 @@ struct AdaptiveClearingTests {
         #expect(!two.hasErrors)
         try #require(two.toolpaths.count == 2)
         let clearing = two.toolpaths[0]
-        #expect(clearing.tool.number == 10 && clearing.name == "Pocket – clearing")
+        #expect(clearing.tool.number == 10)
+        #expect(clearing.name == "Pocket – clearing")
         // One level for the 1/2" (its flutes are longer than the pocket is deep; offset would take two), the 1/8"'s
         // stepdown for its rest.
         let flat = { (tp: Toolpath, z: Double) in tp.motions.contains { $0.kind != .rapid && abs($0.end.z - z) < 1e-6 } }
@@ -415,7 +425,9 @@ struct AdaptiveClearingTests {
             if level == nil, m.kind != .rapid, m.end.z < -1e-6, abs(m.end.z - s.z) < 1e-9, s.xy.distance(to: m.end.xy) > 1e-6 { level = m.end.z }
         }
         #expect(level == -12)
-        #expect(DepthSettings(cutDepth: 12).passLevels(toolStepdown: Self.eighth.cutting.stepdown).allSatisfy { flat(two.toolpaths[1], $0) })
+        let smallLevels = DepthSettings(cutDepth: 12).passLevels(toolStepdown: Self.eighth.cutting.stepdown)
+        let restAtEach = smallLevels.allSatisfy { flat(two.toolpaths[1], $0) }
+        #expect(restAtEach)
         let (one, _) = job(nil)
         let a = Fixture.simulate(two.toolpaths, stock: project.stock, cell: 0.25)
         let b = Fixture.simulate(one.toolpaths, stock: project.stock, cell: 0.25)
@@ -433,7 +445,8 @@ struct AdaptiveClearingTests {
         let tp = try #require(job.toolpaths.first)
         let stepdown = DepthSettings(cutDepth: 12).passLevels(toolStepdown: Self.quarter.cutting.stepdown)
         #expect(stepdown == [-4, -8, -12])
-        #expect(tp.motions.contains { abs($0.end.z + 4) < 1e-6 && $0.end.y > 92 })
+        let inSlot = tp.motions.contains { abs($0.end.z + 4) < 1e-6 && $0.end.y > 92 }
+        #expect(inSlot)
         let plain = CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle])]))
         #expect(!plain.issues.contains { $0.message.contains("couldn't hold its load") })
     }
@@ -463,7 +476,8 @@ struct AdaptiveClearingTests {
         let fed = seconds(.adaptive, feed: Self.quarter.cutting.feedRate / thinning)
         print("Deep hardwood pocket, 100 × 60 × 25.4 mm, 1/4\" bit: offset \(Int(offset)) s, adaptive \(Int(adaptive)) s at the same feed, "
             + "\(Int(fed)) s fed for its chip")
-        #expect(adaptive > 0.7 * offset && adaptive < 2 * offset)
+        #expect(adaptive > 0.7 * offset)
+        #expect(adaptive < 2 * offset)
         #expect(fed < adaptive)
     }
 
@@ -495,9 +509,12 @@ struct AdaptiveClearingTests {
         // The starter 1/8" at 120 in/min, 18,000 RPM: 0.0033 in a tooth, 0.0022 in at 12%.
         let thin = chip(job(Self.eighth, 0.12))
         #expect(thin.count == 1)
-        #expect(thin.first?.hasPrefix("Chip load 0.0022 in at the 12% adaptive load (a light cut thins the chip to 65% of the feed per tooth) "
-            + "is below the 0.0030 in–0.0050 in range for this bit in plywood") == true)
-        #expect(try #require(job(Self.eighth, 0.12).toolpaths.first).radialLoad == 0.12)
+        let expected = "Chip load 0.0022 in at the 12% adaptive load (a light cut thins the chip to 65% of the feed per tooth) "
+            + "is below the 0.0030 in–0.0050 in range for this bit in plywood"
+        let says = thin.first?.hasPrefix(expected) ?? false
+        #expect(says)
+        let first = try #require(job(Self.eighth, 0.12).toolpaths.first)
+        #expect(first.radialLoad == 0.12)
         // At 40% the chip is nearly the feed per tooth, in range.
         #expect(chip(job(Self.eighth, 0.4)).isEmpty)
         // The suggested feed for the thinner chip.
@@ -510,7 +527,9 @@ struct AdaptiveClearingTests {
         let offset = CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle], tool: fast,
                                                                                                     Self.params(depth: 6, strategy: .offset))]))
         #expect(!chip(offset).contains { $0.contains("below") })
-        #expect(ChipLoad.radialThinning(load: 0.5) == 1 && abs(ChipLoad.radialThinning(load: 0.12) - 0.65) < 0.001)
+        let half = ChipLoad.radialThinning(load: 0.5), twelve = ChipLoad.radialThinning(load: 0.12)
+        #expect(half == 1)
+        #expect(abs(twelve - 0.65) < 0.001)
     }
 
     /// Wrapped round a rotary blank, the strategy isn't available yet: the pocket says so and cuts nothing.
@@ -553,7 +572,8 @@ struct AdaptiveClearingTests {
         #expect(offset.formatVersion < 13)
         var p = Self.params(adaptive: AdaptiveSettings(optimalLoad: 0.2, minimumLoopRadius: 5))
         p.strategy = .offset
-        #expect(Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle], p)]).formatVersion == offset.formatVersion)
+        let carried = Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle], p)])
+        #expect(carried.formatVersion == offset.formatVersion)
     }
 
     /// A 3" × 2" recess 3/4" deep in hardwood with a 1/4" bit, cleared adaptively at 15% round a round boss, on the
@@ -576,7 +596,8 @@ struct AdaptiveClearingTests {
         let p = try GoldenPostTests.savedProject("adaptive-v13", make: Self.savedAdaptive)
         #expect(p.formatVersion == 13)
         let made = Self.savedAdaptive()
-        #expect(p.operations == made.operations && p.shapes == made.shapes)
+        #expect(p.operations == made.operations)
+        #expect(p.shapes == made.shapes)
         let job = CAMEngine.generate(p)
         #expect(!job.hasErrors)
         try GoldenPostTests.check(GoldenPostTests.post(p), golden: "decoded-adaptive-v13")
