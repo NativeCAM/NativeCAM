@@ -16,14 +16,44 @@ public struct ImportResult: Sendable, Hashable {
     public var sourceUnits: LengthUnit?
     /// Millimetres per file unit that was applied (DXF drawing unit, or SVG root user unit).
     public var unitScale: Double
+    /// The layer each polyline is on, parallel to `polylines` (nil = none: a DXF's layer 0, or an SVG path outside any
+    /// layer). Empty when the file has no layers to read.
+    public var polylineLayers: [String?]
+    /// The layer each point is on, parallel to `points`; empty when the file has no layers to read.
+    public var pointLayers: [String?]
 
     public init(polylines: [Polyline] = [], points: [Vec2] = [], warnings: [String] = [],
-                sourceUnits: LengthUnit? = nil, unitScale: Double = 1) {
+                sourceUnits: LengthUnit? = nil, unitScale: Double = 1, polylineLayers: [String?] = [], pointLayers: [String?] = []) {
         self.polylines = polylines
         self.points = points
         self.warnings = warnings
         self.sourceUnits = sourceUnits
         self.unitScale = unitScale
+        self.polylineLayers = polylineLayers.count == polylines.count ? polylineLayers : []
+        self.pointLayers = pointLayers.count == points.count ? pointLayers : []
+    }
+
+    /// The geometry on one layer.
+    public struct LayerGroup: Sendable, Hashable {
+        public var layer: String?
+        public var polylines: [Polyline]
+        public var points: [Vec2]
+    }
+
+    /// The polylines and points layer by layer, in the order the layers first appear (polylines before points).
+    public var layerGroups: [LayerGroup] {
+        var groups: [LayerGroup] = []
+        func add(_ layer: String?, polyline: Polyline? = nil, point: Vec2? = nil) {
+            let i = groups.firstIndex { $0.layer == layer } ?? {
+                groups.append(LayerGroup(layer: layer, polylines: [], points: []))
+                return groups.count - 1
+            }()
+            if let polyline { groups[i].polylines.append(polyline) }
+            if let point { groups[i].points.append(point) }
+        }
+        for (i, p) in polylines.enumerated() { add(polylineLayers.isEmpty ? nil : polylineLayers[i], polyline: p) }
+        for (i, p) in points.enumerated() { add(pointLayers.isEmpty ? nil : pointLayers[i], point: p) }
+        return groups
     }
 
     /// Bounds of all polylines and points.
@@ -84,6 +114,25 @@ public enum PathChainer {
         public var closedByChaining: Int
         /// Inputs dropped because they duplicated an earlier input.
         public var duplicatesRemoved: Int
+    }
+
+    /// Chains each layer's pieces on their own (pieces on different layers are never joined), the layers in the order
+    /// they first appear. Returns the polylines with the layer of each. With one layer it's `chain(_:tolerance:)`.
+    public static func chainByLayer(_ input: [Polyline], layers: [String?], tolerance: Double) -> (Result, layers: [String?]) {
+        guard layers.count == input.count else { return (chain(input, tolerance: tolerance), []) }
+        var order: [String?] = []
+        for l in layers where !order.contains(l) { order.append(l) }
+        var total = Result(polylines: [], openCount: 0, closedByChaining: 0, duplicatesRemoved: 0)
+        var out: [String?] = []
+        for layer in order {
+            let r = chain(zip(input, layers).filter { $0.1 == layer }.map(\.0), tolerance: tolerance)
+            total.polylines += r.polylines
+            total.openCount += r.openCount
+            total.closedByChaining += r.closedByChaining
+            total.duplicatesRemoved += r.duplicatesRemoved
+            out += Array(repeating: layer, count: r.polylines.count)
+        }
+        return (total, out)
     }
 
     /// Default endpoint-matching distance (mm) for a flattening tolerance.

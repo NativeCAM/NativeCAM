@@ -126,7 +126,7 @@ public enum CAMEngine {
         func generateAll(_ op: CAMOperation, stockRadius: (@Sendable (Double) -> Double)?) -> Generated? {
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
             if shapes.isEmpty && op.kind.needsShapes {
-                issues.append(JobIssue(.warning, "No shapes selected.", operation: op.name))
+                issues.append(JobIssue(.warning, op.vectorSelection?.emptyMessage ?? "No shapes selected.", operation: op.name))
                 return nil
             }
             // Rounding and 3D rotary finishing work all the way round the blank, wrapped round it at the sheet's radius,

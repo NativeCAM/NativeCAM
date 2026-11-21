@@ -302,23 +302,6 @@ enum ShapeFactory {
         DesignShape(kind: .text(TextSpec(string: "Text", capHeight: size(p, 0.15))), position: center(p))
     }
 
-    /// Imported vectors keep their file coordinates when they fit on the stock, otherwise they're centred.
-    /// DXF POINT entities become a separate shape of small circles, ready for a Drill toolpath, aligned with the vectors.
-    static func imported(_ polylines: [Polyline], points: [Vec2] = [], name: String, stock: Stock) -> [DesignShape] {
-        let marks = points.map { Polyline(Curves.circle(center: $0, radius: 0.5, tolerance: 0.01), closed: true) }
-        let all = polylines + marks
-        guard !all.isEmpty else { return [] }
-        let b = all.bounds
-        let fits = stock.bounds.insetBy(-0.001).contains(b.min) && stock.bounds.insetBy(-0.001).contains(b.max)
-        let shift = fits ? Vec2.zero : Vec2(stock.width / 2, stock.height / 2) - b.center
-        func place(_ polys: [Polyline], _ name: String) -> DesignShape? {
-            guard !polys.isEmpty else { return nil }
-            let c = polys.bounds.center
-            return DesignShape(name: name, kind: .paths(polys.transformed(.translation(-c))), position: c + shift)
-        }
-        return [place(polylines, name), place(marks, "\(name) points")].compactMap { $0 }
-    }
-
     /// A placed 3D model: centred on the material, scaled down to fit if needed, carved no deeper than the material.
     static func model(_ result: MeshImportResult, name: String, stock: Stock) -> DesignShape {
         let spec = ModelSpec(mesh: result.mesh, upAxis: result.suggestedUpAxis, depth: 1)
@@ -339,16 +322,19 @@ enum ShapeFactory {
         let endMill = pick({ $0.shape == .flatEndMill }, 1)
         let vBit = pick({ $0.shape == .vBit }, 5)
         let t = project.stock.thickness
+        // Through cuts on a flat sheet follow its thickness (a rotary job's thickness is the blank's radius).
+        let flat = project.stock.rotary == nil
         switch kind {
         case .profile:
             return CAMOperation(name: "Profile", kind: .profile(ProfileParams(
-                side: .outside, direction: .climb, depth: DepthSettings(cutDepth: t + 0.02.inch),
+                side: .outside, direction: .climb, depth: flat ? .through(t) : DepthSettings(cutDepth: t + 0.02.inch),
                 tabs: TabSettings(enabled: true), entry: EntrySettings(kind: .ramp))), shapeIDs: shapes, tool: endMill)
         case .pocket:
             return CAMOperation(name: "Pocket", kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: min(0.25.inch, t / 2)))),
                                 shapeIDs: shapes, tool: endMill)
         case .drill:
-            return CAMOperation(name: "Drill", kind: .drill(DrillParams(depth: t + 0.02.inch, peckDepth: endMill.diameter)),
+            return CAMOperation(name: "Drill", kind: .drill(DrillParams(depth: t + 0.02.inch, peckDepth: endMill.diameter,
+                                                                        fromBottom: flat ? -MaterialDepth.defaultOvercut : nil)),
                                 shapeIDs: shapes, tool: endMill)
         case .vcarve:
             return CAMOperation(name: "V-carve", kind: .vcarve(VCarveParams()), shapeIDs: shapes, tool: vBit)

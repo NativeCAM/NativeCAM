@@ -8,6 +8,13 @@ import UniformTypeIdentifiers
 ///   NativeCAM -NativeCAMSnapshotProject <project.nativecam> -NativeCAMSnapshotOut <out-dir>
 /// renders the main window and the finished simulation offscreen to PNGs, then quits. The `-Key value` form is read
 /// from the user-defaults argument domain, so AppKit doesn't treat the paths as documents to open.
+///
+/// With `-NativeCAMSnapshotTemplate <template.nativecamtemplate>` it first applies that template to the project (with
+/// its job setup when `-NativeCAMSnapshotTemplateSetup YES`), logs Toolpaths ▸ Apply Template's items (the templates
+/// folder can be pointed elsewhere with `-NativeCAMTemplatesFolder <dir>`) and what each toolpath found, draws the
+/// Apply Template sheet and the save panel's options, then snapshots the project with the template applied.
+/// `-NativeCAMSnapshotImport <file.dxf|svg|pdf>` first imports vectors into the project as File ▸ Import does (one shape
+/// per layer), logging each shape's layer.
 enum DebugSnapshot {
     static var requested: (project: String, outDir: String)? {
         let d = UserDefaults.standard
@@ -25,13 +32,29 @@ enum DebugSnapshot {
         let out = URL(fileURLWithPath: outDir, isDirectory: true)
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: projectPath)),
-              let project = try? Project.decode(data) else {
+              let loaded = try? Project.decode(data) else {
             print("snapshot: can't read \(projectPath)")
             exit(1)
         }
         func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
         func log(_ s: String) { FileHandle.standardError.write(("snapshot: " + s + "\n").data(using: .utf8)!) }
         log("start")
+        var project = loaded
+        if let path = UserDefaults.standard.string(forKey: "NativeCAMSnapshotImport") {
+            let url = URL(fileURLWithPath: path)
+            do {
+                let result = try VectorImporter.importFile(at: url)
+                let shapes = result.shapes(name: url.deletingPathExtension().lastPathComponent, stock: project.stock)
+                project.shapes += shapes
+                project.bindVectors()
+                for shape in shapes { log("import \(shape.name): layer “\(shape.layer)”") }
+            } catch {
+                log("import failed: \(error.localizedDescription)")
+            }
+        }
+        if let path = UserDefaults.standard.string(forKey: "NativeCAMSnapshotTemplate") {
+            project = applyTemplate(path, to: project, out: out, log: log, spin: spin)
+        }
 
         // 1. The whole window (sidebar, viewport, inspector) hosted offscreen.
         let host = NSHostingView(rootView: ContentView(document: .constant(NativeCAMDocument(project: project)))
@@ -127,29 +150,82 @@ enum DebugSnapshot {
         exit(0)
     }
 
-    /// Job Setup, each toolpath's inspector and the machine setup assistant's setup step, to inspector-*.png.
+    /// Draws `view` offscreen at `size` to `out/name`.
+    @MainActor
+    private static func render(_ view: some View, size: NSSize, out: URL, name: String, spin: (Double) -> Void) {
+        let host = NSHostingView(rootView: view.environment(ToolLibraryStore.shared).background(Color(nsColor: .windowBackgroundColor)))
+        // Borderless, so AppKit doesn't shrink the window to fit the screen.
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        if let screen = NSScreen.main { window.setFrameOrigin(screen.visibleFrame.origin) }
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.orderFrontRegardless()
+        spin(1.5)
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent(name))
+        }
+        window.close()
+    }
+
+    /// Applies the template at `path` as Toolpaths ▸ Apply Template does, logging the menu and what it found, and draws
+    /// the Apply Template sheet (apply-template.png) and the save panel's options (save-template-options.png).
+    @MainActor
+    private static func applyTemplate(_ path: String, to project: Project, out: URL, log: (String) -> Void,
+                                      spin: (Double) -> Void) -> Project {
+        let templates = TemplateLibrary.shared
+        templates.refresh()
+        log("menu Toolpaths: Save Toolpaths as Template… | Apply Template ▸ "
+            + (templates.entries.map(\.name) + ["Choose…", "Show Templates Folder"]).joined(separator: " | "))
+        if #available(macOS 15, *) {
+            // The submenu's SwiftUI items as AppKit builds them.
+            let menu = NSHostingMenu(rootView: TemplateMenuItems(templates: templates, apply: { _ in }, choose: {}))
+            menu.update()
+            spin(0.2)
+            log("menu Apply Template items: " + menu.items.map { $0.isSeparatorItem ? "—" : $0.title + ($0.isEnabled ? "" : " (disabled)") }
+                .joined(separator: " | "))
+        }
+        let template: ToolpathTemplate
+        do {
+            template = try ToolpathTemplate.decode(Data(contentsOf: URL(fileURLWithPath: path)))
+        } catch {
+            log("template refused: \(error.localizedDescription)")
+            return project
+        }
+        let useSetup = UserDefaults.standard.bool(forKey: "NativeCAMSnapshotTemplateSetup")
+        let library = ToolLibrary(tools: ToolLibraryStore.shared.tools)
+        let result = template.apply(to: project, library: library, useJobSetup: useSetup)
+        for row in result.rows {
+            log("template toolpath \(row.name): \(row.rule?.label ?? "needs no vectors"), \(row.shapeCount) vectors\(row.isEmpty ? ", added empty" : "")")
+        }
+        for use in result.tools {
+            log("template tool T\(use.tool.number) \(use.tool.name): \(use.inLibrary ? "in the library" : "new")"
+                + (use.templateNumber.map { ", T\($0) in the template" } ?? "") + (use.feedsDiffer ? ", the template's feeds" : ""))
+        }
+        for change in result.setupChanges { log("template setup \(change.setting): \(change.from) → \(change.to)") }
+        if let note = result.machineNote { log("template machine: \(note)") }
+        render(ApplyTemplateSheet(template: template, project: project, library: library, selection: [], useJobSetup: useSetup, height: 940) { _, _ in },
+               size: NSSize(width: 540, height: 940), out: out, name: "apply-template.png", spin: spin)
+        let options = TemplateSaveOptions(selectedCount: 2, totalCount: max(3, project.operations.count))
+        render(TemplateSaveAccessory(options: options), size: NSSize(width: 460, height: 120), out: out, name: "save-template-options.png", spin: spin)
+        return result.project
+    }
+
+    /// Job Setup, each toolpath's inspector, the first shape's and the machine setup assistant's setup step, to inspector-*.png.
     @MainActor
     private static func renderInspectors(_ project: Project, workspace ws: Workspace, out: URL, spin: (Double) -> Void) {
         func render(_ view: some View, size: NSSize, name: String) {
-            let host = NSHostingView(rootView: view.environment(ToolLibraryStore.shared).background(Color(nsColor: .windowBackgroundColor)))
-            // Borderless, so AppKit doesn't shrink the window to fit the screen.
-            let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)
-            window.contentView = host
-            if let screen = NSScreen.main { window.setFrameOrigin(screen.visibleFrame.origin) }
-            window.alphaValue = 0
-            window.ignoresMouseEvents = true
-            window.orderFrontRegardless()
-            spin(1.5)
-            if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-                host.cacheDisplay(in: host.bounds, to: rep)
-                try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent(name))
-            }
-            window.close()
+            Self.render(view, size: size, out: out, name: name, spin: spin)
         }
         let tall = NSSize(width: 440, height: 2600)
         render(SetupInspector(project: .constant(project)), size: tall, name: "inspector-setup.png")
         for (i, op) in project.operations.enumerated() {
             render(OperationInspector(op: .constant(op), project: project, workspace: ws), size: tall, name: "inspector-op-\(i).png")
+        }
+        if let shape = project.shapes.first {
+            render(ShapeInspector(shape: .constant(shape), units: project.displayUnits, stock: project.stock, layers: project.layerNames,
+                                  setLayer: { _ in }), size: NSSize(width: 440, height: 900), name: "inspector-shape-0.png")
         }
         render(MachineSetupView(offerUseHere: false, start: ("generic", .setup), height: 1100) { _, _, _ in },
                size: NSSize(width: 640, height: 1100), name: "inspector-machine-setup.png")
