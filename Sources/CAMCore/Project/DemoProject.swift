@@ -109,6 +109,106 @@ public extension Project {
     }
 }
 
+// MARK: Table leg (3D rotary roughing)
+
+public extension Project {
+    /// A table leg turned on Avid's rotary from a 2" square bar, 10" long (generated, no file needed): a square pommel
+    /// at the chuck end left at the bar's own size, then a collar, a bead, a long taper and a foot. 3D rotary roughing
+    /// with the 1/4" end mill clears the bar round the turned part, layer by layer, skipping the air over the bar's
+    /// faces; 3D rotary finishing with the 1/4" ball nose then follows the leg from what the roughing left. Half an inch
+    /// of the bar stays square at the tailstock end; part it off by hand.
+    static func demoTableLeg() -> Project {
+        let lib = ToolLibrary.starter
+        var stock = Stock(materialName: "Poplar", materialKind: .softwood)
+        stock.setRotary(RotaryStock(shape: .squareBar, diameter: 2.inch, length: 10.inch))
+        var machine = MachineProfile.avidPRO6060
+        machine.rotary = RotaryAxis()
+        let length = 9.inch
+        var mesh = MeshModel.tableLeg(width: 2.inch, length: length)
+        mesh.id = demoID(43)
+        let spec = ModelSpec(mesh: mesh, depth: 1, rotary: RotaryPlacement(alongAxis: .x))
+        let leg = DesignShape(id: demoID(24), name: "Leg", kind: .model(spec), position: Vec2(0.5.inch + length / 2, stock.height / 2))
+        var endMill = lib.tool(number: 1)!, ball = lib.tool(number: 7)!
+        // Poplar wants a thicker chip than the plywood defaults: take the chart's recommendation.
+        for i in [0, 1] {
+            var t = i == 0 ? endMill : ball
+            let rec = ChipLoad.recommend(for: t, material: .softwood, machine: machine)
+            t.cutting.feedRate = rec.feed
+            t.cutting.spindleRPM = rec.rpm
+            if i == 0 { endMill = t } else { ball = t }
+        }
+        let ops: [CAMOperation] = [
+            CAMOperation(id: demoID(36), name: "Rough leg", kind: .rotaryRough(RotaryRoughParams()), shapeIDs: [leg.id], tool: endMill),
+            CAMOperation(id: demoID(37), name: "Finish leg", kind: .rotaryFinish(RotaryFinishParams(stepoverFraction: 0.15)),
+                         shapeIDs: [leg.id], tool: ball),
+        ]
+        return Project(name: "Demo table leg", displayUnits: .inch, stock: stock, machine: machine, shapes: [leg], operations: ops)
+    }
+}
+
+public extension MeshModel {
+    /// A closed solid along +X from cross-sections: at each ring's x (mm, in order; a station given twice makes a step
+    /// there), `radius(θ)` is the surface's distance from the axis at angle θ (radians from +Z toward +Y, as the rotary
+    /// blank's), sampled at `segments` angles, with flat ends. A square section, r = half its width ÷ max(|cos θ|,
+    /// |sin θ|), comes out exact when `segments` is a multiple of 8, which puts its corners on vertices.
+    static func lofted(name: String, rings: [(x: Double, radius: (Double) -> Double)], segments: Int) -> MeshModel {
+        let n = max(3, segments)
+        var pos: [Float] = []
+        var idx: [UInt32] = []
+        for ring in rings {
+            for j in 0..<n {
+                let a = 2 * Double.pi * Double(j) / Double(n)
+                let r = ring.radius(a)
+                pos += [Float(ring.x), Float(r * sin(a)), Float(r * cos(a))]
+            }
+        }
+        func v(_ i: Int, _ j: Int) -> UInt32 { UInt32(i * n + (j % n)) }
+        for i in 0..<(rings.count - 1) {
+            for j in 0..<n {
+                idx += [v(i, j), v(i + 1, j), v(i + 1, j + 1), v(i, j), v(i + 1, j + 1), v(i, j + 1)]
+            }
+        }
+        for (i, outward) in [(0, -1.0), (rings.count - 1, 1.0)] {
+            let c = UInt32(pos.count / 3)
+            pos += [Float(rings[i].x), 0, 0]
+            for j in 0..<n {
+                idx += outward > 0 ? [c, v(i, j + 1), v(i, j)] : [c, v(i, j), v(i, j + 1)]
+            }
+        }
+        return MeshModel(name: name, positions: pos, indices: idx)
+    }
+
+    /// A table leg `length` long for a square bar `width` across (mm), along +X from the pommel end: a square pommel
+    /// the bar's own size for the first 28% of it, a step down to a collar, a bead, a cove, a long taper, a bead at
+    /// the foot and the foot itself. The narrowest (the bottom of the taper) is 0.24 × the width from the axis.
+    static func tableLeg(width w: Double, length L: Double, segments: Int = 96) -> MeshModel {
+        let square: (Double) -> Double = { a in w / 2 / max(abs(cos(a)), abs(sin(a))) }
+        func round(_ r: Double) -> (Double) -> Double { { _ in r } }
+        let pommel = 0.28 * L
+        var rings: [(x: Double, radius: (Double) -> Double)] = [(0, square), (pommel, square)]
+        /// The turned part's radius at x past the pommel.
+        func r(_ x: Double) -> Double {
+            let t = x - pommel
+            switch t {
+            case ..<(0.02 * L): return 0.45 * w
+            case ..<(0.07 * L): return 0.36 * w + 0.09 * w * sin(.pi * (t - 0.02 * L) / (0.05 * L))
+            case ..<(0.09 * L): return 0.32 * w
+            case ..<(L - pommel - 0.13 * L):
+                let f = (t - 0.09 * L) / (L - pommel - 0.22 * L)
+                return 0.38 * w - 0.14 * w * f
+            case ..<(L - pommel - 0.08 * L): return 0.24 * w + 0.06 * w * sin(.pi * (t - (L - pommel - 0.13 * L)) / (0.05 * L))
+            default: return 0.26 * w
+            }
+        }
+        let steps = max(8, Int((L - pommel).rounded()))
+        for i in 0...steps {
+            let x = pommel + (L - pommel) * Double(i) / Double(steps)
+            rings.append((x, round(r(x))))
+        }
+        return lofted(name: "Table leg", rings: rings, segments: segments)
+    }
+}
+
 public extension MeshModel {
     /// A closed surface of revolution about +X: `profile` gives (x, distance from the axis) from one end to the other
     /// (mm), turned through `segments` steps round the axis, with flat ends where the profile doesn't meet the axis.

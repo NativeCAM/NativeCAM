@@ -417,3 +417,37 @@ enum PocketGenerator {
         }
     }
 }
+
+// MARK: Tool-centre areas
+
+extension PocketGenerator {
+    /// Clears areas given as where the tool's centre may go, for a caller that has already allowed for the tool's shape
+    /// (3D rotary roughing works them out with its drop-cutter): offset rings inside out, ramping in from `zAbove`, or
+    /// raster lines at `rasterAngle` (degrees) and a pass round each area's edge. One level, `z`; links stay down
+    /// inside the areas as a pocket's do, and the tool is back at safe Z at the end.
+    static func clearCentres(_ boundary: [Region], strategy: PocketStrategy, rasterAngle: Double, stepover: Double, tool: Tool,
+                             z: Double, zAbove: Double, context: GenerationContext, builder b: inout ToolpathBuilder) {
+        guard !boundary.isEmpty else { return }
+        let entry = strategy == .offset ? EntrySettings(kind: .ramp, rampLength: 2 * tool.diameter) : EntrySettings()
+        let params = PocketParams(strategy: strategy, direction: .climb, depth: DepthSettings(startDepth: -zAbove, cutDepth: -z),
+                                  rasterAngle: rasterAngle, entry: entry)
+        let safe = boundary.flatMap { $0.offset(by: 0.01, arcTolerance: context.arcTolerance) }
+        var first = true
+        switch strategy {
+        case .offset:
+            let tree = ringTree(boundary, stepover: stepover, toolRadius: tool.radius, arcTolerance: context.arcTolerance)
+            smooth(tree, deviation: context.machine.cornerSmoothing, plannerDeviation: context.machine.cornerDeviation,
+                   stepover: stepover, toolRadius: tool.radius, boundary: false, chordTolerance: context.arcTolerance)
+            cutTree(tree, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
+        case .raster:
+            let lines = rasterLines(boundary, stepover: stepover, angle: rasterAngle)
+            cutRaster(lines, z: z, zAbove: zAbove, stepover: stepover, safe: safe, params: params, first: &first, builder: &b)
+            for region in boundary {
+                for loop in region.loops {
+                    cutLoop(loop, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
+                }
+            }
+        }
+        b.retract()
+    }
+}
