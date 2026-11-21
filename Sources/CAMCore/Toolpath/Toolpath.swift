@@ -129,6 +129,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// With "Adjust feeds for load", what the scheduler did to the feeds (see `FeedScheduler`); nil when the
     /// toolpath keeps its programmed feed throughout.
     public var loadFeeds: LoadFeeds?
+    /// Adaptive clearing: the share of the bit's diameter its usual cut takes from the side (the optimal load), so the
+    /// chip-load check allows for the thinner chip (`ChipLoad.radialThinning`). nil = a full-width chip.
+    public var radialLoad: Double?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

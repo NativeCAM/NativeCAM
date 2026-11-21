@@ -8,17 +8,23 @@ public struct LoadFeeds: Hashable, Codable, Sendable {
     public var lowest: Double
     /// The engagement taken as the toolpath's usual cut, degrees of the bit's edge (90° is half its width).
     public var usualEngagement: Double
-    /// Where the chart's thinnest chip for the bit held a slowdown back: the share of the programmed feed the load
+    /// Where the chip floor (the chart's least chip for the bit, less the chip-load check's allowance) held a slowdown
+    /// back: the share of the programmed feed the load
     /// called for, and the share it got. nil when it never did.
     public var wanted: Double?
     public var held: Double?
+    /// The inside arcs whose centre feed was lowered so their outer edge keeps the feed: motion index → the share of
+    /// the feed at the centre ((R − r)/R). The edge's feed, which makes the chip, is the motion's feed over it.
+    public var insideArcs: [Int: Double]
 
-    public init(programmed: Double, lowest: Double, usualEngagement: Double, wanted: Double? = nil, held: Double? = nil) {
+    public init(programmed: Double, lowest: Double, usualEngagement: Double, wanted: Double? = nil, held: Double? = nil,
+                insideArcs: [Int: Double] = [:]) {
         self.programmed = programmed
         self.lowest = lowest
         self.usualEngagement = usualEngagement
         self.wanted = wanted
         self.held = held
+        self.insideArcs = insideArcs
     }
 
     /// True when some of the toolpath cuts slower than programmed.
@@ -46,7 +52,8 @@ public struct LoadFeeds: Hashable, Codable, Sendable {
 ///   - the load: past half the bit's width the chip stops growing but the force on the bit doesn't (it goes as
 ///     1 − cos φ), so the feed falls with the square root of the extra force, sharing it equally between a thinner chip
 ///     and a higher load: a full-width slot after half-width cuts runs at 1/√2;
-///   - never below 55% for load, nor where the chip would be thinner than the chart's minimum for the bit in the job's
+///   - never below 55% for load, nor where the chip would be more than 10% thinner than the chart's least for the bit
+///     (20% for ball and bull noses; the allowance its chip-load check makes before it warns) in the job's
 ///     material (`ChipLoad`, the same floor its chip-load check uses): thinner chips rub and burn wood;
 ///   - a profile's inside arcs (material on the arc's outside only): the edge on the outside travels (ρ + r)/ρ as fast
 ///     as the centre, so the centre's feed is F·(R − r)/R, R = ρ + r being the outer wall's radius. A pocket's rings
@@ -398,6 +405,7 @@ public enum FeedScheduler {
             return s > 1e-9 ? min(1, chipFloor / (fz * s)) : 0
         }
         var wanted: Double?, held: Double?
+        var arcFactors: [Int: Double] = [:]
         /// Levels (rounding down, and without the tolerance) one sample needs, its centre feed scaled by `factor`.
         /// The load share is held at 55% and where the chip at the sample's engagement would be too thin; the edge's
         /// chip is the load share's whatever an arc does to the centre's feed.
@@ -428,6 +436,7 @@ public enum FeedScheduler {
                 let rho = cut.start.xy.distance(to: m.center)
                 let factor = insideArcs && 2 * alone > cutting.count && rho >= minimumArcRadius * r
                     ? insideArcFactor(pathRadius: rho, toolRadius: r) : 1
+                if factor < 1 { arcFactors[cut.index] = factor }
                 // One feed for the whole arc: the slowest any point of it needs.
                 let needs = e.map { need($0, factor: factor) }
                 return [Atom(length: cut.length, down: needs.map(\.down).max() ?? 0, up: needs.map(\.up).max() ?? 0)]
@@ -470,6 +479,7 @@ public enum FeedScheduler {
         var motions: [Motion] = []
         motions.reserveCapacity(tp.motions.count)
         var lowest = programmed
+        var compensated: [Int: Double] = [:]
         position = tp.start
         for (index, m) in tp.motions.enumerated() {
             defer { position = m.end }
@@ -478,6 +488,7 @@ public enum FeedScheduler {
                 var out = m
                 out.feed = feed(lv[0])
                 lowest = min(lowest, out.feed)
+                if let factor = arcFactors[index] { compensated[motions.count] = factor }
                 motions.append(out)
                 continue
             }
@@ -494,7 +505,8 @@ public enum FeedScheduler {
         }
         var out = tp
         out.motions = motions
-        out.loadFeeds = LoadFeeds(programmed: programmed, lowest: lowest, usualEngagement: usual, wanted: wanted, held: held)
+        out.loadFeeds = LoadFeeds(programmed: programmed, lowest: lowest, usualEngagement: usual, wanted: wanted, held: held,
+                                  insideArcs: compensated)
         return out
     }
 
@@ -552,9 +564,11 @@ public enum FeedScheduler {
         guard suits(tp.tool), let grid = uncut else { return (tp, []) }
         let tool = tp.tool
         let material = project.stock.material
-        // The same floor as the chip-load check (`CAMEngine.chipLoadIssues`).
-        let chipFloor = ChipLoad.applies(to: tool)
-            ? ChipLoad.range(material, diameter: tool.diameter).lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8) : nil
+        // The same floor as the chip-load check (`CAMEngine.chipLoadIssues`): the chart's least chip, less 10% for an end
+        // mill and 20% for a ball or bull nose.
+        let least = ChipLoad.range(material, diameter: tool.diameter).lowerBound
+        let allowance = tool.shape == .flatEndMill ? 0.1 : 0.2
+        let chipFloor = ChipLoad.applies(to: tool) ? least * (1 - allowance) : nil
         var contour = false
         if case .profile = op.kind { contour = true }
         let out = schedule(tp, material: { p in grid.height(at: p).map(Double.init) }, floorZ: Double(grid.floorZ),
@@ -562,12 +576,13 @@ public enum FeedScheduler {
         var issues: [JobIssue] = []
         // Only a sizeable slowdown held back is worth a note: a light pass's chip is often near the floor already.
         if let lf = out.loadFeeds, let wanted = lf.wanted, wanted <= 0.7 + 1e-9, let held = lf.held, let chipFloor {
-            let inch = String(format: "%.4f in", chipFloor / LengthUnit.mmPerInch)
+            let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
             let pct = { (s: Double) in "\(Int((s * 100).rounded()))%" }
             let got = held >= 1 - 1e-9 ? "so they aren't slowed" : "so they only slow to \(pct(held))"
             issues.append(JobIssue(.info, "Adjust feeds for load would slow the hardest cuts to \(pct(wanted)) of the feed, but "
-                + "the chip there would be thinner than \(inch), the least for this bit in \(material.label.lowercased()), "
-                + "\(got). A lower spindle speed would let them slow without burning.", operation: tp.name))
+                + "the chip there would be thinner than \(inch(chipFloor)), \(pct(allowance)) under the chart's least "
+                + "(\(inch(least))) for this bit in \(material.label.lowercased()), \(got). A lower spindle speed would let them "
+                + "slow without burning.", operation: tp.name))
         }
         return (out, issues)
     }
