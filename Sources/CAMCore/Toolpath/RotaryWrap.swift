@@ -112,14 +112,94 @@ public enum RotaryWrap {
         }
     }
 
+    /// How fast the machine's rotary axis can turn, degrees per minute: its turn speed, or the nominal 90° a second
+    /// until it's set.
+    static func turnSpeed(_ machine: MachineProfile) -> Double {
+        machine.rotary?.drivenTurnSpeed ?? RotaryAxis.nominalTurnSpeed
+    }
+
+    /// The feed for a move that turns the blank from `degrees0` to `degrees1` while X and the tool tip's distance from
+    /// the axis go linearly from `x0`, `r0` to `x1`, `r1` (mm): `feed` (mm/min), or less when the rotary axis would
+    /// have to turn faster than `turnSpeed` (degrees per minute) to keep it, which happens near the axis (research
+    /// §2.3). Rounded down to a whole mm/min, and kept half a percent under the limit so that joining moves and the
+    /// post's rounding can't take them over it.
+    ///
+    /// The move is cut as `pieces` equal pieces (`split`), each at this feed. Where it comes in toward the axis, the
+    /// piece nearest it is the shortest and so turns the fastest: the limit is that piece's.
+    static func turnLimitedFeed(_ feed: Double, x0: Double, r0: Double, degrees0: Double, x1: Double, r1: Double, degrees1: Double,
+                                pieces: Int, turnSpeed: Double) -> Double {
+        let degrees = abs(degrees1 - degrees0)
+        guard degrees > 1e-9 else { return feed }
+        let n = max(1, pieces)
+        var shortest = Double.infinity
+        for k in 0..<n {
+            let t0 = Double(k) / Double(n), t1 = Double(k + 1) / Double(n)
+            let piece = tipLength(x0: x0 + (x1 - x0) * t0, r0: r0 + (r1 - r0) * t0, degrees0: degrees0 + (degrees1 - degrees0) * t0,
+                                  x1: x0 + (x1 - x0) * t1, r1: r0 + (r1 - r0) * t1, degrees1: degrees0 + (degrees1 - degrees0) * t1)
+            shortest = min(shortest, piece)
+        }
+        let limit = 0.995 * turnSpeed * shortest / (degrees / Double(n))
+        guard limit < feed else { return feed }
+        return max(1, limit.rounded(.down))
+    }
+
+    /// Where a wrapped toolpath's feed came down most for the rotary axis (`limitTurnRate`).
+    struct Slowing {
+        /// The feed it came down to, and the one it was set to, mm/min.
+        var feed: Double
+        var set: Double
+        /// The tool tip's least distance from the axis on that move, mm.
+        var radius: Double
+    }
+
+    /// The warning for a toolpath whose feed comes down where the rotary axis can't turn fast enough, in the project's
+    /// units.
+    static func slowingWarning(_ s: Slowing, context ctx: GenerationContext) -> String {
+        let speed = Int(turnSpeed(ctx.machine).rounded())
+        return "The rotary axis turns at most \(speed.formatted())°/min\(ctx.machine.rotary?.drivenTurnSpeed == nil ? " (its Turn speed isn't set, so NativeCAM assumes 90° a second)" : ""), "
+            + "so near the axis the cut slows to keep up: down to \(ctx.feed(s.feed)) "
+            + "at \(ctx.length(s.radius)) from the axis, from the \(ctx.feed(s.set)) set. If the wood burns there, "
+            + "lower the spindle speed."
+    }
+
+    /// Lowers the feed of each feed move on a sheet wrapped around `diameter` that would turn the blank faster than
+    /// `turnSpeed` (degrees per minute), allowing for the equal pieces `split` cuts it into (at most `maxSpan` of the
+    /// sheet each). Returns where the feed came down most, as a fraction of what it was set to.
+    static func limitTurnRate(_ motions: inout [Motion], start: Vec3, diameter: Double, maxSpan: Double,
+                              turnSpeed: Double) -> Slowing? {
+        let radius = diameter / 2
+        var slowest: Slowing?
+        var p = start
+        for i in motions.indices {
+            defer { if motions[i].kind != .dwell { p = motions[i].end } }
+            let m = motions[i]
+            let span = abs(m.end.y - p.y)
+            guard m.kind == .feed, span > 1e-12 else { continue }
+            let f = turnLimitedFeed(m.feed, x0: p.x, r0: radius + p.z, degrees0: angle(y: p.y, centerY: 0, diameter: diameter),
+                                    x1: m.end.x, r1: radius + m.end.z, degrees1: angle(y: m.end.y, centerY: 0, diameter: diameter),
+                                    pieces: pieceCount(span: span, maxSpan: maxSpan), turnSpeed: turnSpeed)
+            guard f < m.feed else { continue }
+            motions[i].feed = f
+            if slowest.map({ f / m.feed < $0.feed / $0.set }) ?? true {
+                slowest = Slowing(feed: f, set: m.feed, radius: max(0, radius + min(p.z, m.end.z)))
+            }
+        }
+        return slowest
+    }
+
     /// Readies a toolpath generated on the unrolled sheet for wrapping around `diameter`:
-    /// - arcs become lines within `tolerance`, since no controller can arc in X and A;
+    /// - arcs become lines within the context's flattening tolerance, since no controller can arc in X and A;
     /// - runs of short lines that lie within half the tolerance of one straight line become that line, so the
     ///   controller isn't fed thousands of tiny inverse-time moves;
     /// - a rapid that would turn the blank below `clearanceZ` goes up, across and back down, because the blank only
     ///   turns with the tool clear of it;
+    /// - a feed that would need the blank to turn faster than the machine's turn speed comes down to what it can keep
+    ///   (`turnLimitedFeed`), with a warning saying how far, unless `warns` is false (3D rotary finishing lowers its
+    ///   own feeds and says so);
     /// - a move that turns the blank more than `maxTurnPerMove` is split into equal pieces.
-    static func prepare(_ tp: Toolpath, diameter: Double, clearanceZ: Double, tolerance: Double) -> Toolpath {
+    static func prepare(_ tp: Toolpath, diameter: Double, clearanceZ: Double, context ctx: GenerationContext,
+                        warns: Bool = true) -> Toolpath {
+        let tolerance = ctx.flattenTolerance
         var lines: [Motion] = []
         var p = tp.start
         for m in tp.motions {
@@ -136,10 +216,18 @@ public enum RotaryWrap {
             }
         }
         var t = tp
-        t.motions = split(merged(lines, start: tp.start, tolerance: tolerance / 2), start: tp.start,
-                          maxSpan: maxTurnPerMove / 360 * .pi * diameter)
+        let maxSpan = maxTurnPerMove / 360 * .pi * diameter
+        var motions = merged(lines, start: tp.start, tolerance: tolerance / 2)
+        let slowest = limitTurnRate(&motions, start: tp.start, diameter: diameter, maxSpan: maxSpan, turnSpeed: turnSpeed(ctx.machine))
+        t.motions = split(motions, start: tp.start, maxSpan: maxSpan)
         t.wrapDiameter = diameter
+        if warns, let slowest { t.warnings.append(slowingWarning(slowest, context: ctx)) }
         return t
+    }
+
+    /// How many equal pieces `split` cuts a move into that spans `span` of the sheet's Y, at most `maxSpan` each.
+    static func pieceCount(span: Double, maxSpan: Double) -> Int {
+        span > maxSpan + 1e-9 ? Int((span / maxSpan).rounded(.up)) : 1
     }
 
     /// Splits rapids and feed lines that span more than `maxSpan` of the sheet's Y into equal pieces.
@@ -148,12 +236,11 @@ public enum RotaryWrap {
         var p = start
         for m in motions {
             defer { if m.kind != .dwell { p = m.end } }
-            let span = abs(m.end.y - p.y)
-            guard m.kind == .rapid || m.kind == .feed, span > maxSpan + 1e-9 else {
+            let n = pieceCount(span: abs(m.end.y - p.y), maxSpan: maxSpan)
+            guard m.kind == .rapid || m.kind == .feed, n > 1 else {
                 out.append(m)
                 continue
             }
-            let n = Int((span / maxSpan).rounded(.up))
             for i in 1...n {
                 var piece = m
                 if i < n {
@@ -266,12 +353,19 @@ struct WrappedWriter {
         return (lines, true, a - start)
     }
 
-    /// The toolpath's moves, after `approach`, each A moved by `offset` (whole turns). True when the blank turns.
-    func motions<S: WrapModalState>(_ tp: Toolpath, state: inout S, offset: Double = 0) -> (lines: [String], turned: Bool) {
-        guard let d = tp.wrapDiameter else { return ([], false) }
+    /// The toolpath's moves, after `approach`, each A moved by `offset` (whole turns). True when the blank turns;
+    /// `cutA` is the range of A values, as written, that its feed moves run between (nil when none is written).
+    func motions<S: WrapModalState>(_ tp: Toolpath, state: inout S, offset: Double = 0)
+        -> (lines: [String], turned: Bool, cutA: ClosedRange<Double>?) {
+        guard let d = tp.wrapDiameter else { return ([], false, nil) }
         var lines: [String] = []
         var turned = false
         var inverse = false
+        var cutA: ClosedRange<Double>?
+        func cuts(_ a: Double?) {
+            guard let a else { return }
+            cutA = cutA.map { min($0.lowerBound, a)...max($0.upperBound, a) } ?? a...a
+        }
         for m in tp.motions {
             if m.kind == .dwell {
                 lines.append(dwell(m.feed))
@@ -286,6 +380,10 @@ struct WrappedWriter {
             if ex != state.x { words += " X\(fmt(ex))" }
             if ez != state.z { words += " Z\(fmt(ez))" }
             if turns { words += " \(rotary.letter)\(String(format: "%.3f", ea))" }
+            if m.kind != .rapid {
+                cuts(state.a)
+                cuts(ea)
+            }
             if m.kind == .rapid {
                 lines.append(rapidWord + words)
             } else if turns, let sx = state.x, let sz = state.z, let sa = state.a {
@@ -326,6 +424,6 @@ struct WrappedWriter {
             lines.append("G94")
             state.feed = nil
         }
-        return (lines, turned)
+        return (lines, turned, cutA)
     }
 }

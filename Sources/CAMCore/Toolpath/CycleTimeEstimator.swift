@@ -105,7 +105,8 @@ public enum CycleTimeEstimator {
 
         /// A move of a wrapped toolpath, from sheet coordinates: X and the distance from the axis move at their own
         /// axes' limits, and the turn at no limit NativeCAM knows (Mach4's A acceleration isn't modelled), except a
-        /// rapid's, which turns at the axis's turn speed. A feed is capped exactly as the post caps its inverse time.
+        /// rapid's, which turns at the axis's turn speed. A feed is capped exactly as the post caps its inverse time;
+        /// it already keeps the turn within the turn speed (`RotaryWrap.prepare` lowers it where it wouldn't).
         func wrappedBlock(from a: Vec3, to b: Vec3, feed: Double?, radius: Double, ref: (Int, Int)) -> Block? {
             let cy = stock.originPoint.y
             let r0 = radius + a.z, r1 = radius + b.z

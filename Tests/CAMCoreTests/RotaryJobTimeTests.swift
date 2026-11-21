@@ -95,8 +95,9 @@ struct RotaryJobTimeTests {
         post.timeZone = TimeZone(identifier: "UTC")!
         let gcode = post.post(job.toolpaths)
         let program = Self.programSeconds(gcode, machine: p.machine, units: p.machine.outputUnits)
-        // About 20 minutes, which the estimate (with acceleration) puts a little over the program at constant speed.
-        #expect(program > 18 * 60 && program < 22 * 60, "\(program)")
+        // About 22 minutes (the rounding slowed to the turn speed near the axis), which the estimate (with
+        // acceleration) puts a little over the program at constant speed.
+        #expect(program > 20 * 60 && program < 24 * 60, "\(program)")
         #expect(estimate.total >= program - 1 && estimate.total < program * 1.02, "\(estimate.total) vs \(program)")
 
         // The simulation runs at the estimate's pace, the time between toolpaths included.
