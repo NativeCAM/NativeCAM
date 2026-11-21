@@ -205,11 +205,13 @@ struct Finish3DStrategyTests {
     }
 
     /// Where a row crosses a vertical wall the tool's height jumps between two samples; the move between them mustn't
-    /// clip the wall's top edge or face (it climbs at the bottom of the step instead).
-    @Test(arguments: [true, false])
-    func rowsDontClipVerticalWalls(_ smooth: Bool) throws {
+    /// clip the wall's top edge or face (it climbs at the bottom of the step instead). Nor may any other strategy's
+    /// passes or links (#52).
+    @Test(arguments: zip([Finish3DStrategy.raster, .raster, .steepShallow, .waterline, .steepShallow], [true, false, true, true, false]))
+    func passesDontClipVerticalWalls(_ strategy: Finish3DStrategy, _ smooth: Bool) throws {
         let (block, outline) = Self.wallShapes()
-        let tp = try Self.finish(Finish3DParams(stepoverFraction: 0.1, rasterAngle: 0, boundary: .vectors, smoothLinks: smooth),
+        let tp = try Self.finish(Finish3DParams(stepoverFraction: 0.1, rasterAngle: 0, boundary: .vectors, strategy: strategy,
+                                                smoothLinks: smooth),
                                  block, extra: [outline])
         let sweep = BallSweep([tp], radius: Self.ball.radius)
         var worst = Double.infinity
@@ -228,7 +230,7 @@ struct Finish3DStrategyTests {
                 if r < worst { worst = r; at = p }
             }
         }
-        #expect(worst > -0.012, "cut \(-worst) mm into the wall at \(at)")
+        #expect(worst > -0.012, "\(strategy) cut \(-worst) mm into the wall at \(at)")
     }
 
     // MARK: Pencil
