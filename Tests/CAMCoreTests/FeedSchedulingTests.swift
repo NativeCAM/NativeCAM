@@ -429,6 +429,9 @@ struct FeedSchedulingTests {
         #expect(lf.held == 1 && lf.wanted == 0.7)
         let note = try #require(job.issues.first { $0.message.contains("Adjust feeds for load") })
         #expect(note.severity == .info && note.message.contains("hardwood") && note.message.contains("spindle speed"))
+        // The floor is the chip-load check's: 10% under the chart's least, which the chip-load row shows (#68).
+        #expect(note.message.contains("thinner than 0.0072 in, 10% under the chart's least (0.0080 in) for this bit in hardwood"),
+                "\(note.message)")
         // In plywood the chip has room to thin: 70%, and no note.
         let ply = CAMEngine.generate(Self.project([Self.square], [Self.pocket(true)]))
         #expect(ply.toolpaths[0].loadFeeds?.lowest == 0.7 * Self.feed)
