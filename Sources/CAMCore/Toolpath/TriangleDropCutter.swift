@@ -194,6 +194,9 @@ struct TriangleDropCutter: Sendable {
         return SIMD3(tri[i], tri[i + 1], tri[i + 2])
     }
 
+    /// Triangle t's corners (t from `z(at:hint:)`'s winner).
+    func corners(_ t: Int) -> (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>) { (vertex(t, 0), vertex(t, 1), vertex(t, 2)) }
+
     /// What triangle t asks the tip to rise to at p (or, for a profile, anything up to `best` when it can't beat it).
     @inline(__always) private func value(_ t: Int, _ p: Vec2, best: Double = -.infinity) -> Double {
         let a = vertex(t, 0), b = vertex(t, 1), c = vertex(t, 2)

@@ -535,7 +535,34 @@ public struct Rough3DParams: Hashable, Codable, Sendable {
     public static func autoMargin(tool: Tool) -> Double { tool.diameter + 1 }
 }
 
-public struct Finish3DParams: Hashable, Codable, Sendable {
+/// How 3D finishing covers the surface.
+public enum Finish3DStrategy: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// Parallel rows following the surface (lace cut).
+    case raster
+    /// Constant-Z loops round the model, a level at a time from the top down.
+    case waterline
+    /// Waterline loops where the surface is steeper than the steep angle, raster rows on the rest, overlapping a little.
+    case steepShallow
+    /// Single passes along concave creases, where the bit touches two faces at once (usually a smaller ball after the
+    /// main finish).
+    case pencil
+
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .raster: "Raster"
+        case .waterline: "Waterline"
+        case .steepShallow: "Steep and shallow"
+        case .pencil: "Pencil"
+        }
+    }
+    /// Whether it lays raster rows (and so can cross-hatch).
+    public var usesRaster: Bool { self == .raster || self == .steepShallow }
+    /// Whether it lays waterline loops (and so has a Z step from the steep angle).
+    public var usesWaterline: Bool { self == .waterline || self == .steepShallow }
+}
+
+public struct Finish3DParams: Hashable, Sendable {
     /// Distance between raster passes as a fraction of the tool diameter.
     public var stepoverFraction: Double
     /// Raster direction in degrees (0 = along X).
@@ -546,17 +573,88 @@ public struct Finish3DParams: Hashable, Codable, Sendable {
     /// How far beyond the selected vectors the tool centre may go, mm; nil = tool radius + 0.5 mm (the ball can
     /// finish right up to the vector without reaching past what roughing cleared).
     public var boundaryMargin: Double?
+    public var strategy: Finish3DStrategy
+    /// A second raster at the raster angle + 90° in the same toolpath (raster rows only).
+    public var crossHatch: Bool
+    /// Steep and shallow: slope (degrees from horizontal) above which waterline takes over from the raster; nil = 40°.
+    /// It also sets the waterline Z step, stepover × tan(angle), so loops on that slope are as far apart as raster rows
+    /// running along it, and the scallop matches across the seam.
+    public var steepAngle: Double?
+    /// Steep and shallow: how far each strategy runs past the seam into the other's area, mm; nil = a quarter of the
+    /// tool diameter.
+    public var overlap: Double?
+    /// Turns between raster rows on an arc and starts passes off the model (a ramp along the row, or a waterline loop
+    /// from the free side) instead of plunging onto it. Off (as projects saved before it existed read) keeps the row
+    /// links the raster always had.
+    public var smoothLinks: Bool
 
     public init(stepoverFraction: Double = 0.1, rasterAngle: Double = 0, allowance: Double = 0, boundary: ModelBoundary = .model,
-                boundaryMargin: Double? = nil) {
+                boundaryMargin: Double? = nil, strategy: Finish3DStrategy = .raster, crossHatch: Bool = false,
+                steepAngle: Double? = nil, overlap: Double? = nil, smoothLinks: Bool = true) {
         self.stepoverFraction = stepoverFraction
         self.rasterAngle = rasterAngle
         self.allowance = allowance
         self.boundary = boundary
         self.boundaryMargin = boundaryMargin
+        self.strategy = strategy
+        self.crossHatch = crossHatch
+        self.steepAngle = steepAngle
+        self.overlap = overlap
+        self.smoothLinks = smoothLinks
     }
 
     public static func autoMargin(tool: Tool) -> Double { tool.radius + 0.5 }
+    public static let defaultSteepAngle = 40.0
+    public static func autoOverlap(tool: Tool) -> Double { tool.diameter / 4 }
+
+    /// The steep angle in use, degrees (kept between 5° and 85°).
+    public var steepAngleInUse: Double { min(85, max(5, steepAngle ?? Self.defaultSteepAngle)) }
+    public func overlapInUse(tool: Tool) -> Double { max(0, overlap ?? Self.autoOverlap(tool: tool)) }
+    /// Waterline Z step for `tool`: stepover × tan(steep angle).
+    public func waterlineStep(tool: Tool) -> Double {
+        max(0.01, tool.diameter * stepoverFraction) * tan(steepAngleInUse.radians)
+    }
+
+    /// Format 10 adds the waterline, steep-and-shallow and pencil strategies and cross-hatching: a format-9 build would
+    /// ignore them and cut one raster. Smooth links don't raise it (an older build links rows its own way, cutting the
+    /// same surface), nor do a steep angle or overlap a raster doesn't use.
+    public var requiredFormatVersion: Int { strategy != .raster || (crossHatch && strategy.usesRaster) ? 10 : 1 }
+}
+
+extension Finish3DParams: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case stepoverFraction, rasterAngle, allowance, boundary, boundaryMargin, strategy, crossHatch, steepAngle, overlap, smoothLinks
+    }
+
+    /// Keys missing from older files read as the raster without cross-hatching or smooth links they meant.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        stepoverFraction = try c.decode(Double.self, forKey: .stepoverFraction)
+        rasterAngle = try c.decode(Double.self, forKey: .rasterAngle)
+        allowance = try c.decode(Double.self, forKey: .allowance)
+        boundary = try c.decode(ModelBoundary.self, forKey: .boundary)
+        boundaryMargin = try c.decodeIfPresent(Double.self, forKey: .boundaryMargin)
+        strategy = try c.decodeIfPresent(Finish3DStrategy.self, forKey: .strategy) ?? .raster
+        crossHatch = try c.decodeIfPresent(Bool.self, forKey: .crossHatch) ?? false
+        steepAngle = try c.decodeIfPresent(Double.self, forKey: .steepAngle)
+        overlap = try c.decodeIfPresent(Double.self, forKey: .overlap)
+        smoothLinks = try c.decodeIfPresent(Bool.self, forKey: .smoothLinks) ?? false
+    }
+
+    /// Defaults are left out, so a plain raster saves exactly as before (apart from smooth links, which are on).
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(stepoverFraction, forKey: .stepoverFraction)
+        try c.encode(rasterAngle, forKey: .rasterAngle)
+        try c.encode(allowance, forKey: .allowance)
+        try c.encode(boundary, forKey: .boundary)
+        try c.encodeIfPresent(boundaryMargin, forKey: .boundaryMargin)
+        if strategy != .raster { try c.encode(strategy, forKey: .strategy) }
+        if crossHatch { try c.encode(crossHatch, forKey: .crossHatch) }
+        try c.encodeIfPresent(steepAngle, forKey: .steepAngle)
+        try c.encodeIfPresent(overlap, forKey: .overlap)
+        if smoothLinks { try c.encode(smoothLinks, forKey: .smoothLinks) }
+    }
 }
 
 /// Turning a rotary blank down to a round of a given diameter: a square bar to round, or a round blank smaller (see
@@ -984,7 +1082,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// The project file format this operation needs. Index angles are format 3: a build that reads format 2 would
     /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it). A V-carve
     /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`). 3D rotary finishing is format 7.
-    /// Chamfers, flutes and prisms are format 8 (older builds can't read them).
+    /// Chamfers, flutes and prisms are format 8 (older builds can't read them). 3D finishing other than a single raster
+    /// is format 10 (see `Finish3DParams.requiredFormatVersion`).
     public var requiredFormatVersion: Int {
         let own: Int
         switch kind {
@@ -992,6 +1091,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case .rotaryFinish: own = 7
         case .chamfer, .fluting, .prism: own = 8
         case let .vcarve(p): own = p.requiredFormatVersion
+        case let .finish3D(p): own = p.requiredFormatVersion
         default: own = 1
         }
         return max(own, indexAngles == nil ? 1 : 3)
