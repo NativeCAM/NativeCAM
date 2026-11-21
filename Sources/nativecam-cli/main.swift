@@ -216,6 +216,9 @@ case "machine":
     }
     for n in found.notes { print("  Note: \(n)") }
     if var project = target {
+        for s in found.settings where !s.key.applies(to: project.machine) {
+            print("  Not applied: \(s.key.label), since the project's machine has no rotary axis")
+        }
         found.apply(to: &project.machine, keys: Set(found.settings.map(\.key)))
         let out = option("-o", in: args) ?? option("--apply", in: args)!
         do { try project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error)") }

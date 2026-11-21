@@ -93,7 +93,7 @@ struct MachineImportSheet: View {
         self.machine = machine
         self.units = units
         self.apply = apply
-        _keys = State(initialValue: Set(found.settings.map(\.key)))
+        _keys = State(initialValue: Set(found.settings.map(\.key).filter { $0.applies(to: machine) }))
     }
 
     var body: some View {
@@ -115,8 +115,13 @@ struct MachineImportSheet: View {
                                     Text(s.display(units)).monospacedDigit()
                                 }
                                 if let note = s.source.note { Text(note).font(.caption).foregroundStyle(.secondary) }
+                                if !s.key.applies(to: machine) {
+                                    Text("Turn on Rotary axis (Material & Machine ▸ Rotary Axis) to use this.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
+                        .disabled(!s.key.applies(to: machine))
                     }
                 }
                 if found.controller != nil || found.outputUnits != nil || found.hasToolChanger == true {
@@ -156,8 +161,9 @@ struct MachineImportSheet: View {
     }
 
     private func current(_ s: MachineImport.Setting) -> String {
+        guard let value = s.current(machine) else { return "Not set" }
         var probe = s
-        probe.value = s.current(machine)
+        probe.value = value
         return probe.display(units)
     }
 }

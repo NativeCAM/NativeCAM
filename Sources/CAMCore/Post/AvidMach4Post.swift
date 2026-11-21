@@ -280,7 +280,7 @@ public struct AvidMach4Post: Sendable {
     /// Writes wrapped toolpaths in this post's number formats, fed in G93 inverse time.
     private func wrappedWriter(_ rotary: RotaryOutput) -> WrappedWriter {
         WrappedWriter(stock: stock, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
-                      feeds: .inverseTime, rapidWord: "G00", feedWord: "G01",
+                      feeds: .inverseTime, turnSpeed: RotaryWrap.turnSpeed(machine), rapidWord: "G00", feedWord: "G01",
                       dwell: { "G04 P\(String(format: "%.2f", $0))" })
     }
 

@@ -13,10 +13,11 @@ public struct MachineImport: Sendable {
         case fusion = "Fusion 360 machine"
     }
 
-    /// A value the import can set. Lengths in mm, speeds in mm/min, accelerations in mm/s², times in seconds.
+    /// A value the import can set. Lengths in mm, speeds in mm/min, accelerations in mm/s², times in seconds; the
+    /// rotary axis's turn speed in degrees per minute.
     public enum Key: String, CaseIterable, Sendable {
         case travelX, travelY, travelZ, rapidXY, rapidZ, maxFeed, accelerationXY, accelerationZ, junctionDeviation
-        case minRPM, maxRPM, toolChangeSeconds
+        case minRPM, maxRPM, toolChangeSeconds, turnSpeed
 
         public var label: String {
             switch self {
@@ -32,6 +33,7 @@ public struct MachineImport: Sendable {
             case .minRPM: "Min RPM"
             case .maxRPM: "Max RPM"
             case .toolChangeSeconds: "Tool change time"
+            case .turnSpeed: "Rotary turn speed"
             }
         }
 
@@ -47,8 +49,12 @@ public struct MachineImport: Sendable {
             case .minRPM: .minRPM
             case .maxRPM: .maxRPM
             case .toolChangeSeconds: .toolChangeSeconds
+            case .turnSpeed: .turnSpeed
             }
         }
+
+        /// Whether `machine` has somewhere to put it: the turn speed needs a rotary axis.
+        public func applies(to machine: MachineProfile) -> Bool { self != .turnSpeed || machine.rotary != nil }
     }
 
     public struct Setting: Sendable, Identifiable {
@@ -65,11 +71,12 @@ public struct MachineImport: Sendable {
             case .accelerationXY, .accelerationZ: "\(u.format(value, decimals: u == .inch ? 1 : 0)) \(u.symbol)/s²"
             case .minRPM, .maxRPM: "\(Int(value.rounded())) RPM"
             case .toolChangeSeconds: "\(Int(value.rounded())) s"
+            case .turnSpeed: "\(Int(value.rounded()).formatted())°/min"
             }
         }
 
-        /// The current value of the same setting on a machine, for comparison.
-        public func current(_ m: MachineProfile) -> Double {
+        /// The current value of the same setting on a machine, for comparison; nil when it has none (no turn speed set).
+        public func current(_ m: MachineProfile) -> Double? {
             switch key {
             case .travelX: m.travel.x
             case .travelY: m.travel.y
@@ -83,6 +90,7 @@ public struct MachineImport: Sendable {
             case .minRPM: m.minRPM
             case .maxRPM: m.maxRPM
             case .toolChangeSeconds: m.toolChangeTime
+            case .turnSpeed: m.rotary?.turnSpeed
             }
         }
     }
@@ -104,10 +112,12 @@ public struct MachineImport: Sendable {
     public func setting(_ key: Key) -> Setting? { settings.first { $0.key == key } }
 
     /// Applies the chosen settings (and, if asked, the controller, units and tool changer), recording each value's
-    /// source. A travel that no longer matches an Avid preset makes the machine custom.
+    /// source. A travel that no longer matches an Avid preset makes the machine custom. The turn speed goes to the
+    /// machine's rotary axis, and only when it has one: an A motor in the controller's settings doesn't mean the rotary
+    /// is fitted, so the import never turns one on.
     public func apply(to m: inout MachineProfile, keys: Set<Key>, controller useController: Bool = true,
                       units useUnits: Bool = true, toolChanger useToolChanger: Bool = true) {
-        for s in settings where keys.contains(s.key) {
+        for s in settings where keys.contains(s.key) && s.key.applies(to: m) {
             switch s.key {
             case .travelX: m.travel.x = s.value
             case .travelY: m.travel.y = s.value
@@ -121,6 +131,7 @@ public struct MachineImport: Sendable {
             case .minRPM: m.minRPM = s.value
             case .maxRPM: m.maxRPM = s.value
             case .toolChangeSeconds: m.toolChangeSeconds = s.value
+            case .turnSpeed: m.rotary?.turnSpeed = s.value
             }
             m.setSource(s.source, for: s.key.field)
         }
@@ -233,7 +244,9 @@ public enum MachineSettingsImporter {
 
     /// Mach4's Machine.ini stores motor speeds and accelerations in counts (steps) per second; dividing by
     /// CountsPerUnit gives machine units. Axes map to motors through ChildMotorN, which includes a slaved gantry
-    /// motor, so each axis takes the slowest of its motors.
+    /// motor, so each axis takes the slowest of its motors. A rotary axis (A is Axis3) counts per degree, whatever the
+    /// linear units: its motor's MaxVelocity gives the rotary axis's turn speed. Avid publishes none for its rotary; its
+    /// Mach4 setup writes the A motor's tuning when the rotary is chosen, so a machine's own Machine.ini is the source.
     static func mach4(_ ini: INI) throws -> MachineImport {
         let prefs = ini.sections["Preferences"] ?? [:]
         // setupunits 200 / 210 match G20 / G21; [DefaultMode] unitsmode is the G-code units Mach4 starts in.
@@ -245,14 +258,20 @@ public enum MachineSettingsImporter {
         ])
         if let mode, mode == "G20" || mode == "G21" { out.outputUnits = mode == "G20" ? .inch : .mm }
 
-        struct Motor { var velocity: Double; var accel: Double; var travel: Double?; var name: String }
+        /// A motor's velocity (mm/min) and acceleration (mm/s²) on a linear axis, and `perSecond` and `perSecond2` in
+        /// the units it counts in (degrees on a rotary axis).
+        struct Motor {
+            var velocity: Double, accel: Double, travel: Double?, name: String
+            var perSecond: Double, perSecond2: Double
+        }
         func motor(_ name: String) -> Motor? {
             guard let s = ini.sections[name], s["enabled"].map({ $0 != "0" }) ?? true,
                   let cpu = s["countsperunit"].flatMap(Double.init), cpu > 0 else { return nil }
             let vel = (s["maxvelocity"].flatMap(Double.init) ?? 0) / cpu    // units/s
             let acc = (s["maxaccel"].flatMap(Double.init) ?? 0) / cpu       // units/s²
             let hi = (s["softmaxlimit"].flatMap(Double.init) ?? 0) / cpu, lo = (s["softminlimit"].flatMap(Double.init) ?? 0) / cpu
-            return Motor(velocity: u.toMM(vel * 60), accel: u.toMM(acc), travel: hi - lo > 0 ? u.toMM(hi - lo) : nil, name: name)
+            return Motor(velocity: u.toMM(vel * 60), accel: u.toMM(acc), travel: hi - lo > 0 ? u.toMM(hi - lo) : nil, name: name,
+                         perSecond: vel, perSecond2: acc)
         }
         func axis(_ n: Int) -> [Motor] {
             guard let s = ini.sections["Axis\(n)"], s["enabled"].map({ $0 != "0" }) ?? true else { return [] }
@@ -278,6 +297,18 @@ public enum MachineSettingsImporter {
         if let range = ini.sections["SpindleRange0"] {
             add(.maxRPM, range["maxrpm"].flatMap(Double.init), "Machine.ini SpindleRange0 maxrpm")
             add(.minRPM, range["minrpm"].flatMap(Double.init), "Machine.ini SpindleRange0 minrpm")
+        }
+        // The A axis: its slowest motor's velocity, in degrees, is the turn speed.
+        let a = axis(3).filter { $0.perSecond > 0 }
+        if let slowest = a.min(by: { $0.perSecond < $1.perSecond }) {
+            let speed = slowest.perSecond * 60
+            add(.turnSpeed, speed, "Machine.ini \(a.map(\.name).joined(separator: "/")) MaxVelocity ÷ CountsPerUnit (degrees) × 60")
+            let accel = a.map(\.perSecond2).filter { $0 > 0 }.min()
+            out.notes.append("The A axis (\(slowest.name)) turns at up to \(Int(speed.rounded()).formatted())°/min"
+                + (accel.map { " and accelerates at \(Int($0.rounded()).formatted())°/s²" } ?? "")
+                + ". NativeCAM takes that as the rotary axis's Turn speed (Material & Machine ▸ Rotary Axis), which the feeds near "
+                + "the axis, the run-time estimate and the simulation keep to; it doesn't model A's acceleration, so short turns "
+                + "take a little longer than estimated. It applies only to a machine whose rotary axis is turned on.")
         }
         guard !out.settings.isEmpty else { throw MachineImportError.empty(.mach4) }
         return out

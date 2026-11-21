@@ -58,16 +58,31 @@ public enum RotaryWrap {
         return min(feed / length, maxInverseTime)
     }
 
+    /// Inverse-time F for a wrapped move whose tool tip traces `length` mm at `feed` mm/min while the blank turns
+    /// `degrees`: one over its time in minutes, capped, and never faster than the rotary axis turns at `turnSpeed`
+    /// (degrees per minute). The feeds already keep the turn within it (`turnLimitedFeed`); this is for a move whose tip
+    /// path is too short for that, above all one that turns with the tip on the axis, whose path has no length and
+    /// which would otherwise get the largest F. Its F is the turn's at the turn speed, rounded down to the decimals the
+    /// post writes so the written F keeps within it too.
+    public static func inverseTime(length: Double, feed: Double, degrees: Double, turnSpeed: Double) -> Double {
+        let f = inverseTime(length: length, feed: feed)
+        let turn = abs(degrees)
+        guard turn > 1e-9, turnSpeed > 0, turnSpeed.isFinite else { return f }
+        let p = pow(10, Double(inverseTimeDecimals))
+        let byTurn = max(1 / p, (turnSpeed / turn * p).rounded(.down) / p)
+        return min(f, byTurn)
+    }
+
     /// Seconds a move of a wrapped toolpath takes at constant speed, from sheet coordinates (the sheet's line
     /// `centerY` at A0, Z measured from the sheet's `radius`): a feed, the time the post's inverse time gives it (the
-    /// tool tip's path at its feed); a rapid, the longer of turning at `turnSpeed` (degrees per second) and moving X
-    /// and Z at `rapidRate` (mm/min).
+    /// tool tip's path at its feed, and no less than its turn takes at `turnSpeed`); a rapid, the longer of turning at
+    /// `turnSpeed` (degrees per second) and moving X and Z at `rapidRate` (mm/min).
     static func seconds(_ m: Motion, from a: Vec3, centerY: Double, radius: Double, rapidRate: Double, turnSpeed: Double) -> Double {
         let d0 = (a.y - centerY) / radius * 180 / .pi, d1 = (m.end.y - centerY) / radius * 180 / .pi
         switch m.kind {
         case .feed:
             let length = tipLength(x0: a.x, r0: radius + a.z, degrees0: d0, x1: m.end.x, r1: radius + m.end.z, degrees1: d1)
-            return 60 / inverseTime(length: length, feed: m.feed)
+            return 60 / inverseTime(length: length, feed: m.feed, degrees: d1 - d0, turnSpeed: turnSpeed * 60)
         case .rapid:
             let linear = ((m.end.x - a.x) * (m.end.x - a.x) + (m.end.z - a.z) * (m.end.z - a.z)).squareRoot()
             return max(abs(d1 - d0) / max(turnSpeed, 1e-9), linear / max(rapidRate, 1) * 60)
@@ -101,15 +116,17 @@ public enum RotaryWrap {
     /// - `.allAxes` (the Grbl family's planner): F spreads over the whole move with degrees counted as lengths.
     /// - `.linearAxesOnly` (NIST, LinuxCNC): F applies to X and Z when either moves; a move that only turns runs in
     ///   degrees per minute.
-    public static func perMinuteFeed(_ rule: Dialect.RotaryFeed, dx: Double, dz: Double, da: Double, length: Double, feed: Double) -> Double {
-        guard length > 1e-9 else { return feed }
+    ///
+    /// Like the inverse time, the move takes no less than its turn does at `turnSpeed` (degrees per minute): a move
+    /// with the tool tip on the axis turns at the turn speed.
+    public static func perMinuteFeed(_ rule: Dialect.RotaryFeed, dx: Double, dz: Double, da: Double, length: Double, feed: Double,
+                                     turnSpeed: Double = .infinity) -> Double {
         let linear = (dx * dx + dz * dz).squareRoot()
-        switch rule {
-        case .linearAxesOnly:
-            return feed * (linear > 1e-9 ? linear : abs(da)) / length
-        default:
-            return feed * (linear * linear + da * da).squareRoot() / length
-        }
+        let distance = rule == .linearAxesOnly ? (linear > 1e-9 ? linear : abs(da)) : (linear * linear + da * da).squareRoot()
+        let turn = turnSpeed > 0 && turnSpeed.isFinite ? abs(da) / turnSpeed : 0
+        if length > 1e-9, feed <= 0 || length / feed >= turn { return feed * distance / length }
+        guard turn > 0 else { return feed }
+        return distance / turn
     }
 
     /// How fast the machine's rotary axis can turn, degrees per minute: its turn speed, or the nominal 90° a second
@@ -156,7 +173,8 @@ public enum RotaryWrap {
     /// units.
     static func slowingWarning(_ s: Slowing, context ctx: GenerationContext) -> String {
         let speed = Int(turnSpeed(ctx.machine).rounded())
-        return "The rotary axis turns at most \(speed.formatted())°/min\(ctx.machine.rotary?.drivenTurnSpeed == nil ? " (its Turn speed isn't set, so NativeCAM assumes 90° a second)" : ""), "
+        let assumed = " (its Turn speed isn't set, so NativeCAM assumes 90° a second: set it in Material & Machine ▸ Rotary Axis)"
+        return "The rotary axis turns at most \(speed.formatted())°/min\(ctx.machine.rotary?.drivenTurnSpeed == nil ? assumed : ""), "
             + "so near the axis the cut slows to keep up: down to \(ctx.feed(s.feed)) "
             + "at \(ctx.length(s.radius)) from the axis, from the \(ctx.feed(s.set)) set. If the wood burns there, "
             + "lower the spindle speed."
@@ -312,6 +330,8 @@ struct WrappedWriter {
     let decimals: Int
     let feedDecimals: Int
     let feeds: RotaryWrap.FeedMode
+    /// How fast the rotary axis turns, degrees per minute (`RotaryWrap.turnSpeed`): no move's F asks for a faster turn.
+    let turnSpeed: Double
     /// "G00"/"G01" for Avid's posts, "G0"/"G1" for the rest.
     let rapidWord: String
     let feedWord: String
@@ -391,7 +411,7 @@ struct WrappedWriter {
                                                   x1: units.toMM(ex), r1: units.toMM(ez), degrees1: ea)
                 switch feeds {
                 case .inverseTime:
-                    let f = RotaryWrap.inverseTime(length: length, feed: m.feed)
+                    let f = RotaryWrap.inverseTime(length: length, feed: m.feed, degrees: ea - sa, turnSpeed: turnSpeed)
                     let p = pow(10, Double(RotaryWrap.inverseTimeDecimals))
                     let written = String(format: "%.\(RotaryWrap.inverseTimeDecimals)f", (f * p).rounded() / p)
                     lines.append((inverse ? "" : "G93 ") + feedWord + words + " F" + written)
@@ -400,7 +420,8 @@ struct WrappedWriter {
                     state.feed = nil
                 case let .perMinute(rule):
                     let f = roundFeed(RotaryWrap.perMinuteFeed(rule, dx: ex - sx, dz: ez - sz, da: ea - sa,
-                                                               length: units.fromMM(length), feed: units.fromMM(m.feed)))
+                                                               length: units.fromMM(length), feed: units.fromMM(m.feed),
+                                                               turnSpeed: turnSpeed))
                     if f != state.feed { words += " F\(fmtFeed(f))"; state.feed = f }
                     lines.append(feedWord + words)
                 }

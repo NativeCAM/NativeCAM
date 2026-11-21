@@ -87,8 +87,12 @@ public enum SetupSheet {
         """
         if job.tiling == nil, let ext = extents(job.toolpaths) {
             let lo = stock.toWork(ext.min), hi = stock.toWork(ext.max)
-            h += "<dt>Cutting extents</dt><dd>X \(len(lo.x)) to \(len(hi.x)), Y \(len(lo.y)) to \(len(hi.y)), "
-                + "Z \(len(lo.z)) to \(len(hi.z)) (work coordinates)</dd>\n"
+            if let wrapped = wrappedExtents(project: project, job: job, len: len) {
+                h += "<dt>Cutting extents</dt><dd>\(wrapped)</dd>\n"
+            } else {
+                h += "<dt>Cutting extents</dt><dd>X \(len(lo.x)) to \(len(hi.x)), Y \(len(lo.y)) to \(len(hi.y)), "
+                    + "Z \(len(lo.z)) to \(len(hi.z)) (work coordinates)</dd>\n"
+            }
         }
         h += "</dl>\n"
 
@@ -323,6 +327,31 @@ public enum SetupSheet {
 
         h += "</body></html>\n"
         return h
+    }
+
+    /// The cutting extents of a rotary job with toolpaths that turn the blank as they cut (every one on a wrapped job;
+    /// rounding and 3D rotary roughing and finishing on faces), as the machine sees them: X along the blank, the range
+    /// of A the program cuts at (as the posts write it, and the Avid post's program-extents comment gives it), and Z
+    /// from the rotation axis. Their sheet Y is an angle, not a move: Y stays on the axis centreline, so Y is given
+    /// only for the toolpaths cut on faces. nil on any other job.
+    static func wrappedExtents(project: Project, job: JobResult, len: (Double) -> String) -> String? {
+        let stock = project.stock, machine = project.machine
+        let paths = job.toolpaths.filter { !$0.isEmpty }
+        guard stock.rotary != nil, let rotary = RotaryOutput(project), let ext = extents(paths),
+              paths.contains(where: { $0.wrapDiameter != nil && $0.cuttingExtents != nil }) else { return nil }
+        let lo = stock.toWork(ext.min), hi = stock.toWork(ext.max)
+        var parts = ["X \(len(lo.x)) to \(len(hi.x)) along the blank"]
+        if let flat = extents(paths.filter { $0.wrapDiameter == nil }) {
+            parts.append("Y \(len(stock.toWork(flat.min).y)) to \(len(stock.toWork(flat.max).y)) on the faces")
+        }
+        let units = machine.outputUnits
+        let decimals = (Dialect.for(machine) ?? .avidMach4).coordinateDecimals(units)
+        if let a = rotary.cutRange(paths, stock: stock, units: units, decimals: decimals) {
+            func degrees(_ v: Double) -> String { String(format: "%.3f°", v == 0 ? 0 : v) }
+            parts.append("\(esc(rotary.letter)) \(degrees(a.lowerBound)) to \(degrees(a.upperBound))")
+        }
+        parts.append("Z \(len(lo.z)) to \(len(hi.z)) from the rotation axis")
+        return parts.joined(separator: ", ") + " (work coordinates)"
     }
 
     // MARK: Tiles

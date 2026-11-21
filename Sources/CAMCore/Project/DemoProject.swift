@@ -80,6 +80,10 @@ public extension Project {
     /// needed): a rounding pass with the 1/4" end mill takes the blank down to just over the pawn's widest, then 3D
     /// rotary finishing with the 1/4" ball nose follows it all the way round, a spiral along the blank. The pawn keeps a
     /// short stub at each end, so it stays held between the chuck and the tailstock; part it off by hand.
+    ///
+    /// The rotary axis has no Turn speed: Avid's hasn't been measured, and inventing one would be a machine default the
+    /// user hasn't set. So the cuts near the axis slow for the assumed 90° a second, and Checks opens with a chip-load
+    /// warning there that says so and where to set the real speed (#74).
     static func demoPawn() -> Project {
         let lib = ToolLibrary.starter
         var stock = Stock(materialName: "Poplar", materialKind: .softwood)
@@ -117,6 +121,9 @@ public extension Project {
     /// with the 1/4" end mill clears the bar round the turned part, layer by layer, skipping the air over the bar's
     /// faces; 3D rotary finishing with the 1/4" ball nose then follows the leg from what the roughing left. Half an inch
     /// of the bar stays square at the tailstock end; part it off by hand.
+    ///
+    /// Like the pawn, its rotary axis has no Turn speed, so both toolpaths open with a chip-load warning near the axis
+    /// that comes from the assumed 90° a second (#74).
     static func demoTableLeg() -> Project {
         let lib = ToolLibrary.starter
         var stock = Stock(materialName: "Poplar", materialKind: .softwood)

@@ -417,6 +417,37 @@ struct Rotary3DTests {
         }
     }
 
+    /// #51: a layer trimmed to where it cuts can start several turns into its spiral, or rings in. Each pass now starts
+    /// at the first angle on from where the one before ended, so between passes the blank turns at safe Z less than a
+    /// turn (it turned about 6.7 on the pawn), and still only ever one way.
+    @Test(arguments: [RotaryFinishParams.Pattern.spiral, .rings])
+    func eachLayerStartsAtTheNextAngle(_ pattern: RotaryFinishParams.Pattern) throws {
+        var p = Project.demoPawn()
+        p.operations[1].kind = .rotaryFinish(RotaryFinishParams(pattern: pattern))
+        let job = CAMEngine.generate(p)
+        let finish = try #require(job.toolpaths.last)
+        let top = try #require(p.stock.topRadius)
+        // The turns at safe Z, each run of rapids (split into quarter turns) taken together.
+        var runs: [Double] = []
+        var at = finish.start
+        var run = 0.0, back = 0
+        for m in finish.motions where m.kind != .dwell {
+            let turn = (m.end.y - at.y) / top
+            if turn < -1e-9 { back += 1 }
+            if m.kind == .rapid {
+                run += abs(turn)
+            } else if run > 0 {
+                runs.append(run)
+                run = 0
+            }
+            at = m.end
+        }
+        let longest = runs.max() ?? 0
+        #expect(runs.count >= 2, "\(runs)")
+        #expect(longest < 2 * .pi, "\(longest / (2 * .pi)) turns")
+        #expect(back == 0)
+    }
+
     // MARK: Feeds
 
     /// The rotary axis can only turn so fast: near the axis the feed comes down so the A rate never exceeds the turn
