@@ -251,6 +251,8 @@ case "template":
         for op in template.operations { print("  \(op.name): \(op.vectorSelection?.label ?? "no vectors needed")") }
     case "apply":
         guard args.count >= 4 else { fail(usage) }
+        // Bad flags are refused before anything is read, applied or printed.
+        if option("-o", in: args) != nil && args.contains("--in-place") { fail("Pass -o or --in-place, not both.\n" + usage) }
         let template: ToolpathTemplate
         do { template = try ToolpathTemplate.decode(Data(contentsOf: URL(fileURLWithPath: args[2]))) } catch {
             fail("Can't read template \(args[2]): \(error.localizedDescription)")
@@ -277,7 +279,6 @@ case "template":
         if let note = result.machineNote { print("  \(note)") }
         let empty = result.emptyCount == 0 ? "every toolpath found its vectors" : "\(counted(result.emptyCount, "toolpath")) found no vectors"
         print("Material \(u.format(result.project.stock.thickness)) \(u.symbol); \(empty)")
-        if option("-o", in: args) != nil && args.contains("--in-place") { fail("Pass -o or --in-place, not both.") }
         // Never over the project unless asked: by default a new file beside it, numbered if the name is taken.
         let out = option("-o", in: args) ?? (args.contains("--in-place") ? args[3] : templatedPath(project: args[3], template: args[2]))
         do { try result.project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }

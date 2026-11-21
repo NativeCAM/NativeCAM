@@ -237,6 +237,8 @@ struct OperationInspector: View {
             }
         case let .rotaryFinish(p):
             RotaryFinishSection(params: p, op: op, project: project, units: units) { op.kind = .rotaryFinish($0) }
+        case let .rotaryRough(p):
+            RotaryRoughSection(params: p, op: op, project: project, units: units) { op.kind = .rotaryRough($0) }
         case let .chamfer(p):
             ChamferSection(params: p, tool: op.tool, units: units) { op.kind = .chamfer($0) }
         case let .fluting(p):
@@ -998,6 +1000,71 @@ struct ChipLoadRow: View {
             }
             .controlSize(.small)
             .help("Chip load a quarter into the chart range, feed held within the machine's cutting cap by lowering RPM")
+        }
+    }
+}
+
+// MARK: 3D rotary roughing
+
+/// 3D rotary roughing: the pattern each layer clears with, the stepdown between layers and the stepover on each, the
+/// allowance left for the finish (with the ridges a flat bottom leaves on the round at the model's narrowest), how
+/// much of the blank, and how closely the model is sampled.
+struct RotaryRoughSection: View {
+    let params: RotaryRoughParams
+    let op: CAMOperation
+    let project: Project
+    let units: LengthUnit
+    let set: (RotaryRoughParams) -> Void
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+    private func prompt(_ mm: Double) -> String { units.fromMM(mm).formatted(.number.precision(.fractionLength(0...units.displayDecimals))) }
+
+    /// Where the models selected for it start and end along the blank, and the least they come to the axis.
+    private var extent: (minX: Double, maxX: Double, narrowest: Double)? {
+        let models = project.shapes(for: op).filter { $0.modelSpec != nil }
+        let e = models.compactMap(\.rotaryExtent)
+        guard !e.isEmpty else { return nil }
+        let narrowest = models.compactMap { m in m.modelSpec?.alongAxis.profile.filter { $0 > 0 }.min().map { Double($0) * m.scale } }.min()
+        return (e.map(\.minX).min()!, e.map(\.maxX).max()!, narrowest ?? 0)
+    }
+
+    var body: some View {
+        let p = params
+        let tool = op.tool
+        let blank = project.stock.rotary
+        Section("3D Rotary Roughing") {
+            Picker("Pattern", selection: Binding(get: { p.pattern }, set: { var q = p; q.pattern = $0; set(q) })) {
+                ForEach(RotaryRoughParams.Pattern.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .help("Auto clears each area in lines its longer way: along the blank at a square bar's corners, round it on a short band")
+            LengthField(title: "Stepdown", mm: Binding(get: { p.stepdown(tool) }, set: { var q = p; q.stepdown = max(0.05, $0); set(q) }),
+                        units: units, help: "How far in toward the axis each layer is from the last")
+            PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction ?? tool.cutting.stepoverFraction },
+                                                             set: { var q = p; q.stepoverFraction = $0; set(q) }))
+            LabeledContent("On each layer", value: len(p.stepover(tool)))
+            LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units,
+                        help: "Material left on the model for the finish")
+            if let e = extent, e.narrowest > 0 {
+                let r = e.narrowest + p.allowance
+                LabeledContent("Ridges at its narrowest", value: len(RotaryRoughParams.cusp(tool, radius: max(r, tool.radius))))
+                    .help("The most a flat bottom leaves standing across the round \(len(r)) from the axis, on top of the allowance; keep the allowance at least this")
+            }
+            OptionalLengthField(title: "Start (X)", mm: Binding(get: { p.startX }, set: { var q = p; q.startX = $0; set(q) }), units: units,
+                                prompt: extent.map { prompt(max($0.minX, tool.radius)) } ?? "",
+                                help: "Where along the blank the roughing starts; empty starts at the model's end, with the cutter inside the blank")
+            OptionalLengthField(title: "End (X)", mm: Binding(get: { p.endX }, set: { var q = p; q.endX = $0; set(q) }), units: units,
+                                prompt: extent.flatMap { e in blank.map { prompt(min(e.maxX, $0.length - tool.radius)) } } ?? "",
+                                help: "Where along the blank the roughing ends; empty ends at the model's end, with the cutter inside the blank")
+        }
+        Section {
+            LengthField(title: "Sample spacing", mm: Binding(get: { p.sampleSpacing }, set: { var q = p; q.sampleSpacing = max(0.05, $0); set(q) }),
+                        units: units, help: "How far apart along the blank, and round it, the tool is dropped onto the model to find each layer's area")
+        } header: {
+            Text("Sampling")
+        } footer: {
+            Text("A flat or bull-nose end mill clears the stock round the model in layers, each a stepdown nearer the axis, from a square bar or a round blank. Each layer clears only where there's material left: over a square bar's faces it skips the air, and after a Rounding it starts from the rounded size. Near the model it rides on it, no closer than the allowance. Finish with 3D Rotary Finishing.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

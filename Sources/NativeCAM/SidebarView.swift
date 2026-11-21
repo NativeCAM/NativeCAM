@@ -150,6 +150,7 @@ struct SidebarView: View {
         case .finish3D: "mountain.2"
         case .rounding: "cylinder"
         case .rotaryFinish: "rotate.3d"
+        case .rotaryRough: "cylinder.split.1x2"
         case .chamfer: "skew"
         case .fluting: "line.diagonal"
         case .prism: "triangle"
@@ -246,6 +247,8 @@ struct AddOperationMenu: View {
                 Button("3D Roughing") { add(.rough3D) }
                 Button("3D Finishing") { add(.finish3D) }
             } else {
+                Button("3D Rotary Roughing") { add(.rotaryRough) }
+                    .help("Clear the stock round a 3D model on the blank in layers with an end mill, from a square bar or a round blank, leaving an allowance for the finish")
                 Button("3D Rotary Finishing") { add(.rotaryFinish) }
                     .help("Finish a 3D model on the blank all the way round as it turns: a ball nose follows it in a spiral, rings or passes along the blank")
             }
@@ -262,7 +265,7 @@ struct AddOperationMenu: View {
         }
     }
 
-    enum Kind { case profile, pocket, drill, vcarve, chamfer, fluting, prism, rough3D, finish3D, rounding, rotaryFinish }
+    enum Kind { case profile, pocket, drill, vcarve, chamfer, fluting, prism, rough3D, finish3D, rounding, rotaryFinish, rotaryRough }
 
     private func add(_ kind: Kind) {
         let shapes = kind == .rounding ? [] : workspace.selectedShapeIDs
@@ -372,6 +375,10 @@ enum ShapeFactory {
             let models = shapes.filter { project.shape(id: $0)?.modelSpec != nil }
             return CAMOperation(name: "3D Rotary Finishing", kind: .rotaryFinish(RotaryFinishParams()),
                                 shapeIDs: models.isEmpty ? shapes : models, tool: ball)
+        case .rotaryRough:
+            let models = shapes.filter { project.shape(id: $0)?.modelSpec != nil }
+            return CAMOperation(name: "3D Rotary Roughing", kind: .rotaryRough(RotaryRoughParams()),
+                                shapeIDs: models.isEmpty ? shapes : models, tool: endMill)
         }
     }
 

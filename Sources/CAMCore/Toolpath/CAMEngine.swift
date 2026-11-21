@@ -16,6 +16,10 @@ public struct GenerationContext: Sendable {
     /// On a rotary blank: how far from the axis the stock reaches at a station along it (design X), once the roundings
     /// that run before this operation have turned it down. nil = the blank as it is (out to a square bar's corners).
     public var rotaryStockRadius: (@Sendable (Double) -> Double)?
+    /// On a rotary blank, once a 3D rotary roughing has run before this operation: the most material it left (mm from
+    /// the axis, an upper bound) under a tool pointed at the axis at station x along the blank, the blank turned to
+    /// angle θ (radians), reaching r either side of its axis (`RadialGrid.highest`): (x, θ, r). nil = no roughing ran.
+    public var rotaryMaterial: (@Sendable (Double, Double, Double) -> Double)?
     /// The parts the job's other toolpaths cut (on this face of an indexed rotary job). Leads and corner reliefs keep
     /// clear of them. nil when none are known (an operation generated on its own).
     public var protectedRegions: ProtectedRegions?
@@ -123,6 +127,8 @@ public enum CAMEngine {
             var angles: [Double?]
             var perAngle: [[(tp: Toolpath, clearing: Bool)]]
         }
+        // The stock as the last 3D rotary roughing left it, for the toolpaths after it (see `GenerationContext.rotaryMaterial`).
+        var roughed: RadialGrid?
         func generateAll(_ op: CAMOperation, stockRadius: (@Sendable (Double) -> Double)?) -> Generated? {
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
             if shapes.isEmpty && op.kind.needsShapes {
@@ -151,8 +157,20 @@ public enum CAMEngine {
                 }
                 opContext.keepOuts = keepOuts
                 opContext.rotaryStockRadius = stockRadius
+                if let grid = roughed {
+                    // A surface per ray: allow for what can stand between rays (a square bar's corner).
+                    let between = grid.angleStep * Double(grid.initial.max() ?? 0) + 0.01
+                    opContext.rotaryMaterial = { x, a, r in grid.highest(x: x, angle: a, reach: r) + between }
+                }
                 opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
-                var generated = generate(op, shapes: shapes, context: opContext)
+                var generated: [Toolpath]
+                if case let .rotaryRough(p) = op.kind {
+                    let result = Rotary3DRoughing.generate(op: op, params: p, shapes: shapes, context: opContext)
+                    generated = [result.toolpath]
+                    if let left = result.left { roughed = left }
+                } else {
+                    generated = generate(op, shapes: shapes, context: opContext)
+                }
                 let clearing = generated.map { $0.id != op.id }
                 if let angle {
                     for (index, tp) in generated.enumerated() {
@@ -183,7 +201,7 @@ public enum CAMEngine {
                     let uncut = layout == nil && wrap == nil && op.adjustsFeedsForLoad && FeedScheduler.suits(tp.tool) ? model.grid : nil
                     // Wrapped toolpaths link through safe Z: the blank turns as the tool moves across the sheet, and
                     // only safe Z is sure to clear it (and a square bar's corners) all the way round.
-                    if case .rotaryFinish = op.kind {
+                    if op.kind.is3D && op.kind.turnsWholeBlank {
                         // All the way round the blank, nowhere near a face's model: it would only cost time.
                     } else if stock.retract == .minimum && wrap == nil {
                         let settings = LinkOptimizer.Settings(safeDistance: stock.safeDistance, clearanceZ: clearanceZ,
@@ -203,10 +221,9 @@ public enum CAMEngine {
                     }
                     issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
                     if let wrap {
-                        // 3D rotary finishing has already lowered its feeds for the rotary axis, and said so.
-                        var finish = false
-                        if case .rotaryFinish = op.kind { finish = true }
-                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !finish)
+                        // 3D rotary roughing and finishing have already lowered their feeds for the rotary axis, and said so.
+                        let own = op.kind.is3D && op.kind.turnsWholeBlank
+                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !own)
                     } else if project.machine.outputArcs {
                         tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
                     }
@@ -268,7 +285,7 @@ public enum CAMEngine {
             let byID = Dictionary(project.operations.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             for late in r.outOfOrder {
                 guard let early = byID[late.operation], let later = byID[late.mustPrecede] else { continue }
-                if case .finish3D = later.kind {
+                if early.kind.is3D && later.kind.is3D {
                     issues.append(JobIssue(.warning, "Runs before its roughing (“\(early.name)”). "
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))
                 } else if !early.kind.needsShapes {
@@ -492,6 +509,8 @@ public enum CAMEngine {
             return [RoundingGenerator.generate(op: op, params: p, context: context)]
         case let .rotaryFinish(p):
             return [Rotary3DGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
+        case let .rotaryRough(p):
+            return [Rotary3DRoughing.generate(op: op, params: p, shapes: shapes, context: context).toolpath]
         case let .chamfer(p):
             return [ChamferGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         case let .fluting(p):
@@ -593,8 +612,8 @@ public enum CAMEngine {
         } else if breakthrough > 1e-6 {
             issues.append(JobIssue(.info, "Cuts through the material (\(fmt(breakthrough)) into the spoilboard).", operation: tp.name))
         }
-        // Tool reach. A 3D rotary finish measures its own, from the stock it cuts rather than the sheet's top.
-        if case .rotaryFinish = op.kind {
+        // Tool reach. 3D rotary roughing and finishing measure their own, from the stock they cut rather than the sheet's top.
+        if op.kind.is3D && op.kind.turnsWholeBlank {
         } else if deepest > tp.tool.fluteLength + 1e-6 {
             issues.append(JobIssue(.warning, "Depth \(fmt(deepest)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))).",
                                    operation: tp.name))
