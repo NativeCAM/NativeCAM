@@ -5,8 +5,9 @@ import simd
 ///
 /// For an XY position it returns the lowest tool-tip Z at which the cutter touches but doesn't penetrate any
 /// triangle. Unlike a height grid this has no sampling error, so steep walls can't be gouged between samples. Ball
-/// noses and flat end mills have their own tests (`ballTip`, `flatTip`); V-bits, engraving bits, drills, bull noses
-/// and tapered ball noses are dropped as a `CutterProfile`.
+/// noses and flat end mills have their own tests (`ballTip`, `flatTip`; a flat end mill only when it leaves no
+/// allowance); V-bits, engraving bits, drills, bull noses, tapered ball noses and flat end mills leaving an allowance
+/// are dropped as a `CutterProfile`, grown by the allowance.
 ///
 /// Speed: triangles are binned in XY, each bin sorted by the highest the triangle could lift the tool, so a query
 /// stops once no triangle left in a bin could beat the best so far. A caller sampling along a line passes the last
@@ -47,7 +48,13 @@ struct TriangleDropCutter: Sendable {
         case .ballNose:
             self.init(kind: .ball, radius: tool.radius, allowance: allowance, profile: nil, triangles: triangles)
         case .flatEndMill, .surfacing:
-            self.init(kind: .flat, radius: tool.radius, allowance: allowance, profile: nil, triangles: triangles)
+            if allowance > 0, let shape = CutterProfile(tool: tool) {
+                // Grown by the allowance all round (a bull nose the allowance wider), so the allowance stays square to
+                // the surface: the flat test only raises the tool by it, and lets its side come right up to a wall.
+                self.init(profile: shape, allowance: allowance, triangles: triangles)
+            } else {
+                self.init(kind: .flat, radius: tool.radius, allowance: allowance, profile: nil, triangles: triangles)
+            }
         default:
             guard let shape = CutterProfile(tool: tool) else { return nil }
             self.init(profile: shape, allowance: allowance, triangles: triangles)
@@ -285,7 +292,8 @@ struct TriangleDropCutter: Sendable {
 
     /// Tip Z of a flat-bottomed cylinder of radius `radius` dropped at `p` onto the triangle a, b, c: the highest
     /// surface point under the disc, raised by `allowance`; -infinity when the disc misses it. Shared with
-    /// `RotaryDropCutter`.
+    /// `RotaryDropCutter`. The allowance is only added straight up, so the cutters drop a flat end mill that leaves one
+    /// as its grown `CutterProfile` instead.
     static func flatTip(_ a: SIMD3<Double>, _ b: SIMD3<Double>, _ c: SIMD3<Double>, _ p: Vec2, radius R: Double, allowance: Double) -> Double {
         flatTip(a, b, c, p, radius: R, allowance: allowance, slope: flatSlope(a, b, c))
     }
