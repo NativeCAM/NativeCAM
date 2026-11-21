@@ -201,7 +201,10 @@ public enum CAMEngine {
                     }
                     issues.append(contentsOf: keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
                     if let wrap {
-                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, tolerance: ctx.flattenTolerance)
+                        // 3D rotary finishing has already lowered its feeds for the rotary axis, and said so.
+                        var finish = false
+                        if case .rotaryFinish = op.kind { finish = true }
+                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !finish)
                     } else if project.machine.outputArcs {
                         tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
                     }

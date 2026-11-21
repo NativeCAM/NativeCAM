@@ -180,7 +180,7 @@ enum Rotary3DGenerator {
 
         // Lay the passes end to end, each starting a whole number of turns on from where the last one ended.
         let feed = tool.cutting.feedRate
-        let aMax = ctx.machine.rotary?.drivenTurnSpeed ?? RotaryAxis.nominalTurnSpeed
+        let aMax = RotaryWrap.turnSpeed(ctx.machine)
         func sheet(_ q: Point, _ offset: Double) -> Vec3 { Vec3(q.x, cy + (q.angle + offset) * top, q.r - top) }
         var motions: [Motion] = []
         var offset = 0.0
@@ -244,11 +244,7 @@ enum Rotary3DGenerator {
                 + "(its stepdown is \(len(tool.cutting.stepdown))). Lower the pass depth.")
         }
         if slowest < feed * 0.5 {
-            let speed = Int(aMax.rounded())
-            warnings.append("The rotary axis turns at most \(speed.formatted())°/min\(ctx.machine.rotary?.drivenTurnSpeed == nil ? " (its Turn speed isn't set, so NativeCAM assumes 90° a second)" : ""), "
-                + "so near the axis the cut slows to keep up: down to \(ctx.feed(slowest)) "
-                + "at \(len(slowestRadius)) from the axis, from the \(ctx.feed(feed)) set. If the wood burns there, "
-                + "lower the spindle speed.")
+            warnings.append(RotaryWrap.slowingWarning(RotaryWrap.Slowing(feed: slowest, set: feed, radius: slowestRadius), context: ctx))
         }
         if blank.shape == .squareBar, ctx.rotaryStockRadius == nil {
             warnings.append("Starts from a square bar: add a Rounding toolpath before it, or the first layers cut the corners in "
@@ -260,28 +256,14 @@ enum Rotary3DGenerator {
     }
 
     /// The feed for a move from `a` to `b`, mm/min: `feed`, or less when the rotary axis would have to turn faster than
-    /// `turnSpeed` (degrees per minute) to keep it, which happens near the axis (research §2.3). Rounded down to a
-    /// whole mm/min, and kept half a percent under the limit so that joining the moves afterward (`RotaryWrap.prepare`)
-    /// and the post's rounding can't take them over it.
-    ///
-    /// A move that turns more than a quarter turn is split into equal pieces afterward (`RotaryWrap.split`), each at
-    /// this feed. Where the move comes in toward the axis, the piece nearest it is the shortest and so turns the
-    /// fastest: the limit is that piece's.
+    /// `turnSpeed` (degrees per minute) to keep it (`RotaryWrap.turnLimitedFeed`, which every wrapped toolpath's feeds go
+    /// through again once `RotaryWrap.prepare` has joined them). A move that turns more than a quarter turn is split
+    /// into equal pieces afterward (`RotaryWrap.split`); the limit is the fastest piece's.
     static func clampFeed(_ feed: Double, from a: Point, to b: Point, turnSpeed: Double) -> Double {
         let degrees = abs(b.angle - a.angle) * 180 / .pi
-        guard degrees > 1e-9 else { return feed }
-        let pieces = max(1, Int((degrees / RotaryWrap.maxTurnPerMove - 1e-12).rounded(.up)))
-        var shortest = Double.infinity
-        for k in 0..<pieces {
-            let t0 = Double(k) / Double(pieces), t1 = Double(k + 1) / Double(pieces)
-            let a0 = (a.angle + (b.angle - a.angle) * t0) * 180 / .pi, a1 = (a.angle + (b.angle - a.angle) * t1) * 180 / .pi
-            let piece = RotaryWrap.tipLength(x0: a.x + (b.x - a.x) * t0, r0: a.r + (b.r - a.r) * t0, degrees0: a0,
-                                             x1: a.x + (b.x - a.x) * t1, r1: a.r + (b.r - a.r) * t1, degrees1: a1)
-            shortest = min(shortest, piece)
-        }
-        let limit = 0.995 * turnSpeed * shortest / (degrees / Double(pieces))
-        guard limit < feed else { return feed }
-        return max(1, limit.rounded(.down))
+        return RotaryWrap.turnLimitedFeed(feed, x0: a.x, r0: a.r, degrees0: a.angle * 180 / .pi,
+                                          x1: b.x, r1: b.r, degrees1: b.angle * 180 / .pi,
+                                          pieces: Int((degrees / RotaryWrap.maxTurnPerMove - 1e-12).rounded(.up)), turnSpeed: turnSpeed)
     }
 
     // MARK: Patterns
