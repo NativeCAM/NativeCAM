@@ -66,10 +66,17 @@ extension CAMEngine {
             fix = "Even at \(Int(rpm.rounded()).formatted()) RPM, the spindle's slowest, the chip there would be \(inch(low.feed / (rpm * z)))."
         }
         if tp.wrapDiameter != nil, machine.rotary?.drivenTurnSpeed == nil {
-            fix += " The rotary axis's Turn speed isn't set, so NativeCAM assumes 90° a second; if it turns faster, set it and the cut keeps more of its feed."
+            fix += " " + Self.assumedTurnSpeedNote
         }
         return "Chip load comes down to \(inch(chip)) \(place), below \(rangeText); thin chips rub, burn and dull the bit. \(fix)"
     }
+
+    /// What a thin chip near the rotary axis comes from when no Turn speed is set (#74), and where to set it. A real
+    /// speed keeps more of the feed, but not all: the tip's speed round the axis drops toward it however fast A turns.
+    static let assumedTurnSpeedNote = "This slowdown comes from the 90° a second NativeCAM assumes, because the rotary axis's "
+        + "Turn speed isn't set: enter your axis's real speed in Material & Machine ▸ Rotary Axis ▸ Turn speed (Mach4: "
+        + "the A motor's velocity, or import Machine.ini). A faster axis keeps more of the feed, though close to the axis "
+        + "the feed still drops however fast it turns."
 
     /// Shortest stretch of cutting a low feed has to last for the chip-load check to count it, mm: so a slowdown
     /// into a corner doesn't count, but a slowed slot or a pass near a rotary axis does.

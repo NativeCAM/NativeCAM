@@ -210,7 +210,8 @@ struct RotaryTurnSpeedTests {
     // MARK: #50, the extents comment
 
     /// The pawn's finish starts a whole number of turns on from where the rounding left the blank: the comment gives the
-    /// A words the program is cut with, those turns included.
+    /// A words the program is cut with, those turns included. (Six turns fewer since #51: its layers no longer start
+    /// turns on from where the one before ended.)
     @Test func thePawnsExtentsGiveTheAItIsCutAt() throws {
         let p = Project.demoPawn()
         let gcode = Self.avid(p, CAMEngine.generate(p).toolpaths)
@@ -218,8 +219,8 @@ struct RotaryTurnSpeedTests {
         let posted = try #require(Self.cutRange(gcode))
         #expect(comment == posted, "\(comment) vs \(posted)")
         #expect(comment.lowerBound == 0, "\(comment)")
-        #expect(comment.upperBound == 112_475.906, "\(comment)")
-        #expect(gcode.contains("(Program extents: X0.7500 to X5.2500  A0.000 to A112475.906  Z0.1574 to Z0.9750)"))
+        #expect(comment.upperBound == 110_315.906, "\(comment)")
+        #expect(gcode.contains("(Program extents: X0.7500 to X5.2500  A0.000 to A110315.906  Z0.1574 to Z0.9750)"))
     }
 
     /// Every rotary golden and example whose extents comment gives A gives the range its feed moves are posted at.
@@ -256,5 +257,83 @@ struct RotaryTurnSpeedTests {
         #expect(face > 360, "\(face)")
         #expect(turn == 90, "\(face)")
         #expect(comment.contains(face), "\(face) in \(comment)")
+        // The setup sheet gives the same range, and Y for the face only.
+        let line = try #require(Self.extentsLine(SetupSheet.html(project: p, job: job)))
+        #expect(line.contains(Self.aRange(comment)), "\(line) vs \(comment)")
+        #expect(line.contains(" on the faces"), "\(line)")
+    }
+
+    // MARK: #53, the setup sheet's extents
+
+    /// The setup sheet's "Cutting extents" line.
+    static func extentsLine(_ html: String) -> String? {
+        html.components(separatedBy: "\n").first { $0.contains("<dt>Cutting extents</dt>") }
+    }
+
+    /// An A range as the setup sheet gives it.
+    static func aRange(_ r: ClosedRange<Double>) -> String {
+        "A \(String(format: "%.3f", r.lowerBound))° to \(String(format: "%.3f", r.upperBound))°"
+    }
+
+    /// On a job that turns the blank as it cuts, the setup sheet gives X along the blank, the range of A the program
+    /// cuts at (what the post's extents comment says) and Z from the axis, not the unrolled sheet's Y (which read
+    /// "Y 0.000 in to 1459.295 in" on the pawn).
+    @Test func theSetupSheetGivesTheARangeThePostCutsAt() throws {
+        let p = Project.demoPawn()
+        let job = CAMEngine.generate(p)
+        let comment = try #require(Self.extentsRange(Self.avid(p, job.toolpaths)))
+        let line = try #require(Self.extentsLine(SetupSheet.html(project: p, job: job)))
+        #expect(line.contains("X 0.750 in to 5.250 in along the blank"), "\(line)")
+        #expect(line.contains(Self.aRange(comment)), "\(line) vs \(comment)")
+        #expect(line.contains("Z 0.157 in to 0.975 in from the rotation axis"), "\(line)")
+        #expect(!line.contains("Y "), "\(line)")
+        // A flat job keeps X, Y and Z.
+        let sign = Project.demoSign()
+        let flat = try #require(Self.extentsLine(SetupSheet.html(project: sign, job: CAMEngine.generate(sign))))
+        #expect(flat.contains(", Y ") && !flat.contains("A "), "\(flat)")
+    }
+
+    // MARK: #54, a turn with the tool tip on the axis
+
+    /// A wrapped move that turns with the tool tip on the rotation axis has no tip path to time it by, so it got the
+    /// largest inverse-time F. It's timed by the turn at the turn speed now, alike in the post's F word, the export
+    /// checks, the run-time estimate and the simulation.
+    @Test func aTurnWithTheTipOnTheAxisTakesTheTurnAtTheTurnSpeed() throws {
+        let p = RotaryWrapTests.job()
+        let c = RotaryWrapTests.middle, safe = p.stock.clearanceHeight
+        let quarter = Double.pi * 50 / 4
+        // Down to the axis (Z0), a quarter turn there, then a quarter turn while moving 10 mm along X.
+        var tp = Toolpath(id: UUID(uuidString: "60D0E000-0000-0000-0054-000000000001")!, name: "On the axis",
+                          tool: RotaryWrapTests.lib.tool(number: 1)!, spindleRPM: 18000, start: Vec3(150, c, safe), motions: [
+            .rapid(Vec3(150, c, 2)), .feed(Vec3(150, c, -25), 300),
+            .feed(Vec3(150, c + quarter, -25), 1000),
+            .feed(Vec3(160, c + 2 * quarter, -25), 100),
+            .rapid(Vec3(160, c + 2 * quarter, safe)),
+        ])
+        tp.wrapDiameter = 50
+        let gcode = Self.avid(p, [tp])
+        let turns = Self.feedMoves(gcode).filter(\.inverse)
+        #expect(turns.count == 2, "\(turns.map(\.line))")
+        // 90° at 5,400°/min is a sixtieth of a minute.
+        #expect(turns.first?.feed == 60, "\(turns.map(\.line))")
+        // Along X the tip's path sets it: 10 mm at 100 mm/min, well within the turn speed.
+        #expect(turns.last?.feed == 10, "\(turns.map(\.line))")
+        #expect(!gcode.contains("F999999"))
+        let issues = GCodeCheck.run(gcode, toolpaths: [tp], project: p, dialect: .avidMach4)
+        #expect(issues.filter { $0.severity != .info }.isEmpty, "\(issues.map(\.text))")
+        // The estimate and the simulation take a second over the turn.
+        let estimate = CycleTimeEstimator.estimate([tp], project: p)
+        let seconds = estimate.motionSeconds[0][2]
+        #expect(abs(seconds - 1) < 1e-6, "\(estimate.motionSeconds[0])")
+        let timeline = SimulationTimeline(toolpaths: [tp], rapidRate: 5000, turnSpeed: RotaryAxis.nominalTurnSpeed / 60, wrap: (c, 25))
+        let step = try #require(timeline.steps.first { $0.motion == tp.motions[2] })
+        #expect(abs(step.duration - 1) < 1e-6, "\(step.duration)")
+        // With the turn speed set, that's the time.
+        var fast = p
+        fast.machine.rotary?.turnSpeed = 21_600
+        #expect(Self.feedMoves(Self.avid(fast, [tp])).filter(\.inverse).first?.feed == 240)
+        // A controller fed per minute turns it at the turn speed in degrees per minute (LinuxCNC's rule).
+        let f = RotaryWrap.perMinuteFeed(.linearAxesOnly, dx: 0, dz: 0, da: 90, length: 0, feed: 1000, turnSpeed: 5400)
+        #expect(f == 5400)
     }
 }

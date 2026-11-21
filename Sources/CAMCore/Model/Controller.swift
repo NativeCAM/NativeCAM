@@ -155,6 +155,8 @@ public extension MachineProfile {
     enum Field: String, CaseIterable, Sendable {
         case travel, minRPM, maxRPM, maxFeedRate, rapidRateForEstimates, rapidRateZ
         case accelerationXY, accelerationZ, junctionDeviation, lookaheadLines, toolChangeSeconds
+        /// The rotary axis's turn speed (`RotaryAxis.turnSpeed`).
+        case turnSpeed
     }
 
     /// True for Avid's Mach4 profile, the controller every project assumed before format 2.

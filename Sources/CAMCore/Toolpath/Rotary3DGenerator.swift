@@ -14,6 +14,9 @@ import Foundation
 /// - **Along X**: zig-zag passes along the blank at fixed angles, turning between them along the surface by
 ///   Δθ = stepover ÷ the model's largest radius.
 ///
+/// A flat bottom can't roll up onto a shoulder as a ball nose does, so with one, spirals and rings add a turn at the
+/// foot of each shoulder (`fillShoulders`); along X, the passes meet the shoulder along their way.
+///
 /// Where the model is deeper below the stock than the pass depth, layers cut down to it first (a clamped stack, §2.4
 /// "Approach A"): each layer runs the same pattern at the layers' stepover with the tool no closer to the axis than the
 /// layer's radius, and leaves out what it would only cut air on. The finish then follows the model everywhere. After a
@@ -161,6 +164,13 @@ enum Rotary3DGenerator {
             if thickest <= pass + 1e-6 { layerCount = 0 }
         }
 
+        // A flat bottom can't roll up onto a shoulder: spirals and rings get a pass at the foot of each (`fillShoulders`).
+        let flatBottom = Self.hasFlatBottom(tool) && p.pattern != .lines
+        func drop(_ q: [(x: Double, angle: Double)]) -> [Double] {
+            let r = cutter.tipRadii(q)
+            return q.indices.map { r[$0].isFinite ? max(0, r[$0]) : material(q[$0].x, q[$0].angle) }
+        }
+
         // The layers, then the finish, each pass the other way along the blank from the last.
         var passes: [(strokes: [Stroke], layer: Double?)] = []
         var forward = true
@@ -171,6 +181,7 @@ enum Rotary3DGenerator {
             var strokes = pattern(p.pattern, from: a, to: b, stepover: p.layerStepover(tool), perTurn: perTurn, spacing: spacing,
                                   outer: surfaceMax)
             evaluate(&strokes, cutter: cutter, material: material)
+            if flatBottom { fillShoulders(&strokes, pattern: p.pattern, threshold: pass, floor: rho, spacing: spacing, drop: drop) }
             // Where this layer would only cut air (the model, or the layer before, is already there), leave it out.
             func cuts(_ q: Point) -> Bool { max(q.r, rho) < min(material(q.x, q.angle), max(q.r, above)) - 0.01 }
             strokes = trimmed(strokes, pattern: p.pattern, perTurn: perTurn, cuts: cuts)
@@ -186,6 +197,7 @@ enum Rotary3DGenerator {
         var finish = pattern(p.pattern, from: forward ? x0 : x1, to: forward ? x1 : x0, stepover: stepover, perTurn: perTurn,
                              spacing: spacing, outer: surfaceMax)
         evaluate(&finish, cutter: cutter, material: material)
+        if flatBottom { fillShoulders(&finish, pattern: p.pattern, threshold: pass, floor: nil, spacing: spacing, drop: drop) }
         // The most the finish takes in one go: what the last layer left above the model.
         var engagement = passes.isEmpty ? 0 : pass
         for s in finish {
@@ -199,21 +211,25 @@ enum Rotary3DGenerator {
         let tolerance = max(0.002, ctx.flattenTolerance)
         for i in passes.indices { refine(&passes[i].strokes, cutter: cutter, material: material, floor: passes[i].layer, tolerance: tolerance) }
 
-        // Lay the passes end to end, each starting a whole number of turns on from where the last one ended.
+        // Lay the passes end to end, each turned by whole turns so that it starts at the first angle on from where the
+        // last one ended (the first from A0): a layer trimmed to where it cuts can start several turns into its
+        // pattern, and the blank turns at safe Z only as far as it must to get there, less than a turn.
         let feed = tool.cutting.feedRate
         let aMax = RotaryWrap.turnSpeed(ctx.machine)
         func sheet(_ q: Point, _ offset: Double) -> Vec3 { Vec3(q.x, cy + (q.angle + offset) * top, q.r - top) }
         var motions: [Motion] = []
         var offset = 0.0
-        var last: (point: Point, offset: Double)?
+        var last: (point: Point, offset: Double, pass: Int)?
         var slowest = feed, slowestRadius = Double.infinity
         for (n, pass) in passes.enumerated() {
-            if let l = last { offset = ((l.point.angle + l.offset) / (2 * .pi)).rounded(.up) * 2 * .pi }
-            if n == 0, let first = pass.strokes.first?.points.first { tp.start = Vec3(first.x, cy + first.angle * top, clearance) }
+            if let first = pass.strokes.first?.points.first {
+                offset = Self.nextTurn(from: last.map { $0.point.angle + $0.offset } ?? 0, to: first.angle)
+                if n == 0 { tp.start = Vec3(first.x, cy + (first.angle + offset) * top, clearance) }
+            }
             for stroke in pass.strokes {
                 guard let first = stroke.points.first else { continue }
                 var run: [Point] = []
-                if let lead = stroke.lead, let l = last, l.offset == offset {
+                if let lead = stroke.lead, let l = last, l.pass == n {
                     run = lead + stroke.points
                 } else {
                     // From safe Z: up, across (the blank turns here, clear of it), down to just above the stock, plunge.
@@ -224,11 +240,11 @@ enum Rotary3DGenerator {
                     if plunge < clearance - 1e-9, plunge > over.z { motions.append(.rapid(Vec3(over.x, over.y, plunge))) }
                     motions.append(.feed(over, tool.cutting.plungeRate))
                     run = Array(stroke.points.dropFirst())
-                    last = (first, offset)
+                    last = (first, offset, n)
                 }
                 for q in run {
                     motions.append(.feed(sheet(q, offset), feed))
-                    last = (q, offset)
+                    last = (q, offset, n)
                 }
             }
         }
@@ -274,6 +290,13 @@ enum Rotary3DGenerator {
         warnings += reachWarnings(triangles, range: x0...x1, context: ctx)
         tp.warnings = warnings
         return tp
+    }
+
+    /// The whole turns (radians, a multiple of 2π) to add to a pass whose first point is at `angle` so that it starts at
+    /// the first angle on from `after`, where the blank is: never behind it, and less than a turn ahead, so the blank
+    /// keeps turning one way and turns at safe Z no further than it must.
+    static func nextTurn(from after: Double, to angle: Double) -> Double {
+        ((after - angle) / (2 * .pi) - 1e-9).rounded(.up) * 2 * .pi
     }
 
     /// The feed for a move from `a` to `b`, mm/min: `feed`, or less when the rotary axis would have to turn faster than
@@ -361,6 +384,157 @@ enum Rotary3DGenerator {
         }
     }
 
+    // MARK: Shoulders
+
+    /// Whether `tool` has a flat bottom, which can't roll up onto a shoulder the way a ball or a bull nose does: flat end
+    /// mills and surfacing bits, and any bit followed as a flat end mill because its profile can't be.
+    static func hasFlatBottom(_ tool: Tool) -> Bool {
+        switch tool.shape {
+        case .flatEndMill, .surfacing: return true
+        case .ballNose, .bullNose: return false
+        default: return CutterProfile(tool: tool) == nil
+        }
+    }
+
+    /// Adds a pass at the foot of each shoulder that a flat bottom would otherwise leave a band beside (#72). Its tip
+    /// jumps from the low side of a shoulder to the top at one station, and a spiral passes each angle once a turn
+    /// (rings, once a ring), so the last pass on the low side can stop up to a stepover short of the jump, leaving a band
+    /// that wide standing at the shoulder's foot. Wherever a point's tip radius (no lower than `floor`) differs by more
+    /// than `threshold` from the next turn's or ring's at the same angle, the station where it jumps is found by
+    /// bisection along the blank, and a turn is added there, on the low side of the jump, before the pattern goes on to
+    /// the next turn (and climbs, or comes down). Angles where nothing jumps follow the turn before again. Everything
+    /// after it is turned a whole turn on, so A still only ever increases. `drop` gives the tool's tip radius at
+    /// stations and angles; every point added is dropped there.
+    static func fillShoulders(_ strokes: inout [Stroke], pattern: RotaryFinishParams.Pattern, threshold: Double, floor: Double?,
+                              spacing h: Double, drop: ([(x: Double, angle: Double)]) -> [Double]) {
+        func clamp(_ r: Double) -> Double { floor.map { max(r, $0) } ?? r }
+        /// Where the tip ends on the low side of a jump between a point (station `x`, `angle`, tip radius `r`) and the
+        /// next pass at that angle (at station `nextX`, with tip radius `nextR`): the station and the tip radius there,
+        /// or nil when the two don't differ by more than the threshold.
+        func feet(_ pairs: [(x: Double, angle: Double, r: Double, nextX: Double, nextR: Double)]) -> [(x: Double, r: Double)?] {
+            var open: [Int] = [], lo: [Double] = [], hi: [Double] = [], limit: [Double] = []
+            for (i, q) in pairs.enumerated() {
+                let a = clamp(q.r), b = clamp(q.nextR)
+                guard abs(a - b) > threshold else { continue }
+                open.append(i)
+                lo.append(a <= b ? q.x : q.nextX)
+                hi.append(a <= b ? q.nextX : q.x)
+                limit.append(min(a, b) + threshold)
+            }
+            guard !open.isEmpty else { return pairs.map { _ in nil } }
+            // Twelve halvings: within a 4,096th of the step along the blank.
+            for _ in 0..<12 {
+                let r = drop(open.indices.map { ((lo[$0] + hi[$0]) / 2, pairs[open[$0]].angle) })
+                for k in open.indices {
+                    let mid = (lo[k] + hi[k]) / 2
+                    if clamp(r[k]) > limit[k] { hi[k] = mid } else { lo[k] = mid }
+                }
+            }
+            let r = drop(open.indices.map { (lo[$0], pairs[open[$0]].angle) })
+            var out: [(x: Double, r: Double)?] = pairs.map { _ in nil }
+            for k in open.indices { out[open[k]] = (lo[k], r[k]) }
+            return out
+        }
+        /// Points between `a` and `b` (both left out) no more than the sample spacing apart along the blank, dropped.
+        func between(_ a: Point, _ b: Point) -> [Point] {
+            let m = Int((abs(b.x - a.x) / h).rounded(.up))
+            guard m > 1 else { return [] }
+            var pts = (1..<m).map { Point(x: a.x + (b.x - a.x) * Double($0) / Double(m), angle: a.angle + (b.angle - a.angle) * Double($0) / Double(m)) }
+            let r = drop(pts.map { ($0.x, $0.angle) })
+            for i in pts.indices { pts[i].r = r[i] }
+            return pts
+        }
+
+        switch pattern {
+        case .lines:
+            return
+        case .spiral:
+            guard let pts = strokes.first?.points, pts.count > 2 else { return }
+            var step = 0.0
+            for (a, b) in zip(pts, pts.dropFirst()) { step = max(step, b.angle - a.angle) }
+            // Each point and the next turn's point nearest its angle, where they differ by more than the threshold.
+            var pairs: [(x: Double, angle: Double, r: Double, nextX: Double, nextR: Double)] = []
+            var index: [Int] = []
+            var j = 0
+            for (i, q) in pts.enumerated() {
+                let target = q.angle + 2 * .pi
+                while j + 1 < pts.count, pts[j + 1].angle <= target { j += 1 }
+                var k = j
+                if k + 1 < pts.count, abs(pts[k + 1].angle - target) < abs(pts[k].angle - target) { k += 1 }
+                guard abs(pts[k].angle - target) <= step + 1e-9 else { continue }
+                guard abs(clamp(q.r) - clamp(pts[k].r)) > threshold else { continue }
+                pairs.append((q.x, q.angle, q.r, pts[k].x, pts[k].r))
+                index.append(i)
+            }
+            var foot: [Int: (x: Double, r: Double)] = [:]
+            for (n, f) in feet(pairs).enumerated() { if let f { foot[index[n]] = f } }
+            guard !foot.isEmpty else { return }
+            // A turn at a time (and a step or two over, for the angles' rounding): each is cut again at the foot after
+            // its last point, where the spiral itself jumps.
+            let flagged = foot.keys.sorted()
+            var ends: [Int] = []
+            var c = 0
+            while c < flagged.count {
+                let first = pts[flagged[c]].angle
+                var e = c
+                while e + 1 < flagged.count, pts[flagged[e + 1]].angle < first + 2 * .pi + 2 * step { e += 1 }
+                ends.append(flagged[e])
+                c = e + 1
+            }
+            var out: [Point] = []
+            var shift = 0.0, from = 0
+            for end in ends {
+                out += pts[from...end].map { Point(x: $0.x, angle: $0.angle + shift, r: $0.r) }
+                var k = end
+                while k > 0, pts[k - 1].angle > pts[end].angle - 2 * .pi + 1e-9 { k -= 1 }
+                let turn = (k...end).map { i in
+                    Point(x: foot[i]?.x ?? pts[i].x, angle: pts[i].angle + 2 * .pi + shift, r: foot[i]?.r ?? pts[i].r)
+                }
+                out += between(out[out.count - 1], turn[0]) + turn
+                shift += 2 * .pi
+                if end + 1 < pts.count {
+                    let next = pts[end + 1]
+                    out += between(turn[turn.count - 1], Point(x: next.x, angle: next.angle + shift))
+                }
+                from = end + 1
+            }
+            if from < pts.count { out += pts[from...].map { Point(x: $0.x, angle: $0.angle + shift, r: $0.r) } }
+            strokes[0].points = out
+        case .rings:
+            var out: [Stroke] = []
+            var shift = 0.0
+            var after: Point?
+            for (k, ring) in strokes.enumerated() {
+                var this = ring
+                for i in this.points.indices { this.points[i].angle += shift }
+                if let lead = this.lead {
+                    // After a ring at a foot: the step along the blank to this ring starts from that one's end.
+                    if let from = after, let to = this.points.first {
+                        this.lead = between(Point(x: from.x, angle: to.angle), to)
+                    } else {
+                        this.lead = lead.map { Point(x: $0.x, angle: $0.angle + shift, r: $0.r) }
+                    }
+                }
+                out.append(this)
+                after = nil
+                guard k + 1 < strokes.count, strokes[k + 1].points.count == ring.points.count,
+                      let x = ring.points.first?.x, let nextX = strokes[k + 1].points.first?.x else { continue }
+                let next = strokes[k + 1].points
+                let found = feet(ring.points.indices.map { (x, ring.points[$0].angle, ring.points[$0].r, nextX, next[$0].r) })
+                guard found.contains(where: { $0 != nil }) else { continue }
+                // A ring at the foot, turning from where the next ring would have started.
+                let base = next[0].angle + shift
+                let turn = ring.points.indices.map { i in
+                    Point(x: found[i]?.x ?? x, angle: base + ring.points[i].angle - ring.points[0].angle, r: found[i]?.r ?? ring.points[i].r)
+                }
+                out.append(Stroke(points: turn, lead: between(Point(x: x, angle: base), turn[0])))
+                after = turn[turn.count - 1]
+                shift += 2 * .pi
+            }
+            strokes = out
+        }
+    }
+
     /// Leaves out what a layer would only cut air on: a spiral's turns at either end, and whole rings or lines. A
     /// stroke whose neighbour before it was left out starts from safe Z.
     static func trimmed(_ strokes: [Stroke], pattern: RotaryFinishParams.Pattern, perTurn n: Int, cuts: (Point) -> Bool) -> [Stroke] {
@@ -382,12 +556,16 @@ enum Rotary3DGenerator {
     }
 
     /// Splits the segments between points (leads included) whose middle would dip more than `tolerance` below where
-    /// the tool has to be there, up to four times over.
+    /// the tool has to be there, up to four times over. A stroke with a lead is cut straight on from the one before, so
+    /// the move from that one's last point to its first is checked too: a ring's step along the blank can meet a
+    /// shoulder there.
     static func refine(_ strokes: inout [Stroke], cutter: RotaryDropCutter, material: (Double, Double) -> Double,
                        floor: Double?, tolerance: Double) {
         for k in strokes.indices {
-            var run = (strokes[k].lead ?? []) + strokes[k].points
-            let leadCount = strokes[k].lead?.count ?? 0
+            let joined = strokes[k].lead != nil && k > 0 ? strokes[k - 1].points.last : nil
+            let skip = joined == nil ? 0 : 1
+            var run = (joined.map { [$0] } ?? []) + (strokes[k].lead ?? []) + strokes[k].points
+            let leadCount = skip + (strokes[k].lead?.count ?? 0)
             // Index of the stroke's first point in `run`, which moves as points are added in the lead.
             var firstPoint = leadCount
             var check = Array(repeating: true, count: max(0, run.count - 1))
@@ -429,7 +607,7 @@ enum Rotary3DGenerator {
                 firstPoint = newFirst
             }
             if strokes[k].lead != nil {
-                strokes[k].lead = Array(run[..<firstPoint])
+                strokes[k].lead = Array(run[skip..<firstPoint])
                 strokes[k].points = Array(run[firstPoint...])
             } else {
                 strokes[k].points = run
