@@ -283,7 +283,7 @@ struct ContentView: View {
                 } else {
                     let result = try VectorImporter.importFile(at: url, tolerance: 0.01)
                     warnings.append(contentsOf: result.warnings.map { "\(url.lastPathComponent): \($0)" })
-                    let shapes = ShapeFactory.imported(result.polylines, points: result.points, name: name, stock: project.stock)
+                    let shapes = result.shapes(name: name, stock: project.stock)
                     if shapes.isEmpty { warnings.append("\(url.lastPathComponent): no usable vectors found.") }
                     document.project.shapes.append(contentsOf: shapes)
                     added.append(contentsOf: shapes.map(\.id))
