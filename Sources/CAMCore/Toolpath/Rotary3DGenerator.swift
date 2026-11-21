@@ -5,7 +5,9 @@ import Foundation
 ///
 /// The tool's tip radius at every point of the path comes from the exact rotary drop-cutter (`RotaryDropCutter`), so
 /// the path never cuts into the model at its points; between them, a segment whose middle would dip more than the
-/// tolerance below the model's is split. Patterns (`RotaryFinishParams.Pattern`):
+/// tolerance below the model's is split. Every bit leaves the allowance square to the model's surface (a flat end mill
+/// is dropped grown by it all round, as `Rotary3DRoughing` drops its tool), so beside a shoulder as well as on top of
+/// it. Patterns (`RotaryFinishParams.Pattern`):
 /// - **Spiral**: a full turn at the start, one continuous helix along the blank advancing a stepover per turn, and a
 ///   full turn at the end. A is never wound back, so there's no seam.
 /// - **Rings**: a full turn at one station, a step along the blank following the surface, the next turn.
