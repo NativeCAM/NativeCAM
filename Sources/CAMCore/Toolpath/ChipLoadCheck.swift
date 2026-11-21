@@ -5,8 +5,9 @@ import Foundation
 extension CAMEngine {
     /// The chip at the toolpath's set feed, and at the lowest feed it keeps up over a stretch of cutting
     /// (`sustainedFeed`) when it lowers its own feed: an A-rate limit on a wrapped toolpath, feeds that follow the load.
-    /// An adaptive toolpath's chip is thinned by its light radial cut (`Toolpath.radialLoad`).
-    static func chipLoadIssues(_ tp: Toolpath, project: Project) -> [JobIssue] {
+    /// An adaptive toolpath's chip is thinned by its light radial cut (`Toolpath.radialLoad`), and the feed it's
+    /// recommended keeps to what its loops can hold (`AdaptiveSettings.loopFeedLimit`, from `operation`'s settings).
+    static func chipLoadIssues(_ tp: Toolpath, project: Project, operation: CAMOperation? = nil) -> [JobIssue] {
         let tool = tp.tool
         guard ChipLoad.applies(to: tool), tp.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
         let material = project.stock.material
@@ -18,8 +19,14 @@ extension CAMEngine {
         let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
         let units = project.displayUnits
         let range = "the \(inch(r.lowerBound))–\(inch(r.upperBound)) range for this bit in \(material.label.lowercased())"
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine, thinning: thin)
-        let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM."
+        var loops: Double?
+        if tp.radialLoad != nil, case let .pocket(p)? = operation?.kind, p.strategy == .adaptive {
+            loops = p.adaptiveSettings.loopFeedLimit(tool: tool, machine: project.machine)
+        }
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops)
+        let held = loops.map { rec.feed >= $0 - 1e-6 && $0 < project.machine.maxFeedRate } ?? false
+        let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM"
+            + (held ? ", as fast as its loops can run with this machine's acceleration." : ".")
         // What the chip is: thinned, at an adaptive toolpath's light cut.
         let what = thin < 1 ? "Chip load \(inch(chip)) at the \(Int((100 * (tp.radialLoad ?? 0)).rounded()))% adaptive load (a light cut thins "
             + "the chip to \(Int((100 * thin).rounded()))% of the feed per tooth)" : "Chip load \(inch(chip))"

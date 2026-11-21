@@ -532,6 +532,63 @@ struct AdaptiveClearingTests {
         #expect(abs(twelve - 0.65) < 0.001)
     }
 
+    /// #77: on the default PRO6060 in maple, the chart's feed for the starter 1/4" at the 12% load (350 in/min) is more
+    /// than the automatic loop radius, at most twice the diameter, lets the loops run at (300 in/min at 50 in/s²). Use
+    /// Recommended keeps to that and slows the spindle to keep the chip, so its settings bring no warning.
+    @Test func recommendedFeedKeepsToWhatTheLoopsCanRun() throws {
+        var stock = Fixture.stock
+        stock.materialKind = .hardwood
+        stock.materialName = "Hard maple"
+        let machine = MachineProfile.avidPRO6060
+        func messages(_ tool: Tool, _ p: PocketParams = Self.params()) -> [String] {
+            let job = CAMEngine.generate(Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle], tool: tool, p)], stock: stock))
+            return job.issues.map(\.message)
+        }
+        func with(_ rec: (rpm: Double, feed: Double)) -> Tool {
+            var t = Self.quarter
+            t.cutting.feedRate = rec.feed
+            t.cutting.spindleRPM = rec.rpm
+            return t
+        }
+        let thin = ChipLoad.radialThinning(load: AdaptiveSettings.defaultLoad)
+        let limit = AdaptiveSettings().loopFeedLimit(tool: Self.quarter, machine: machine)
+        // √(50 in/s² × 0.5 in) = 5 in/s.
+        #expect(abs(limit - 300.inch) < 0.5)
+        let chart = ChipLoad.recommend(for: Self.quarter, material: .hardwood, machine: machine, thinning: thin)
+        #expect(abs(chart.feed - 350.inch) < 1.inch)
+        // The chart's own feed is more than the loops hold: the warning the issue saw.
+        #expect(messages(with(chart)).contains { $0.hasPrefix("Adaptive loops") })
+
+        let rec = ChipLoad.recommend(for: Self.quarter, material: .hardwood, machine: machine, thinning: thin, feedLimit: limit)
+        #expect(abs(rec.feed - limit) < 1e-6)
+        #expect(rec.rpm > machine.minRPM)
+        #expect(rec.rpm < Self.quarter.cutting.spindleRPM)
+        // The chip at that feed and speed is the chart's, a quarter into its range.
+        let range = ChipLoad.range(.hardwood, diameter: Self.quarter.diameter)
+        let chip = rec.feed / (rec.rpm * 2) * thin
+        #expect(abs(chip - (range.lowerBound + 0.25 * (range.upperBound - range.lowerBound))) < 1e-9)
+        let after = messages(with(rec))
+        #expect(!after.contains { $0.hasPrefix("Adaptive loops") })
+        #expect(!after.contains { $0.hasPrefix("Chip load") })
+
+        // The check suggests the same, and says why it's slower than the chart.
+        let suggested = messages(Self.quarter).filter { $0.hasPrefix("Chip load") }
+        #expect(suggested.count == 1)
+        let why = suggested.first?.hasSuffix("at \(Int(rec.rpm.rounded())) RPM, as fast as its loops can run with this machine's acceleration.") ?? false
+        #expect(why)
+
+        // Loops set so tight that even the spindle's slowest leaves the chip thin: the feed stays at what they hold,
+        // the spindle at its slowest, and the chip-load warning stays.
+        let tight = Self.params(adaptive: AdaptiveSettings(minimumLoopRadius: 0.05.inch))
+        let tightLimit = tight.adaptiveSettings.loopFeedLimit(tool: Self.quarter, machine: machine)
+        let slow = ChipLoad.recommend(for: Self.quarter, material: .hardwood, machine: machine, thinning: thin, feedLimit: tightLimit)
+        #expect(slow.rpm == machine.minRPM)
+        #expect(abs(slow.feed - tightLimit) < 1e-6)
+        let still = messages(with(slow), tight)
+        #expect(still.contains { $0.hasPrefix("Chip load") })
+        #expect(!still.contains { $0.hasPrefix("Adaptive loops") })
+    }
+
     /// Wrapped round a rotary blank, the strategy isn't available yet: the pocket says so and cuts nothing.
     @Test func wrappedRotaryJobsRefuseAdaptive() throws {
         var project = Fixture.project(shapes: [Self.rectangle], ops: [Self.pocket([Self.rectangle], Self.params(depth: 3))])
