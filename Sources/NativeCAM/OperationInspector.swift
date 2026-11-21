@@ -26,7 +26,9 @@ struct OperationInspector: View {
             } else if (project.stock.rotary != nil && op.kind.takesIndexAngles) || op.indexAngles != nil {
                 IndexAnglesSection(angles: $op.indexAngles, blank: project.stock.rotary)
             }
-            ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine)
+            ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
+                        loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
+                        wrapped: project.stock.rotary?.isWrapped == true)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
@@ -40,6 +42,7 @@ struct OperationInspector: View {
                     LabeledContent("Estimated time", value: formatDuration(seconds.reduce(0, +)))
                     ForEach(Array(tps.enumerated()), id: \.element.id) { i, tp in
                         LabeledContent("   \(tp.tile.map { "Tile \($0 + 1) · " } ?? "")T\(tp.tool.number) \(tp.tool.name)", value: formatDuration(seconds[i]))
+                        if let lf = tp.loadFeeds, lf.varies { LoadFeedsRow(feeds: lf, units: units, indent: true) }
                     }
                     if let deepest = tps.compactMap({ $0.cuttingExtents.map { -$0.min.z } }).max() {
                         LabeledContent("Deepest cut", value: "\(units.format(deepest)) \(units.symbol)")
@@ -50,6 +53,7 @@ struct OperationInspector: View {
                     LabeledContent("Cutting length", value: "\(units.format(tp.cuttingLength, decimals: 1)) \(units.symbol)")
                     LabeledContent("Estimated time", value: formatDuration(workspace.job?.estimatedSeconds(toolpath: tp.id)
                                                                           ?? tp.estimatedSeconds(rapidRate: project.machine.rapidRateForEstimates)))
+                    if let lf = tp.loadFeeds, lf.varies { LoadFeedsRow(feeds: lf, units: units) }
                     if let e = tp.cuttingExtents {
                         LabeledContent("Deepest cut", value: "\(units.format(-e.min.z)) \(units.symbol)")
                     }
@@ -925,6 +929,10 @@ struct ToolSection: View {
     let library: ToolLibraryStore
     var material: MaterialKind = .plywood
     var machine: MachineProfile = .avidPRO6060
+    /// Profiles and pockets: the operation's "Adjust feeds for load" (nil hides it).
+    var loadFeeds: Binding<Bool?>? = nil
+    /// On a wrapped rotary job, where feeds are inverse time and don't follow the load.
+    var wrapped = false
 
     var body: some View {
         Section("Tool") {
@@ -952,6 +960,7 @@ struct ToolSection: View {
             NumberField(title: "Spindle", value: $tool.cutting.spindleRPM, suffix: "RPM", decimals: 0, range: 1000...60000)
             FeedField(title: "Feed", mmPerMin: $tool.cutting.feedRate, units: units)
             FeedField(title: "Plunge", mmPerMin: $tool.cutting.plungeRate, units: units)
+            if let loadFeeds { LoadFeedsToggle(on: loadFeeds, tool: tool, wrapped: wrapped) }
             LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
             PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
@@ -993,5 +1002,46 @@ struct ChipLoadRow: View {
             .controlSize(.small)
             .help("Chip load a quarter into the chart range, feed held within the machine's cutting cap by lowering RPM")
         }
+    }
+}
+
+// MARK: Feeds that follow the load
+
+/// "Adjust feeds for load" under a profile's or pocket's feeds (see `FeedScheduler`).
+struct LoadFeedsToggle: View {
+    @Binding var on: Bool?
+    let tool: Tool
+    let wrapped: Bool
+
+    var body: some View {
+        let applies = FeedScheduler.suits(tool) && !wrapped
+        Toggle("Adjust feeds for load", isOn: Binding(get: { on == true }, set: { on = $0 ? true : nil }))
+            .disabled(!applies && on != true)
+            .help("Slows the feed only where the bit cuts more than in this toolpath's usual cut: a pocket's first pass, "
+                + "inside corners, tight inside arcs. Never faster than the feed above, and never so slow the chip burns.")
+        if on == true || !applies {
+            if wrapped {
+                SectionNote(text: "Wrapped rotary moves are fed in inverse time, so they keep this feed.", warning: on == true)
+            } else if !FeedScheduler.suits(tool) {
+                SectionNote(text: "Only with end mills, bull noses and surfacing bits: a \(tool.shape.label.lowercased())'s engagement depends on its depth.",
+                            warning: on == true)
+            } else {
+                SectionNote(text: "Down to 55% where the bit cuts more of its width than usual, and on a profile's inside arcs so "
+                    + "the edge keeps this feed. The estimate, simulation and G-code use the slower feeds.")
+            }
+        }
+    }
+}
+
+/// The range of feeds a toolpath runs at with "Adjust feeds for load".
+struct LoadFeedsRow: View {
+    let feeds: LoadFeeds
+    let units: LengthUnit
+    var indent = false
+
+    var body: some View {
+        let low = Int((feeds.lowest / feeds.programmed * 100).rounded())
+        LabeledContent(indent ? "      Feed" : "Feed",
+                       value: "\(units.format(feeds.lowest, decimals: 0))–\(units.format(feeds.programmed, decimals: 0)) \(units.feedSymbol) (\(low)–100%)")
     }
 }
