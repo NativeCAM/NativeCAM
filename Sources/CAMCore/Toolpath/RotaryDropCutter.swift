@@ -52,23 +52,35 @@ struct RotaryDropCutter: Sendable {
 
     var triangleCount: Int { tri.count / 9 }
 
-    /// A cutter for `tool`: ball noses, flat end mills and surfacing bits with their own tests, V-bits, engraving bits,
-    /// drills and bull noses exactly as a `CutterProfile` (grown by the allowance). A shape the profile can't describe
-    /// (a V with no angle) is followed as a flat end mill of its diameter, which never cuts deeper than the real bit
-    /// would. nil when there are no triangles.
+    /// A cutter for `tool`: ball noses with their own test, flat end mills and surfacing bits with theirs when they
+    /// leave no allowance, and V-bits, engraving bits, drills and bull noses exactly as a `CutterProfile` (grown by the
+    /// allowance). A shape the profile can't describe (a V with no angle) is followed as a flat end mill of its
+    /// diameter, which never cuts deeper than the real bit would. nil when there are no triangles.
     init?(tool: Tool, allowance: Double, triangles: [Double], angleBins: Int = 720) {
         let a = max(0, allowance)
         switch tool.shape {
         case .ballNose:
             self.init(kind: .ball, radius: tool.radius, allowance: a, profile: nil, triangles: triangles, angleBins: angleBins)
         case .flatEndMill, .surfacing:
-            self.init(kind: .flat, radius: tool.radius, allowance: a, profile: nil, triangles: triangles, angleBins: angleBins)
+            self.init(flat: tool.radius, allowance: a, triangles: triangles, angleBins: angleBins)
         default:
             if let shape = CutterProfile(tool: tool) {
                 self.init(profile: shape, allowance: a, triangles: triangles, angleBins: angleBins)
             } else {
-                self.init(kind: .flat, radius: tool.radius, allowance: a, profile: nil, triangles: triangles, angleBins: angleBins)
+                self.init(flat: tool.radius, allowance: a, triangles: triangles, angleBins: angleBins)
             }
+        }
+    }
+
+    /// A flat bottom of radius `radius`. With an allowance it's dropped as its profile grown by it all round (a bull
+    /// nose the allowance wider, with the allowance for its corner), so the allowance stays square to the surface:
+    /// beside a shoulder as well as above it. The flat test would only raise it by the allowance, and let its side
+    /// come right up to a wall.
+    private init?(flat radius: Double, allowance a: Double, triangles: [Double], angleBins: Int) {
+        if a > 0, radius > 0 {
+            self.init(profile: .flat(radius: radius), allowance: a, triangles: triangles, angleBins: angleBins)
+        } else {
+            self.init(kind: .flat, radius: radius, allowance: a, profile: nil, triangles: triangles, angleBins: angleBins)
         }
     }
 

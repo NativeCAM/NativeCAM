@@ -308,13 +308,18 @@ struct DropCutterTests {
         return t
     }
 
-    /// Pruning by height, binning and hints leave ball and flat results exactly as testing every triangle gives them.
+    /// Pruning by height, binning and hints leave ball and flat results exactly as testing every triangle gives them
+    /// (a flat end mill leaving an allowance is dropped as its profile grown by it, and checked as that).
     @Test func ballAndFlatMatchTestingEveryTriangle() throws {
         let triangles = Self.reliefTriangles()
         let count = triangles.count / 9
         let lib = ToolLibrary.starter
         for (tool, a) in [(lib.tool(number: 7)!, 0.0), (lib.tool(number: 7)!, 0.3), (lib.tool(number: 1)!, 0.0), (lib.tool(number: 1)!, 0.2)] {
             let cutter = try #require(TriangleDropCutter(tool: tool, allowance: a, triangles: triangles))
+            let grown = tool.shape == .flatEndMill && a > 0
+            var kind = TriangleDropCutter.Kind.flat
+            if tool.shape == .ballNose { kind = .ball } else if grown { kind = .profile }
+            #expect(cutter.kind == kind, "\(tool.name) allowance \(a)")
             var hint: Int32 = -1
             var mismatches = 0
             for k in 0..<400 {
@@ -326,9 +331,14 @@ struct DropCutterTests {
                     let A = SIMD3(triangles[i], triangles[i + 1], triangles[i + 2])
                     let B = SIMD3(triangles[i + 3], triangles[i + 4], triangles[i + 5])
                     let C = SIMD3(triangles[i + 6], triangles[i + 7], triangles[i + 8])
-                    let v = tool.shape == .ballNose
-                        ? TriangleDropCutter.ballTip(A, B, C, p, radius: tool.radius, allowance: a)
-                        : TriangleDropCutter.flatTip(A, B, C, p, radius: tool.radius, allowance: a)
+                    let v: Double
+                    if tool.shape == .ballNose {
+                        v = TriangleDropCutter.ballTip(A, B, C, p, radius: tool.radius, allowance: a)
+                    } else if grown {
+                        v = CutterProfile.flat(radius: tool.radius).grown(by: a).tip(A, B, C, p, normal: TriangleDropCutter.upNormal(A, B, C))
+                    } else {
+                        v = TriangleDropCutter.flatTip(A, B, C, p, radius: tool.radius, allowance: a)
+                    }
                     if v > reference { reference = v }
                 }
                 let plain = cutter.z(at: p), hinted = cutter.z(at: p, hint: &hint)
