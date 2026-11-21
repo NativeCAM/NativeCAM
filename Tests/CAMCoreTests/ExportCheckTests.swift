@@ -41,7 +41,7 @@ struct ExportCheckTests {
     }
 
     @Test func savedProjectGoldensPassEveryCheck() throws {
-        for name in ["sign-v1", "setup-v1", "inlay-v6"] {
+        for name in ["sign-v1", "setup-v1", "inlay-v6", "finishing-v10"] {
             let p = try Project.decode(Data(contentsOf: GoldenPostTests.projects.appendingPathComponent(name + ".nativecam")))
             let issues = check(try golden("decoded-" + name), p, CAMEngine.generate(p).toolpaths)
             #expect(problems(issues).isEmpty, "\(name): \(problems(issues))")

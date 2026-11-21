@@ -213,81 +213,40 @@ enum Model3DGenerator {
         let grid = DropCutter(grid: s.surface, surface: surface, tool: tool)
         let dropper = CombinedDrop(exact: exact, grid: grid)
         let floor = s.baseZ + params.allowance
-
-        // Raster lines across the boundary, clipped to it.
-        let rot = Transform2D.rotation(-params.rasterAngle.radians)
-        let unrot = Transform2D.rotation(params.rasterAngle.radians)
+        let f = Finishing(setup: s, tool: tool, params: params, dropper: dropper, floor: floor, stepover: stepover, cell: cell,
+                          ds: max(s.surface.cellSize, 0.15), tolerance: min(0.01, context.arcTolerance * 2), context: context)
         let boundaryLoops = s.boundary.flatMap(\.loops)
-        let rb = boundaryLoops.map { $0.transformed(rot) }.bounds
-        var raw: [Polyline] = []
-        var y = rb.min.y + stepover / 2
-        while y < rb.max.y {
-            raw.append(Polyline([unrot.apply(Vec2(rb.min.x - 1, y)), unrot.apply(Vec2(rb.max.x + 1, y))], closed: false))
-            y += stepover
-        }
-        struct Segment { var row: Int; var along: Double; var a: Vec2; var b: Vec2 }
-        var segments: [Segment] = []
-        for seg in Clipper.clipOpen(raw, to: boundaryLoops, fill: .nonZero) {
-            guard let p = seg.points.first, let q = seg.points.last else { continue }
-            let pr = rot.apply(p), qr = rot.apply(q)
-            let row = Int(((pr.y - rb.min.y - stepover / 2) / stepover).rounded())
-            let (a, bb) = pr.x <= qr.x ? (p, q) : (q, p)
-            segments.append(Segment(row: row, along: min(pr.x, qr.x), a: a, b: bb))
-        }
-        segments.sort { $0.row != $1.row ? $0.row < $1.row : $0.along < $1.along }
-        if segments.isEmpty {
-            warnings.append("No finishing passes fit inside the boundary.")
-            return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
-        }
-
-        // Drop the tool along every segment, in parallel.
-        let ds = max(s.surface.cellSize, 0.15)
-        let tolerance = min(0.01, context.arcTolerance * 2)
-        final class Box: @unchecked Sendable { var paths: [[Vec3]] = [] }
-        let box = Box()
-        box.paths = Array(repeating: [], count: segments.count)
-        let segs = segments
-        DispatchQueue.concurrentPerform(iterations: segs.count) { i in
-            let sgm = segs[i]
-            let len = sgm.a.distance(to: sgm.b)
-            let n = max(1, Int((len / ds).rounded(.up)))
-            var pts: [Vec3] = []
-            pts.reserveCapacity(n + 1)
-            var hint: Int32 = -1
-            for k in 0...n {
-                let p = sgm.a.lerp(to: sgm.b, Double(k) / Double(n))
-                pts.append(Vec3(p, max(floor, min(0, dropper.z(at: p, hint: &hint)))))
+        switch params.strategy {
+        case .raster:
+            if !raster(over: boundaryLoops, f, &b) {
+                warnings.append("No finishing passes fit inside the boundary.")
+                return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
             }
-            box.paths[i] = simplify3D(refineDrops(pts, tolerance: tolerance, hint: &hint) { p, h in
-                max(floor, min(0, dropper.z(at: p, hint: &h)))
-            }, tolerance: tolerance)
-        }
-
-        // Zig-zag: alternate direction per row, link neighbours at depth when the hop is short.
-        var lastRow = Int.min
-        var forward = true
-        for (i, sgm) in segments.enumerated() {
-            if sgm.row != lastRow { forward = (sgm.row % 2 == 0); lastRow = sgm.row }
-            let path = forward ? box.paths[i] : box.paths[i].reversed()
-            guard let first = path.first else { continue }
-            let hop = b.position.xy.distance(to: first.xy)
-            if b.position.z < s.stock.plungeHeight && hop <= stepover * 3 && i > 0 {
-                // Short hop: follow the surface (drop-cutter) so the link can't gouge.
-                let n = max(1, Int((hop / ds).rounded(.up)))
-                let from = b.position
-                var hint: Int32 = -1
-                var hopPoints = [from]
-                for k in 1...n {
-                    let p = from.xy.lerp(to: first.xy, Double(k) / Double(n))
-                    hopPoints.append(Vec3(p, max(floor, min(0, dropper.z(at: p, hint: &hint)))))
-                }
-                b.follow(Array(refineDrops(hopPoints, tolerance: tolerance, hint: &hint) { p, h in
-                    max(floor, min(0, dropper.z(at: p, hint: &h)))
-                }.dropFirst()))
-            } else {
-                b.enter(at: first)
+        case .waterline:
+            let map = f.buildMap()
+            let pieces = waterPieces(map, levels: waterlineLevels(map, step: params.waterlineStep(tool: tool)), area: boundaryLoops, f)
+            if pieces.isEmpty { warnings.append("No waterline passes fit inside the boundary.") }
+            cutWaterline(pieces, map, f, &b)
+        case .steepShallow:
+            let map = f.buildMap()
+            let steep = steepAreas(map, angle: params.steepAngleInUse)
+            let overlap = params.overlapInUse(tool: tool)
+            func grown(_ loops: [Polyline]) -> [Polyline] { overlap > 1e-6 ? Clipper.offset(loops, delta: overlap) : loops }
+            if !steep.isEmpty {
+                let steepArea = Clipper.intersection(grown(steep), boundaryLoops, fill: .nonZero)
+                cutWaterline(waterPieces(map, levels: waterlineLevels(map, step: params.waterlineStep(tool: tool)), area: steepArea, f),
+                             map, f, &b)
             }
-            b.follow(Array(path.dropFirst()))
+            let shallow = steep.isEmpty ? boundaryLoops
+                : Clipper.intersection(grown(Clipper.difference(boundaryLoops, minus: steep, fill: .nonZero)), boundaryLoops, fill: .nonZero)
+            if !shallow.isEmpty { _ = raster(over: shallow, f, &b) }
+            if b.motions.isEmpty { warnings.append("No finishing passes fit inside the boundary.") }
+        case .pencil:
+            guard tool.shape == .ballNose else {
+                warnings.append("Pencil cleanup needs a ball-nose bit; '\(tool.name)' isn't one.")
+                return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+            }
+            pencil(f.buildMap(), f, &b, warnings: &warnings)
         }
         b.retract()
         return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)

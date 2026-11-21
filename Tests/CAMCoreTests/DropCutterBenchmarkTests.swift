@@ -55,6 +55,19 @@ struct DropCutterBenchmark {
             let t = Self.best { n = CAMEngine.generate(op, shapes: shapes, context: ctx).first?.motions.count ?? 0 }
             report(String(format: "relief finish, %@: %.3f s (%d moves)", tool.name, t, n))
         }
+        // The same finish with each strategy (pencil with a 1/8" ball, as it would follow the main finish).
+        for (label, change) in [("cross-hatched raster", { (p: inout Finish3DParams) in p.crossHatch = true }),
+                                ("waterline", { $0.strategy = .waterline }), ("steep and shallow", { $0.strategy = .steepShallow }),
+                                ("pencil, 1/8\" ball", { $0.strategy = .pencil })] as [(String, (inout Finish3DParams) -> Void)] {
+            var op = finish
+            guard case var .finish3D(params) = op.kind else { continue }
+            change(&params)
+            op.kind = .finish3D(params)
+            if params.strategy == .pencil { op.tool.diameter = 0.125.inch }
+            var n = 0
+            let t = Self.best { n = CAMEngine.generate(op, shapes: shapes, context: ctx).first?.motions.count ?? 0 }
+            report(String(format: "relief finish, %@: %.3f s (%d moves)", label, t, n))
+        }
         let reliefJob = Self.best(1) { _ = CAMEngine.generate(relief) }
         report(String(format: "relief whole job: %.3f s", reliefJob))
 

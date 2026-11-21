@@ -144,7 +144,11 @@ struct OperationInspector: View {
             }
         case let .finish3D(p):
             let set: (Finish3DParams) -> Void = { op.kind = .finish3D($0) }
+            let stepover = op.tool.diameter * p.stepoverFraction
             Section("3D Finishing") {
+                Picker("Strategy", selection: Binding(get: { p.strategy }, set: { var q = p; q.strategy = $0; set(q) })) {
+                    ForEach(Finish3DStrategy.allCases) { Text($0.label).tag($0) }
+                }
                 Picker("Machine", selection: Binding(get: { p.boundary }, set: { var q = p; q.boundary = $0; set(q) })) {
                     ForEach(ModelBoundary.allCases) { Text($0.label).tag($0) }
                 }
@@ -155,10 +159,35 @@ struct OperationInspector: View {
                     BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
                 }
                 PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction }, set: { var q = p; q.stepoverFraction = $0; set(q) }))
-                LabeledContent("Scallop height", value: "\(units.format(scallop(tool: op.tool, stepover: op.tool.diameter * p.stepoverFraction), decimals: 4)) \(units.symbol)")
-                NumberField(title: "Raster angle", value: Binding(get: { p.rasterAngle }, set: { var q = p; q.rasterAngle = $0; set(q) }), suffix: "°", decimals: 1)
+                if p.strategy != .pencil {
+                    LabeledContent("Scallop height", value: "\(units.format(scallop(tool: op.tool, stepover: stepover), decimals: 4)) \(units.symbol)")
+                }
+                if p.strategy.usesRaster {
+                    NumberField(title: "Raster angle", value: Binding(get: { p.rasterAngle }, set: { var q = p; q.rasterAngle = $0; set(q) }), suffix: "°", decimals: 1)
+                    Toggle("Cross-hatch", isOn: Binding(get: { p.crossHatch }, set: { var q = p; q.crossHatch = $0; set(q) }))
+                        .help("A second raster at the raster angle + 90° in the same toolpath: smoother where slopes run along the rows, about twice the time")
+                }
+                if p.strategy.usesWaterline {
+                    NumberField(title: "Steep angle", value: Binding(get: { p.steepAngleInUse }, set: { var q = p; q.steepAngle = $0; set(q) }),
+                                suffix: "°", decimals: 0, range: 5...85)
+                        .help(p.strategy == .steepShallow
+                              ? "Slope from horizontal above which waterline loops take over from the raster. It also sets the Z step"
+                              : "Sets the Z step: on a slope this steep the loops are a stepover apart, closer on steeper walls")
+                    LabeledContent("Z step", value: "\(units.format(p.waterlineStep(tool: op.tool), decimals: 4)) \(units.symbol)")
+                }
+                if p.strategy == .steepShallow {
+                    LabeledContent("Scallop at the seam",
+                                   value: "\(units.format(scallop(tool: op.tool, stepover: stepover / cos(p.steepAngleInUse * .pi / 180)), decimals: 4)) \(units.symbol)")
+                    LengthField(title: "Overlap", mm: Binding(get: { p.overlapInUse(tool: op.tool) }, set: { var q = p; q.overlap = max(0, $0); set(q) }),
+                                units: units, help: "How far each strategy runs past the seam into the other's area. Automatic: a quarter of the tool diameter")
+                    if p.overlap != nil {
+                        Button("Automatic overlap") { var q = p; q.overlap = nil; set(q) }.controlSize(.small)
+                    }
+                }
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units)
-                Text("Raster passes that follow the model surface; a ball-nose bit gives the smoothest result.")
+                Toggle("Smooth links", isOn: Binding(get: { p.smoothLinks }, set: { var q = p; q.smoothLinks = $0; set(q) }))
+                    .help("Turn between raster rows on an arc, and start passes off the model (ramping in, or coming onto a waterline loop from the open side) instead of plunging onto it")
+                Text(finishingNote(p.strategy))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         case let .vcarve(p):
@@ -634,6 +663,20 @@ struct BoundaryNote: View {
                 Button("Automatic", action: reset).controlSize(.small)
             }
         }
+    }
+}
+
+/// What each 3D finishing strategy does, for the inspector.
+func finishingNote(_ strategy: Finish3DStrategy) -> String {
+    switch strategy {
+    case .raster:
+        "Raster passes that follow the model surface; a ball-nose bit gives the smoothest result."
+    case .waterline:
+        "Constant-Z loops round the model from the top down, best on steep walls. The loops lie flat, so they fit as arcs."
+    case .steepShallow:
+        "Waterline loops on slopes steeper than the steep angle and raster rows on the rest, overlapping a little, so the scallop stays about the same on both."
+    case .pencil:
+        "One pass along each concave crease, where the bit touches two faces at once. Run it with a smaller ball nose after the main finish."
     }
 }
 

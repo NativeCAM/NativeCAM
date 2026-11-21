@@ -297,7 +297,8 @@ struct GoldenPostTests {
                 allowance: 0.3, passDepth: 3, stepoverFraction: 0.35, boundary: .vectors, boundaryMargin: 5)),
                          shapeIDs: [model.id, modelOutline.id], tool: compression),
             CAMOperation(id: id(16), name: "Finish medallion", kind: .finish3D(Finish3DParams(
-                stepoverFraction: 0.12, rasterAngle: 90, allowance: 0.05, boundary: .vectors, boundaryMargin: 3)),
+                stepoverFraction: 0.12, rasterAngle: 90, allowance: 0.05, boundary: .vectors, boundaryMargin: 3,
+                smoothLinks: false)), // format 1 had no smooth links
                          shapeIDs: [model.id, modelOutline.id], tool: ball),
             CAMOperation(id: id(17), name: "Spare", enabled: false, kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: 3))),
                          shapeIDs: [bowl.id], tool: eighth),
