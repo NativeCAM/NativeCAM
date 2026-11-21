@@ -45,7 +45,20 @@ final class ToolLibraryStore {
         return t
     }
 
-    func resetToStarter() { tools = ToolLibrary.starter.tools }
+    /// Replaces the library with the starter tools, first keeping the saved file as `tools.json.bak` (one level: it
+    /// replaces an older backup). Throws, changing nothing, when the backup can't be written.
+    func resetToStarter() throws {
+        try ToolLibrary.backUpFile(at: Self.fileURL)
+        tools = ToolLibrary.starter.tools
+    }
+
+    /// Adds the starter tools the library is missing (see `ToolLibrary.missingStarterTools()`), never changing one it has.
+    func addMissingStarterTools() -> ToolLibrary.StarterAddition {
+        var library = ToolLibrary(tools: tools)
+        let addition = library.addMissingStarterTools()
+        if !addition.added.isEmpty { tools = library.tools }
+        return addition
+    }
 
     func exportJSON() {
         let panel = NSSavePanel()
@@ -80,6 +93,42 @@ final class ToolLibraryStore {
     }
 }
 
+/// What the Tool Library says about the starter library: before resetting to it, and after adding what's missing.
+enum StarterLibraryText {
+    struct Report: Identifiable {
+        let id = UUID()
+        var title: String
+        var message: String
+    }
+
+    static func plural(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+
+    static func resetTitle(_ r: ToolLibrary.StarterReset) -> String {
+        "Replace your \(plural(r.count, "tool")) with the \(plural(ToolLibrary.starter.tools.count, "starter tool"))?"
+    }
+
+    static func resetMessage(_ r: ToolLibrary.StarterReset) -> String {
+        var effects: [String] = []
+        if r.removed > 0 { effects.append("\(plural(r.removed, "tool")) you added or imported will be removed") }
+        if r.reverted > 0 { effects.append("\(plural(r.reverted, "edited starter tool")) will go back to \(r.reverted == 1 ? "its" : "their") starting values") }
+        if r.restored > 0 { effects.append("\(plural(r.restored, "deleted starter tool")) will come back") }
+        let what = effects.isEmpty ? "Your library already matches the starter library."
+            : effects.joined(separator: ", ").prefix(1).uppercased() + effects.joined(separator: ", ").dropFirst() + "."
+        return what + " Projects keep their own copies of their tools. The current library is kept as tools.json.bak in "
+            + "~/Library/Application Support/NativeCAM; to keep your own tools instead, cancel and use Add Missing Starter Tools."
+    }
+
+    static func report(_ a: ToolLibrary.StarterAddition) -> Report {
+        let kept = a.alreadyHave.map { "\($0.starter.name) (your T\($0.existing.number) \($0.existing.name))" }
+        let keptNote = kept.isEmpty ? "" : "\n\nAlready in your library as your own tool, so not added: " + kept.joined(separator: "; ") + "."
+        guard !a.added.isEmpty else {
+            return Report(title: "Your library has every starter tool", message: (kept.isEmpty ? "Nothing to add." : "Nothing added.") + keptNote)
+        }
+        let list = a.added.map { "T\($0.number) \($0.name)" }.joined(separator: "\n")
+        return Report(title: "Added \(plural(a.added.count, "starter tool"))", message: list + keptNote)
+    }
+}
+
 /// A library file read and waiting for the user to pick tools from it.
 struct PendingToolImport: Identifiable {
     let id = UUID()
@@ -93,6 +142,8 @@ struct ToolLibraryView: View {
     @State private var units: LengthUnit = AppDefaults.displayUnits
     @State private var pendingImport: PendingToolImport?
     @State private var importError: String?
+    @State private var confirmingReset: ToolLibrary.StarterReset?
+    @State private var report: StarterLibraryText.Report?
 
     var body: some View {
         @Bindable var store = store
@@ -147,7 +198,11 @@ struct ToolLibraryView: View {
                     Button("Import Tools…") { beginImport() }
                     Button("Export Tools…") { store.exportJSON() }
                     Divider()
-                    Button("Reset to Starter Library", role: .destructive) { store.resetToStarter() }
+                    Button("Add Missing Starter Tools") { report = StarterLibraryText.report(store.addMissingStarterTools()) }
+                        .help("Add the starter bits this library doesn't have, keeping every tool it has")
+                    Button("Reset to Starter Library…", role: .destructive) {
+                        confirmingReset = ToolLibrary(tools: store.tools).starterReset
+                    }
                 } label: { Label("More", systemImage: "ellipsis.circle") }
             }
         }
@@ -162,6 +217,28 @@ struct ToolLibraryView: View {
                 let added = store.add(chosen)
                 if let first = added.first { selection = first.id }
             }
+        }
+        .confirmationDialog(confirmingReset.map(StarterLibraryText.resetTitle) ?? "",
+                            isPresented: Binding(get: { confirmingReset != nil }, set: { if !$0 { confirmingReset = nil } }),
+                            titleVisibility: .visible, presenting: confirmingReset) { _ in
+            Button("Reset Library", role: .destructive) {
+                do {
+                    try store.resetToStarter()
+                    selection = store.tools.first?.id
+                } catch {
+                    report = StarterLibraryText.Report(title: "Couldn't reset the library",
+                                                       message: "The current library couldn't be backed up, so it wasn't replaced: "
+                                                           + error.localizedDescription)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { summary in
+            Text(StarterLibraryText.resetMessage(summary))
+        }
+        .alert(report?.title ?? "", isPresented: Binding(get: { report != nil }, set: { if !$0 { report = nil } }), presenting: report) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { r in
+            Text(r.message)
         }
         .alert("Can't import tools", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) {}

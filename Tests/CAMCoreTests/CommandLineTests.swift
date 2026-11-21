@@ -114,4 +114,44 @@ struct CommandLineTests {
         guard case let .profile(cut)? = result.operations.last?.kind else { Issue.record("no profile"); return }
         #expect(abs(cut.depth.cutDepth - 0.52.inch) < 1e-9)
     }
+    /// `template apply` never writes over the project unless told to (#63), and counts in the singular for one (#64).
+    @Test func applyingATemplateKeepsTheProjectUnlessTold() throws {
+        let dir = try Self.folder()
+        var sign = Project.demoSign()
+        for i in sign.shapes.indices where sign.shapes[i].name == "Sign outline" { sign.shapes[i].layer = "Cut Out" }
+        let source = dir.appendingPathComponent("sign.nativecam")
+        try sign.encoded().write(to: source)
+        let template = dir.appendingPathComponent("Sign.nativecamtemplate")
+        #expect(try Self.run(["template", "save", source.path, "-o", template.path]).status == 0)
+
+        var board = sign
+        board.operations = []
+        let target = dir.appendingPathComponent("board.nativecam")
+        let original = try board.encoded()
+        try original.write(to: target)
+
+        // No -o: a new file beside the project, which stays as it was.
+        let first = try Self.run(["template", "apply", template.path, target.path])
+        #expect(first.status == 0, "\(first.output)")
+        let made = dir.appendingPathComponent("board + Sign.nativecam")
+        #expect(first.output.contains("Wrote \(made.path)"))
+        #expect(try Data(contentsOf: target) == original)
+        #expect(try Project.decode(Data(contentsOf: made)).operations.count == 4)
+        // Plurals: one outline on Cut Out, and only the pocket (bound to the selection) found nothing.
+        #expect(first.output.contains("Cut out sign: Layer “Cut Out”: 1 vector\n"))
+        #expect(first.output.contains("1 toolpath found no vectors"))
+        #expect(!first.output.contains("1 vectors"))
+
+        // Run again: the next free name.
+        let second = try Self.run(["template", "apply", template.path, target.path])
+        #expect(second.output.contains("Wrote \(dir.appendingPathComponent("board + Sign 2.nativecam").path)"))
+        #expect(try Data(contentsOf: target) == original)
+
+        // --in-place overwrites the project; with -o as well it refuses.
+        let both = try Self.run(["template", "apply", template.path, target.path, "-o", made.path, "--in-place"])
+        #expect(both.status != 0)
+        let inPlace = try Self.run(["template", "apply", template.path, target.path, "--in-place"])
+        #expect(inPlace.status == 0, "\(inPlace.output)")
+        #expect(try Project.decode(Data(contentsOf: target)).operations.count == 4)
+    }
 }
