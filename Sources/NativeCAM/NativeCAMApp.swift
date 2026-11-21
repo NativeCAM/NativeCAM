@@ -85,6 +85,7 @@ struct AppCommands: Commands {
             Button("New Demo Relief Project (3D)") { newDocument(NativeCAMDocument(project: .demoRelief())) }
             Button("New Demo Rotary Project (3D)") { newDocument(NativeCAMDocument(project: .demoPawn())) }
             Button("New Demo Table Leg (Rotary 3D)") { newDocument(NativeCAMDocument(project: .demoTableLeg())) }
+            Button("New Demo Shelf Parts (Nesting)") { newDocument(NativeCAMDocument(project: .demoNesting())) }
             Divider()
             Button("Import…") { actions?.importVectors() }
                 .keyboardShortcut("i", modifiers: .command)
@@ -113,6 +114,9 @@ struct AppCommands: Commands {
             Button("Optimize Run Order") { actions?.optimizeOrder() }
                 .disabled(actions == nil)
                 .help("Reorder toolpaths for the fewest tool changes, keeping inside work before cut-outs")
+            Button("Nest Parts…") { actions?.nestParts() }
+                .disabled(!(actions?.canNest ?? false))
+                .help("Arrange the selected parts (or every part) on the sheet to use as little of it as possible")
             Divider()
             Button("Save Toolpaths as Template…") { actions?.saveTemplate() }
                 .disabled(!(actions?.hasToolpaths ?? false))
@@ -153,6 +157,8 @@ struct WorkspaceActions {
     var simulate: () -> Void
     var stopSimulation: () -> Void
     var optimizeOrder: () -> Void
+    var nestParts: () -> Void
+    var canNest: Bool
     var saveTemplate: () -> Void
     var applyTemplate: (URL) -> Void
     var chooseTemplate: () -> Void

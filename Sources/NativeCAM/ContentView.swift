@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var debugSetup: DebugSetup?
     @State private var debugPost: DebugPost?
     @State private var pendingTemplate: PendingTemplate?
+    @State private var nesting: NestRequest?
     @Environment(ToolLibraryStore.self) private var library
     @Environment(\.openWindow) private var openWindow
 
@@ -88,6 +89,9 @@ struct ContentView: View {
                 finishApplying(result, addTools: addTools)
             }
         }
+        .sheet(item: $nesting) { request in
+            NestPartsSheet(session: request.session) { applied in finishNesting(applied) }
+        }
         .alert(item: $alert) { info in
             Alert(title: Text(info.title), message: Text(info.message))
         }
@@ -154,6 +158,8 @@ struct ContentView: View {
             simulate: simulate,
             stopSimulation: { workspace.stopSimulation(project) },
             optimizeOrder: optimizeOrder,
+            nestParts: nestParts,
+            canNest: !project.shapes.isEmpty && !workspace.isSimulating,
             saveTemplate: saveTemplate,
             applyTemplate: applyTemplate,
             chooseTemplate: chooseTemplate,
@@ -193,6 +199,7 @@ struct ContentView: View {
         if let path = info["import"] as? String { importFiles([URL(fileURLWithPath: path)]) }
         if let i = info["inspector"] as? String { showInspector = i != "hide" }
         if info["optimize"] != nil { optimizeOrder() }
+        if info["nest"] != nil { nestParts() }
         if let path = info["vectricpp"] as? String, let text = try? String(contentsOfFile: path, encoding: .utf8),
            let pp = try? VectricPost.parse(text) {
             debugPost = DebugPost(pp: pp)
@@ -251,6 +258,37 @@ struct ContentView: View {
             return
         }
         document.project.applyRunOrder(r.order)
+    }
+
+    /// Toolpaths ▸ Nest Parts…: the selected parts (or every part), nested in a sheet with a preview; nothing moves
+    /// until Apply.
+    private func nestParts() {
+        if project.stock.rotary != nil {
+            alert = AlertInfo(title: "Can't nest a rotary job", message: NestJob.Refusal.rotary.localizedDescription
+                + " Nest the parts in a flat job, then copy them over.")
+            return
+        }
+        nesting = NestRequest(session: NestSession(project: project, selection: Set(workspace.selectedShapeIDs)))
+    }
+
+    /// One document change, so a single ⌘Z puts every part back where it was.
+    private func finishNesting(_ outcome: Result<NestJob.Applied, NestCheckFailure>) {
+        let applied: NestJob.Applied
+        switch outcome {
+        case let .success(a): applied = a
+        case let .failure(failure):
+            alert = AlertInfo(title: "Nothing was moved",
+                              message: "The layout didn't pass the final check, so the parts stay where they were: "
+                                + failure.problems.prefix(4).joined(separator: " ") + " Please report this.")
+            return
+        }
+        document.project = applied.project
+        if !applied.movedAside.isEmpty {
+            alert = AlertInfo(title: "Some parts didn't fit",
+                              message: "Moved beside the sheet, where nested parts would otherwise cut into them: "
+                                + applied.movedAside.joined(separator: ", ")
+                                + ". Their toolpaths are off the material now: cut them from another sheet, or turn the toolpaths off.")
+        }
     }
 
     private func importVectors() {
@@ -523,6 +561,12 @@ struct ContentView: View {
             alert = AlertInfo(title: "Couldn't save the setup sheet", message: error.localizedDescription)
         }
     }
+}
+
+/// Toolpaths ▸ Nest Parts… open in a sheet.
+struct NestRequest: Identifiable {
+    let id = UUID()
+    let session: NestSession
 }
 
 /// A template read and waiting for Add Toolpaths, with the shapes selected when it was chosen.

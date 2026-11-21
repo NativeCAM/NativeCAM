@@ -15,6 +15,11 @@ import UniformTypeIdentifiers
 /// Apply Template sheet and the save panel's options, then snapshots the project with the template applied.
 /// `-NativeCAMSnapshotImport <file.dxf|svg|pdf>` first imports vectors into the project as File ▸ Import does (one shape
 /// per layer), logging each shape's layer.
+///
+/// With `-NativeCAMSnapshotNest YES` it nests every part as Toolpaths ▸ Nest Parts… does (300 layouts, or
+/// `-NativeCAMSnapshotNestLayouts n`, so the result repeats), logs the layout and checks it with the parts' exact
+/// outlines, draws the Nest Parts sheet (nest-sheet.png) and the toolpaths from above before and after
+/// (nest-before.png, nest-after.png), then snapshots the project with the parts moved.
 enum DebugSnapshot {
     static var requested: (project: String, outDir: String)? {
         let d = UserDefaults.standard
@@ -54,6 +59,9 @@ enum DebugSnapshot {
         }
         if let path = UserDefaults.standard.string(forKey: "NativeCAMSnapshotTemplate") {
             project = applyTemplate(path, to: project, out: out, log: log, spin: spin)
+        }
+        if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotNest") {
+            project = nest(project, out: out, log: log, spin: spin)
         }
 
         // 1. The whole window (sidebar, viewport, inspector) hosted offscreen.
@@ -211,6 +219,68 @@ enum DebugSnapshot {
         let options = TemplateSaveOptions(selectedCount: 2, totalCount: max(3, project.operations.count))
         render(TemplateSaveAccessory(options: options), size: NSSize(width: 460, height: 120), out: out, name: "save-template-options.png", spin: spin)
         return result.project
+    }
+
+    /// Nests every part as Toolpaths ▸ Nest Parts… does, logs and checks the layout, draws the sheet and the toolpaths
+    /// from above before and after, and returns the project with the parts moved.
+    @MainActor
+    private static func nest(_ project: Project, out: URL, log: (String) -> Void, spin: (Double) -> Void) -> Project {
+        let layouts = UserDefaults.standard.integer(forKey: "NativeCAMSnapshotNestLayouts")
+        let session = NestSession(project: project, selection: [])
+        session.runNow(evaluations: layouts > 0 ? layouts : 300)
+        guard let job = session.job, let result = session.result, case let .success(applied)? = session.applied() else {
+            log("nest refused: \(session.phase)")
+            return project
+        }
+        let u = project.displayUnits
+        log("nest: \(result.placedCount) of \(job.parts.count) parts placed, \(job.fixed.count) stay put, \(job.keepOuts.count) keep-outs; "
+            + String(format: "utilization %.1f%% of %@ %@ used, %.1f%% of the sheet; %d layouts", result.utilization * 100,
+                     u.format(result.usedLength), u.symbol, result.sheetUtilization * 100, result.evaluations))
+        log("nest settings: spacing \(u.format(session.settings.spacing)) \(u.symbol), margin \(u.format(session.settings.edgeMargin)) \(u.symbol), "
+            + "turns \(session.settings.angles.map { String(Int($0)) }.joined(separator: "/")), grain \(session.settings.keepGrain)")
+        for (i, part) in job.parts.enumerated() {
+            let where_ = result.placements[i].map { p in "turned \(Int(p.rotation))°, centre at \(u.format(p.position.x)), \(u.format(p.position.y))" }
+                ?? "didn't fit"
+            log("nest part \(part.name): \(where_), reach \(u.format(part.reach)) \(u.symbol)\(part.reachToolpath.map { " (\($0))" } ?? "")")
+        }
+        for note in job.notes { log("nest note: \(note)") }
+        for name in applied.movedAside { log("nest moved aside: \(name)") }
+        for name in applied.leftInPlace { log("nest left in place: \(name)") }
+        let problems = Nesting.violations(job.nestingParts, placements: result.placements, sheet: job.sheet, obstacles: job.obstacles,
+                                          settings: session.settings)
+        log("check \(problems.isEmpty ? "PASS" : "FAIL"): nested parts keep their gaps, margin and clearances\(problems.isEmpty ? "" : ": " + problems.joined(separator: " "))")
+        render(NestPartsSheet(session: session, height: 720, isStatic: true) { _ in }, size: NSSize(width: 940, height: 720),
+               out: out, name: "nest-sheet.png", spin: spin)
+        // The sheet's own path: toolpaths and parts found in the background, a timed search showing its progress, and a
+        // new search when a setting changes.
+        let live = NestSession(project: project, selection: [])
+        live.remembersSettings = false
+        live.start()
+        func waitForSearch() -> Bool {
+            let deadline = Date().addingTimeInterval(60)
+            spin(0.5)
+            while (live.phase == .preparing || live.searching) && Date() < deadline { spin(0.1) }
+            return live.result != nil && !live.searching
+        }
+        let first = waitForSearch()
+        let firstLayouts = live.result?.evaluations ?? 0, firstUpdates = live.updates
+        live.settings.spacing += 0.0625.inch
+        let second = waitForSearch()
+        log("check \(first && second && firstUpdates > 0 && live.updates > firstUpdates ? "PASS" : "FAIL"): live search "
+            + "\(firstLayouts) layouts in \(String(format: "%.1f", live.settings.timeLimit)) s (\(firstUpdates) updates), "
+            + "then \(live.result?.evaluations ?? 0) after a spacing change")
+        func top(_ p: Project, _ name: String) {
+            let ws = Workspace()
+            ws.regenerate(p, debounce: false)
+            let deadline = Date().addingTimeInterval(30)
+            while ws.job == nil && Date() < deadline { spin(0.05) }
+            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(p), width: 1600, height: 1000, preset: .top) {
+                write(img, to: out.appendingPathComponent(name))
+            }
+        }
+        top(project, "nest-before.png")
+        top(applied.project, "nest-after.png")
+        return applied.project
     }
 
     /// Job Setup, each toolpath's inspector, the first shape's and the machine setup assistant's setup step, to inspector-*.png.

@@ -81,6 +81,27 @@ extern "C" ncl_paths *ncl_boolean(ncl_clip clip_type, ncl_fill fill,
     }
 }
 
+extern "C" ncl_paths *ncl_minkowski_sum(ncl_paths_in pattern, ncl_paths_in path, int closed) {
+    try {
+        Paths64 pat = to_paths(pattern);
+        Paths64 pth = to_paths(path);
+        if (pat.empty() || pth.empty()) return from_paths(Paths64());
+        return from_paths(MinkowskiSum(pat[0], pth[0], closed != 0));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+extern "C" ncl_paths *ncl_triangulate(ncl_paths_in paths) {
+    try {
+        Paths64 solution;
+        if (Triangulate(to_paths(paths), solution, true) != TriangulateResult::success) return nullptr;
+        return from_paths(solution);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 extern "C" void ncl_paths_free(ncl_paths *paths) {
     if (!paths) return;
     std::free(paths->counts);
