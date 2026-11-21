@@ -82,6 +82,7 @@ struct AppCommands: Commands {
             Button("New Demo Sign Project") { newDocument(NativeCAMDocument(project: .demoSign())) }
             Button("New Demo Relief Project (3D)") { newDocument(NativeCAMDocument(project: .demoRelief())) }
             Button("New Demo Rotary Project (3D)") { newDocument(NativeCAMDocument(project: .demoPawn())) }
+            Button("New Demo Table Leg (Rotary 3D)") { newDocument(NativeCAMDocument(project: .demoTableLeg())) }
             Divider()
             Button("Import…") { actions?.importVectors() }
                 .keyboardShortcut("i", modifiers: .command)

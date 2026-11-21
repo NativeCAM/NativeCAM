@@ -14,8 +14,9 @@ import Foundation
 ///
 /// Where the model is deeper below the stock than the pass depth, layers cut down to it first (a clamped stack, §2.4
 /// "Approach A"): each layer runs the same pattern at the layers' stepover with the tool no closer to the axis than the
-/// layer's radius, and leaves out what it would only cut air on. The finish then follows the model everywhere. Rotary
-/// roughing that clears each layer as an area (R4) will make the layers much quicker.
+/// layer's radius, and leaves out what it would only cut air on. The finish then follows the model everywhere. After a
+/// 3D rotary roughing (`Rotary3DRoughing`) it starts from what that left, and needs no layers unless some of it is
+/// thicker than the pass depth.
 ///
 /// The toolpath is laid out on the unrolled sheet like every wrapped one (`RoundingGenerator`): X along the blank,
 /// sheet Y = centre + angle × the sheet's radius, Z from that radius. The angle only ever increases, so the rotary
@@ -80,9 +81,33 @@ enum Rotary3DGenerator {
 
         let top = blank.topRadius, cy = stock.originPoint.y
         let stockRadius: @Sendable (Double) -> Double = ctx.rotaryStockRadius ?? { _ in blank.outerRadius }
-        /// The material before this toolpath at station x and angle a: the blank, or what a rounding left of it.
+        let roughed = ctx.rotaryMaterial
+        /// The material before this toolpath at station x and angle a: the blank, or what a rounding or a 3D rotary
+        /// roughing left of it.
         func material(_ x: Double, _ a: Double) -> Double {
-            min(stockRadius(x), blank.surfaceRadius(atDegrees: a * 180 / .pi))
+            min(stockRadius(x), blank.surfaceRadius(atDegrees: a * 180 / .pi), roughed?(x, a, 0) ?? .infinity)
+        }
+        /// The most material under the tool's footprint at station x and angle a, along its axis: where a rapid down to
+        /// it has to stop (a square bar's corner, or the end of a rounding, can be under the edge of the tool).
+        func highest(_ x: Double, _ a: Double) -> Double {
+            let r = tool.radius
+            var round = 0.0
+            for i in 0...8 { round = max(round, stockRadius(x - r + 2 * r * Double(i) / 8)) }
+            var surface = blank.radius
+            if blank.shape == .squareBar {
+                // Over the angles the footprint spans: the faces, and any corner in it.
+                let w = asin(min(1, r / blank.radius))
+                var angles = (0...64).map { a - w + 2 * w * Double($0) / 64 }
+                for k in -4...4 {
+                    let corner = (Double(k) + 0.5) * .pi / 2 + (a / (.pi / 2)).rounded(.down) * .pi / 2
+                    if abs(corner - a) <= w { angles.append(corner) }
+                }
+                for phi in angles {
+                    let d = blank.surfaceRadius(atDegrees: phi * 180 / .pi)
+                    if d * abs(sin(phi - a)) <= r + 1e-9 { surface = max(surface, d * cos(phi - a)) }
+                }
+            }
+            return min(round, surface, roughed?(x, a, r) ?? .infinity)
         }
 
         // How much of the blank: the model's length, keeping the cutter inside the blank's ends.
@@ -130,7 +155,8 @@ enum Rotary3DGenerator {
         for i in 0..<stations {
             for j in 0..<180 { probes.append((x0 + length * Double(i) / Double(stations - 1), 2 * .pi * Double(j) / 180)) }
         }
-        guard let deepest = cutter.tipRadii(probes).filter(\.isFinite).min().map({ max(0, $0) }) else {
+        let probeTips = cutter.tipRadii(probes)
+        guard let deepest = probeTips.filter(\.isFinite).min().map({ max(0, $0) }) else {
             tp.warnings = warnings + ["None of the model is within reach between the finish's start and end."]
             return tp
         }
@@ -138,7 +164,13 @@ enum Rotary3DGenerator {
         var stockTop = 0.0
         for i in 0...64 { stockTop = max(stockTop, stockRadius(x0 + length * Double(i) / 64)) }
         stockTop = min(stockTop, blank.outerRadius)
-        let layerCount = max(0, Int(((stockTop - deepest) / pass - 1e-6).rounded(.up)) - 1)
+        var layerCount = max(0, Int(((stockTop - deepest) / pass - 1e-6).rounded(.up)) - 1)
+        if roughed != nil {
+            // After a 3D rotary roughing: layers only if what it left is anywhere thicker than a pass.
+            var thickest = 0.0
+            for (q, r) in zip(probes, probeTips) where r.isFinite { thickest = max(thickest, material(q.x, q.angle) - max(0, r)) }
+            if thickest <= pass + 1e-6 { layerCount = 0 }
+        }
 
         // The layers, then the finish, each pass the other way along the blank from the last.
         var passes: [(strokes: [Stroke], layer: Double?)] = []
@@ -199,7 +231,7 @@ enum Rotary3DGenerator {
                     if let l = last { motions.append(.rapid(Vec3(l.point.x, cy + (l.point.angle + l.offset) * top, clearance))) }
                     let over = sheet(first, offset)
                     motions.append(.rapid(Vec3(over.x, over.y, clearance)))
-                    let plunge = material(first.x, first.angle) + stock.plungeHeight - top
+                    let plunge = highest(first.x, first.angle) + stock.plungeHeight - top
                     if plunge < clearance - 1e-9, plunge > over.z { motions.append(.rapid(Vec3(over.x, over.y, plunge))) }
                     motions.append(.feed(over, tool.cutting.plungeRate))
                     run = Array(stroke.points.dropFirst())
@@ -246,7 +278,7 @@ enum Rotary3DGenerator {
         if slowest < feed * 0.5 {
             warnings.append(RotaryWrap.slowingWarning(RotaryWrap.Slowing(feed: slowest, set: feed, radius: slowestRadius), context: ctx))
         }
-        if blank.shape == .squareBar, ctx.rotaryStockRadius == nil {
+        if blank.shape == .squareBar, ctx.rotaryStockRadius == nil, roughed == nil {
             warnings.append("Starts from a square bar: add a Rounding toolpath before it, or the first layers cut the corners in "
                 + "interrupted passes.")
         }
@@ -424,20 +456,22 @@ enum Rotary3DGenerator {
         let len = ctx.length
         var out: [String] = []
         for m in models {
-            guard let e = m.rotaryExtent, let spec = m.modelSpec else { continue }
+            guard let e = m.rotaryExtent else { continue }
             if e.minX < -1e-6 || e.maxX > blank.length + 1e-6 {
                 out.append("The model “\(m.name)” runs past the end of the blank (it's \(len(e.maxX - e.minX)) long, the blank "
                     + "\(len(blank.length))). Move it along the blank or scale it down.")
             }
-            // The farthest the model reaches against the round stock there, along its length.
-            let mesh = spec.alongAxis
+            // The farthest the model reaches past the stock there, in the direction it reaches: on a round blank its
+            // radius against the stock's, on a square bar against the bar's faces and corners. The stock's section is
+            // convex, so the model is inside it wherever its corners are.
             var excess = 0.0
-            for i in 0..<RotaryMesh.slices {
-                let local = (Double(i) + 0.5) / Double(RotaryMesh.slices) * Double(mesh.length) - Double(mesh.length) / 2
-                let x = m.position.x + local * m.scale
-                guard x >= 0, x <= blank.length else { continue }
-                let r = mesh.profileRadius(at: local) * m.scale
-                excess = max(excess, r - min(stockRadius(x), blank.radius))
+            m.forEachBlankTriangle { a, b, c in
+                for v in [a, b, c] where v.x >= 0 && v.x <= blank.length {
+                    let r = (v.y * v.y + v.z * v.z).squareRoot()
+                    guard r > 1e-9 else { continue }
+                    let surface = blank.surfaceRadius(atDegrees: atan2(v.y, v.z) * 180 / .pi)
+                    excess = max(excess, r - min(stockRadius(v.x), surface))
+                }
             }
             if excess > 0.01 {
                 out.append("The model “\(m.name)” is up to \(len(2 * excess)) bigger across than the stock it's cut from "

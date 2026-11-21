@@ -178,15 +178,14 @@ public enum SetupSheet {
         }
         h += "</table>\n"
 
-        // 3D rotary finishing: the model each one follows, how it sits on the blank and the pattern.
-        let finishes = project.operations.compactMap { op -> (CAMOperation, RotaryFinishParams)? in
-            guard op.enabled, case let .rotaryFinish(p) = op.kind, job.toolpaths.contains(where: { $0.sourceOperationID == op.id && !$0.isEmpty })
-            else { return nil }
-            return (op, p)
+        // 3D rotary roughing and finishing: the model each one works on, how it sits on the blank and how it's cut.
+        let rotary3D = project.operations.filter { op in
+            guard op.enabled, op.kind.is3D, op.kind.turnsWholeBlank else { return false }
+            return job.toolpaths.contains { $0.sourceOperationID == op.id && !$0.isEmpty }
         }
-        if !finishes.isEmpty {
+        if !rotary3D.isEmpty {
             h += "<h2>3D rotary</h2>\n<ul>\n"
-            for (op, p) in finishes {
+            for op in rotary3D {
                 let models = project.shapes(for: op).filter { $0.modelSpec != nil }
                 let placed = models.compactMap { m -> String? in
                     guard let e = m.rotaryExtent, let spec = m.modelSpec else { return nil }
@@ -194,16 +193,32 @@ public enum SetupSheet {
                     return "“\(esc(m.name))” (its \(axis) axis along the blank, X \(len(e.minX)) to \(len(e.maxX)), "
                         + "\(len(2 * e.radius)) across at most)"
                 }.joined(separator: ", ")
-                let how: String
-                switch p.pattern {
-                case .spiral: how = "a spiral, \(len(p.stepover(op.tool))) along the blank per turn"
-                case .rings: how = "rings \(len(p.stepover(op.tool))) apart"
-                case .lines: how = "passes along the blank \(len(p.stepover(op.tool))) apart round it"
+                switch op.kind {
+                case let .rotaryRough(p):
+                    let how: String
+                    switch p.pattern {
+                    case .auto: how = "lines each area's longer way"
+                    case .around: how = "lines round the blank"
+                    case .along: how = "lines along the blank"
+                    case .offset: how = "rings in from each area's edge"
+                    }
+                    h += "<li><b>\(esc(op.name))</b> roughs \(placed) with T\(op.tool.number) in layers \(len(p.stepdown(op.tool))) apart, "
+                        + "as \(how) \(len(p.stepover(op.tool))) apart, leaving \(len(max(0, p.allowance))) for the finish. It clears only "
+                        + "where there's stock left, so it skips the air over a square bar's faces. The blank turns while it cuts.</li>\n"
+                case let .rotaryFinish(p):
+                    let how: String
+                    switch p.pattern {
+                    case .spiral: how = "a spiral, \(len(p.stepover(op.tool))) along the blank per turn"
+                    case .rings: how = "rings \(len(p.stepover(op.tool))) apart"
+                    case .lines: how = "passes along the blank \(len(p.stepover(op.tool))) apart round it"
+                    }
+                    let layers = p.passDepth.map { " Cuts in layers no deeper than \(len($0)) first where the model is deeper." }
+                        ?? " Cuts in layers no deeper than the bit's stepdown first where the model is deeper."
+                    h += "<li><b>\(esc(op.name))</b> follows \(placed) with T\(op.tool.number), as \(how)"
+                        + (p.allowance > 1e-9 ? ", leaving \(len(p.allowance))" : "") + ". The blank turns while it cuts.\(layers)</li>\n"
+                default:
+                    break
                 }
-                let layers = p.passDepth.map { " Cuts in layers no deeper than \(len($0)) first where the model is deeper." }
-                    ?? " Cuts in layers no deeper than the bit's stepdown first where the model is deeper."
-                h += "<li><b>\(esc(op.name))</b> follows \(placed) with T\(op.tool.number), as \(how)"
-                    + (p.allowance > 1e-9 ? ", leaving \(len(p.allowance))" : "") + ". The blank turns while it cuts.\(layers)</li>\n"
             }
             h += "</ul>\n"
         }

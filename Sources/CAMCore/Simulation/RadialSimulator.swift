@@ -80,6 +80,42 @@ public struct RadialGrid: Sendable {
         return total * angleStep * cellSize
     }
 
+    /// How far the material stands out along a tool pointed at the axis at station `x`, the blank turned to `angle`
+    /// (radians), mm from the axis: the most any cell within `reach` of the tool's axis stands along it (r·cos φ, φ its
+    /// angle off the tool's axis, taken at the cell's nearer edge). With no reach, the most of the cells round the one
+    /// there. Infinity when no cell is in reach (off the blank): nothing is known there.
+    public func highest(x: Double, angle a: Double, reach: Double) -> Double {
+        let lo = max(0, Int(((x - reach - originX) / cellSize).rounded(.down)) - (reach > 0 ? 0 : 1))
+        let hi = min(columns - 1, Int(((x + reach - originX) / cellSize).rounded(.up)) + (reach > 0 ? 0 : 1))
+        guard lo <= hi else { return .infinity }
+        let center = row(atAngle: a)
+        var best = -Double.infinity
+        if reach <= 0 {
+            for dj in -1...1 {
+                let j = ((center + dj) % rows + rows) % rows
+                for c in lo...hi { best = max(best, Double(radii[j * columns + c])) }
+            }
+            return best
+        }
+        let span = rows / 4 + 1
+        let half = angleStep / 2
+        for dj in -span...span {
+            let j = ((center + dj) % rows + rows) % rows
+            // The cell's angle off the tool's axis, nearer edge first.
+            let off = max(0, abs((angle(row: j) - a).remainder(dividingBy: 2 * .pi)) - half)
+            guard off < .pi / 2 else { continue }
+            let c0 = cos(off), s0 = sin(off)
+            for c in lo...hi {
+                let dx = abs(originX + Double(c) * cellSize - x) - cellSize / 2
+                guard dx <= reach else { continue }
+                let r = Double(radii[j * columns + c])
+                guard r * s0 <= reach else { continue }
+                best = max(best, r * c0)
+            }
+        }
+        return best
+    }
+
     /// The grid laid flat as the unrolled sheet: heights measured from `radius` (the sheet's Z = 0), the floor at
     /// the axis.
     public var unrolled: HeightGrid {
@@ -103,6 +139,20 @@ public struct RadialSimulator: Sendable {
     public init(stock: Stock, cellSize: Double? = nil, maxCells: Int = 2_500_000) {
         grid = RadialGrid(stock: stock, cellSize: cellSize, maxCells: maxCells)
         outer = Double(grid.initial.max() ?? 0)
+    }
+
+    /// Lowers the surface to `bound(x, angle)` (mm from the axis) wherever that's nearer the axis: what earlier cuts
+    /// left, when it's known.
+    mutating func lower(to bound: (Double, Double) -> Double) {
+        let g = grid
+        for j in 0..<g.rows {
+            let a = g.angle(row: j)
+            for c in 0..<g.columns {
+                let i = j * g.columns + c
+                let b = bound(g.originX + Double(c) * g.cellSize, a)
+                if b < Double(grid.radii[i]) { grid.radii[i] = Float(max(0, b)) }
+            }
+        }
     }
 
     public mutating func reset() {

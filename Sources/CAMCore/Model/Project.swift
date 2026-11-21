@@ -14,8 +14,8 @@ public struct Project: Hashable, Sendable {
     /// format-7 build can't read. Format 9 adds tiling: a format-8 build would ignore it and post the whole job as one
     /// file, bigger than the machine's travel. Settings for tiling that's off (or leaves the job in one tile) don't raise it.
     /// Format 10 adds 3D finishing strategies (waterline, steep and shallow, pencil) and cross-hatching, which a format-9
-    /// build would ignore and cut as one raster.
-    public static let currentFormatVersion = 10
+    /// build would ignore and cut as one raster. Format 12 adds 3D rotary roughing, which older builds can't read.
+    public static let currentFormatVersion = 12
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

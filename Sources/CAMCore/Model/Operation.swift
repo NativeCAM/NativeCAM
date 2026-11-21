@@ -731,6 +731,86 @@ public struct RotaryFinishParams: Hashable, Codable, Sendable {
     public func passDepth(_ tool: Tool) -> Double { max(0.05, passDepth ?? tool.cutting.stepdown) }
 }
 
+// MARK: 3D rotary roughing
+
+/// 3D rotary roughing (see `Rotary3DRoughing`): a flat or bull-nose end mill clears the stock round a 3D model on a
+/// rotary blank, from a square bar or a round blank, in layers a radial stepdown apart, leaving an allowance on the model
+/// for 3D rotary finishing. Each layer clears the area of the blank unrolled at its radius where there's material left
+/// and the tool is clear of the model; it skips the air over a square bar's faces, and starts from what a Rounding
+/// before it leaves.
+public struct RotaryRoughParams: Hashable, Codable, Sendable {
+    public enum Pattern: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// Each area as lines its longer way: along the blank on the strips at a square bar's corners, round it on a
+        /// short band that goes all the way round.
+        case auto
+        /// Lines round the blank (whole or part rings), stepping along it.
+        case around
+        /// Lines along the blank, stepping round it.
+        case along
+        /// Rings offset in from each area's edge, inside out.
+        case offset
+        public var id: String { rawValue }
+        public var label: String {
+            switch self {
+            case .auto: "Auto"
+            case .around: "Around"
+            case .along: "Along X"
+            case .offset: "Offset"
+            }
+        }
+    }
+
+    public var pattern: Pattern
+    /// Radial depth from one layer to the next, mm; nil = the tool's stepdown.
+    public var stepdown: Double?
+    /// Stepover as a fraction of the tool diameter, measured on each layer's surface; nil = the tool's.
+    public var stepoverFraction: Double?
+    /// Material left on the model for the finish, mm, square to its surface.
+    public var allowance: Double
+    /// Where along the blank (X) the roughing starts and ends, mm; nil = the model's ends, kept the cutter's radius
+    /// inside the blank's ends (clear of the chuck and tailstock).
+    public var startX: Double?
+    public var endX: Double?
+    /// How far apart the tool is dropped onto the model to find each layer's area, along the blank and round it at the
+    /// stock's surface, mm.
+    public var sampleSpacing: Double
+
+    public static let defaultAllowance = 0.02.inch
+
+    public init(pattern: Pattern = .auto, stepdown: Double? = nil, stepoverFraction: Double? = nil,
+                allowance: Double = RotaryRoughParams.defaultAllowance, startX: Double? = nil, endX: Double? = nil,
+                sampleSpacing: Double = 0.5) {
+        self.pattern = pattern
+        self.stepdown = stepdown
+        self.stepoverFraction = stepoverFraction
+        self.allowance = allowance
+        self.startX = startX
+        self.endX = endX
+        self.sampleSpacing = sampleSpacing
+    }
+
+    /// Radial depth between layers with `tool`, mm.
+    public func stepdown(_ tool: Tool) -> Double { max(0.05, stepdown ?? tool.cutting.stepdown) }
+
+    /// Stepover with `tool`, mm.
+    public func stepover(_ tool: Tool) -> Double { max(0.05, (stepoverFraction ?? tool.cutting.stepoverFraction) * tool.diameter) }
+
+    /// The most a flat bottom (and a bull nose's corners) leaves standing on a round surface `radius` from the axis,
+    /// mm: across its width the bottom is a plane tangent to the round, which falls away under it to √(ρ² + y²) − ρ
+    /// at y off its axis, about R²/2ρ at the edge of a flat end mill (research §2.4). Between passes and beside the
+    /// model the finish meets ridges up to this high on top of the allowance.
+    public static func cusp(_ tool: Tool, radius rho: Double) -> Double {
+        let r = max(rho, 1e-6)
+        var most = 0.0
+        for i in 0...64 {
+            let y = tool.radius * Double(i) / 64
+            let rise = (tool.profileHeight(atRadius: y) ?? 0)
+            most = max(most, (r * r + y * y).squareRoot() - r - rise)
+        }
+        return most
+    }
+}
+
 /// A chamfer: a V-bit or engraving bit bevels the edges of closed vectors at its own angle (see `ChamferGenerator`).
 /// The settings follow Vectric's Chamfer toolpath, so its tutorials translate: the bevel lies outside or inside the
 /// vector (or both), and the vector is its top edge (Vectric's "Down") or its bottom edge ("Up").
@@ -926,6 +1006,8 @@ public enum OperationKind: Hashable, Codable, Sendable {
     case rounding(RoundingParams)
     /// Rotary jobs: a 3D model on the blank, finished all the way round as it turns.
     case rotaryFinish(RotaryFinishParams)
+    /// Rotary jobs: the stock round a 3D model on the blank cleared in layers, leaving an allowance for the finish.
+    case rotaryRough(RotaryRoughParams)
     /// A V-bit bevel along closed vectors.
     case chamfer(ChamferParams)
     /// A groove along vectors that ramps in and out at its ends.
@@ -943,6 +1025,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .finish3D: "3D Finishing"
         case .rounding: "Rounding"
         case .rotaryFinish: "3D Rotary Finishing"
+        case .rotaryRough: "3D Rotary Roughing"
         case .chamfer: "Chamfer"
         case .fluting: "Fluting"
         case .prism: "Prism"
@@ -965,18 +1048,18 @@ public enum OperationKind: Hashable, Codable, Sendable {
     }
 
     /// True for the rotary operations that cut all the way round the blank as it turns, on either layout: rounding and
-    /// 3D rotary finishing. Their toolpaths are wrapped round the blank at the sheet's radius, and they take no index
-    /// angles.
+    /// 3D rotary roughing and finishing. Their toolpaths are wrapped round the blank at the sheet's radius, and they take
+    /// no index angles.
     public var turnsWholeBlank: Bool {
         switch self {
-        case .rounding, .rotaryFinish: true
+        case .rounding, .rotaryFinish, .rotaryRough: true
         default: false
         }
     }
 
     public var is3D: Bool {
         switch self {
-        case .rough3D, .finish3D, .rotaryFinish: true
+        case .rough3D, .finish3D, .rotaryFinish, .rotaryRough: true
         default: false
         }
     }
@@ -991,7 +1074,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case let .fluting(p): p.startDepth + p.depth
         // Set by the bit's angle (a chamfer's width) or the shape (a full prism).
         case let .prism(p): p.depth.map { p.startDepth + $0 }
-        case .rough3D, .finish3D, .rounding, .rotaryFinish, .chamfer: nil
+        case .rough3D, .finish3D, .rounding, .rotaryFinish, .rotaryRough, .chamfer: nil
         }
     }
 }
@@ -1039,12 +1122,13 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// drop them and cut every face's shapes at one angle. Rounding is format 5 (older builds can't read it). A V-carve
     /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`). 3D rotary finishing is format 7.
     /// Chamfers, flutes and prisms are format 8 (older builds can't read them). 3D finishing other than a single raster
-    /// is format 10 (see `Finish3DParams.requiredFormatVersion`).
+    /// is format 10 (see `Finish3DParams.requiredFormatVersion`). 3D rotary roughing is format 12.
     public var requiredFormatVersion: Int {
         let own: Int
         switch kind {
         case .rounding: own = 5
         case .rotaryFinish: own = 7
+        case .rotaryRough: own = 12
         case .chamfer, .fluting, .prism: own = 8
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion
