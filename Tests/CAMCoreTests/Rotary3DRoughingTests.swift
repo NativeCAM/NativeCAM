@@ -205,7 +205,10 @@ struct Rotary3DRoughingTests {
             #expect(layers.count == 3 && abs(deepest - 8.5) < 2e-3, "\(layers)")
             guard layers.count == 3 else { continue }
             let spacing = 20 - layers[0]
-            #expect(abs(layers[0] - layers[1] - spacing) < 1e-5 && abs(layers[1] - layers[2] - spacing) < 2e-3, "\(layers)")
+            let second: Double = abs(layers[0] - layers[1] - spacing)
+            let third: Double = abs(layers[1] - layers[2] - spacing)
+            #expect(second < 1e-5, "\(layers)")
+            #expect(third < 2e-3, "\(layers)")
             let off = c.filter { q in !layers.contains { abs(q.r - $0) < 2e-3 } && q.r < 20 }
             #expect(off.isEmpty, "\(pattern): \(off.prefix(5))")
             if pattern == .along {
@@ -286,8 +289,10 @@ struct Rotary3DRoughingTests {
             }
         }
         // Down to the cylinder and its allowance (less its facets), and no more than the ridges left above that.
-        #expect(lo > 8.5 - 0.02, "\(lo)")
-        #expect(hi < 8.5 + RotaryRoughParams.cusp(Self.endMill, radius: 8.5) + 0.05, "\(hi)")
+        let floor: Double = 8.5 - 0.02
+        let ceiling: Double = 8.5 + RotaryRoughParams.cusp(Self.endMill, radius: 8.5) + 0.05
+        #expect(lo > floor, "\(lo)")
+        #expect(hi < ceiling, "\(hi)")
     }
 
     // MARK: Run order
@@ -364,12 +369,14 @@ struct Rotary3DRoughingTests {
         has("is less than the ridges", .warning, RotaryRoughParams(allowance: 0.3))
         let r = Self.endMill.radius
         let cusp = RotaryRoughParams.cusp(Self.endMill, radius: 7.7)
-        #expect(abs(cusp - ((7.7 * 7.7 + r * r).squareRoot() - 7.7)) < 1e-9)
+        let edge: Double = (7.7 * 7.7 + r * r).squareRoot() - 7.7
+        #expect(abs(cusp - edge) < 1e-9)
         // A bull nose's corners leave less.
         var bull = Self.endMill
         bull.shape = .bullNose
         bull.cornerRadius = 1.5
-        #expect(RotaryRoughParams.cusp(bull, radius: 7.7) < cusp - 0.3)
+        let bullCusp: Double = RotaryRoughParams.cusp(bull, radius: 7.7)
+        #expect(bullCusp < cusp - 0.3)
         // Near the axis the 1/4" end mill's feed needs A faster than its nominal 90° a second.
         has("rotary axis turns at most 5,400°/min")
         has("collet nut could hit") { $0.operations[0].tool.stickout = 5 }
