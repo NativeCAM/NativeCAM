@@ -82,16 +82,21 @@ enum ViewportMeshes {
         var boundsMax: SIMD3<Float> = .zero
     }
 
-    static func bed(stockSize: SIMD3<Float>, travel: SIMD2<Float>?, spacing rawSpacing: Float) -> Bed {
+    /// `turned`: the machine's frame is the world turned a quarter turn anticlockwise about Z (a rotary axis along Y,
+    /// `RotaryFrame`). The bed is then laid out as the machine sees it, machine X and Y on its axes and its travel
+    /// outline square to them from the stock's front left corner, and handed back in world coordinates.
+    static func bed(stockSize: SIMD3<Float>, travel: SIMD2<Float>?, spacing rawSpacing: Float, turned: Bool = false) -> Bed {
         let w = finitePositive(stockSize.x), h = finitePositive(stockSize.y), t = finitePositive(stockSize.z)
         let z = -t
 
-        var lo = SIMD2<Float>(0, 0)
-        var hi = SIMD2<Float>(w, h)
+        // The stock's footprint in the machine's frame (the world's, unless it's turned).
+        var lo = turned ? SIMD2<Float>(-h, 0) : SIMD2<Float>(0, 0)
+        var hi = turned ? SIMD2<Float>(0, w) : SIMD2<Float>(w, h)
+        let corner = lo
         var travelRect: SIMD2<Float>?
         if let tr = travel, finitePositive(tr.x) > 0, finitePositive(tr.y) > 0 {
             travelRect = tr
-            hi = simd_max(hi, tr)
+            hi = simd_max(hi, corner + tr)
         }
 
         var spacing = (rawSpacing.isFinite && rawSpacing > 0) ? rawSpacing : 25.4
@@ -135,7 +140,8 @@ enum ViewportMeshes {
 
         if let tr = travelRect {
             let col = SIMD4<Float>(0.45, 0.65, 1.0, 0.45)
-            let p = [SIMD3(0, 0, z), SIMD3(tr.x, 0, z), SIMD3(tr.x, tr.y, z), SIMD3(0, tr.y, z)]
+            let (x0, y0) = (corner.x, corner.y)
+            let p = [SIMD3(x0, y0, z), SIMD3(x0 + tr.x, y0, z), SIMD3(x0 + tr.x, y0 + tr.y, z), SIMD3(x0, y0 + tr.y, z)]
             for k in 0..<4 {
                 lines.append(LineVertex(p[k], col))
                 lines.append(LineVertex(p[(k + 1) % 4], col))
@@ -161,6 +167,18 @@ enum ViewportMeshes {
 
         bed.boundsMin = SIMD3(gx0, gy0, z)
         bed.boundsMax = SIMD3(gx1, gy1, max(0, len))
+        guard turned else { return bed }
+        // Back into the world: machine (X, Y) is world (Y, −X).
+        func world(_ v: [LineVertex]) -> [LineVertex] {
+            v.map { LineVertex(SIMD3($0.position.y, -$0.position.x, $0.position.z), $0.color) }
+        }
+        bed.fill = world(bed.fill)
+        bed.minor = world(bed.minor)
+        bed.major = world(bed.major)
+        bed.overlay = world(bed.overlay)
+        bed.triad = world(bed.triad)
+        bed.boundsMin = SIMD3(gy0, -gx1, z)
+        bed.boundsMax = SIMD3(gy1, -gx0, max(0, len))
         return bed
     }
 

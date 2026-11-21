@@ -74,7 +74,8 @@ public enum CycleTimeEstimator {
         // The toolpath whose lead-in the blocks added between toolpaths belong to.
         var leadIn = 0
         /// Where the tool is, for the moves between toolpaths: on a wrapped toolpath it stays over the axis, its sheet
-        /// Y being an angle of the blank, so no move in Y takes it there or back.
+        /// Y being an angle of the blank, so no move in Y takes it there or back. Moves are timed in the blank's frame:
+        /// X and Y share their rates and accelerations, so an axis along Y (`RotaryFrame`) takes the same time.
         func machinePoint(_ p: Vec3, wrapped: Bool) -> Vec3 { wrapped ? Vec3(p.x, stock.originPoint.y, p.z) : p }
 
         func lineBlock(from a: Vec3, to b: Vec3, feed: Double?, ref: (Int, Int)?) -> Block? {

@@ -130,7 +130,10 @@ struct RotaryIndexTests {
         }
         has("doesn't match the rotary blank") { $0.stock.width = 10.inch }
         has("no rotary axis set up") { $0.machine.rotary = nil }
-        has("runs along X") { $0.machine.rotary?.alignment = .y }
+        has("along Y only for Avid Mach4, LinuxCNC and grblHAL") { p in
+            p.machine.controller = ControllerProfile(family: .centroid)
+            p.machine.rotary?.alignment = .y
+        }
         has("driven by A words") { $0.machine.rotary?.letter = .b }
         has("Grbl has no A axis") { $0.machine.controller = ControllerProfile(family: .grbl) }
         has("turn on Turn by hand") { $0.machine.controller = ControllerProfile(family: .fluidNC) }

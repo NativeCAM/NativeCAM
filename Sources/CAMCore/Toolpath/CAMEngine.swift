@@ -631,11 +631,13 @@ public enum CAMEngine {
         if ext.min.x < sb.min.x || ext.max.x > sb.max.x || (!wrapped && (ext.min.y < sb.min.y || ext.max.y > sb.max.y)) {
             issues.append(JobIssue(.warning, "Toolpath extends beyond the material edges.", operation: tp.name))
         }
-        // Machine travel (relative to the work origin, assuming the material sits inside the work area). A wrapped
-        // toolpath doesn't move Y.
+        // Machine travel (relative to the work origin, assuming the material sits inside the work area), in the blank's
+        // frame: on a rotary axis along Y, the blank's length takes Y travel and its width X. A wrapped toolpath doesn't
+        // move across the blank.
         let lo = stock.toWork(Vec3(ext.min.x, ext.min.y, ext.min.z))
         let hi = stock.toWork(Vec3(ext.max.x, ext.max.y, ext.max.z))
-        if checkTravel, hi.x - lo.x > machine.travel.x || (!wrapped && hi.y - lo.y > machine.travel.y) {
+        let travel = RotaryFrame(stock: stock, machine: machine).blankTravel(machine.travel)
+        if checkTravel, hi.x - lo.x > travel.x || (!wrapped && hi.y - lo.y > travel.y) {
             issues.append(JobIssue(.error, "Toolpath is larger than the \(machine.displayName) work area.", operation: tp.name))
         }
         if let blank = stock.rotary {

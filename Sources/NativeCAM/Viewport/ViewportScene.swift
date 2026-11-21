@@ -13,6 +13,10 @@ struct ViewportScene {
     var machineTravel: SIMD2<Float>? = nil
     /// Grid spacing on the bed plane (mm). 25.4 for inch projects, 10 for mm.
     var gridSpacing: Float = 25.4
+    /// The machine's frame is the world turned a quarter turn anticlockwise about Z: a rotary job on an axis along Y
+    /// (`RotaryFrame`), whose blank lies along world X but machine Y. The bed, its axes and travel outline are drawn
+    /// square to the machine, and the view presets look at the machine as the operator does.
+    var turned: Bool = false
 
     /// Line-list geometry (pairs of vertices) for vectors and toolpaths.
     var lines: [LineVertex] = []

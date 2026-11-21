@@ -66,8 +66,12 @@ public extension MachineProfile {
             if axis.turnsByHand {
                 lines.append("Rotary jobs are turned by hand: before each new angle the program lifts to safe Z, stops the spindle "
                     + "and pauses with M0, and says which angle to turn the blank to.")
+            } else if d.rotaryAxes.contains(RotaryIndex.letter), !d.rotaryAlignments.contains(axis.alignment) {
+                lines.append("NativeCAM writes moves for a rotary axis along \(axis.alignment.axisName) only for Avid Mach4, LinuxCNC "
+                    + "and grblHAL so far. Turn on Turn by hand under Rotary Axis to cut rotary jobs with a pause for each turn.")
             } else if d.rotaryAxes.contains(RotaryIndex.letter) {
-                lines.append("Rotary jobs turn the blank with G0 A moves at safe Z.")
+                lines.append("Rotary jobs turn the blank with G0 A moves at safe Z"
+                    + (axis.alignment == .x ? "." : ", the blank along Y and X zero on its centreline."))
             } else {
                 lines.append("\(d.name) has no A axis NativeCAM can write rotary moves for. Turn on Turn by hand under Rotary Axis "
                     + "to cut rotary jobs with a pause for each turn.")

@@ -37,18 +37,24 @@ public struct GCodeProgram: Sendable {
     /// Converts the program into toolpaths using `tools` (matched by number) for geometry.
     /// `stock` maps work coordinates back into design space for the simulator.
     public func toolpaths(tools: [Tool], stock: Stock, fallback: Tool) -> [Toolpath] {
+        toolpaths(tools: tools, frame: RotaryFrame(stock: stock, alignment: .x), fallback: fallback)
+    }
+
+    /// Converts the program into toolpaths, with `frame` mapping machine work coordinates back into design space: a
+    /// project's own (`RotaryFrame(project)`) reads a file written for its rotary axis along Y the right way round.
+    public func toolpaths(tools: [Tool], frame: RotaryFrame, fallback: Tool) -> [Toolpath] {
         segments.enumerated().compactMap { i, seg in
             guard !seg.motions.isEmpty else { return nil }
             var tool = tools.first { $0.number == seg.toolNumber } ?? fallback
             if tools.first(where: { $0.number == seg.toolNumber }) == nil { tool.number = seg.toolNumber }
             let motions = seg.motions.map { m -> Motion in
                 var d = m
-                d.end = stock.fromWork(m.end)
-                if m.kind.isArc { d.center = stock.fromWork(Vec3(m.center, 0)).xy }
+                d.end = frame.fromWork(m.end)
+                if m.kind.isArc { d.center = frame.fromWork(Vec3(m.center, 0)).xy }
                 return d
             }
             return Toolpath(id: UUID(), name: "Segment \(i + 1) (T\(seg.toolNumber))", tool: tool,
-                            spindleRPM: seg.spindleRPM, start: stock.fromWork(seg.start), motions: motions)
+                            spindleRPM: seg.spindleRPM, start: frame.fromWork(seg.start), motions: motions)
         }
     }
 }

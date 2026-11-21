@@ -15,6 +15,9 @@ import Foundation
 /// from above, as it does on a flat sheet. A machine whose rotary turns the other way is marked Reversed, and the
 /// posts flip A for it (`RotaryOutput.value`).
 ///
+/// That's the blank's own frame. On an axis along Y (`RotaryFrame`) the posts write the same moves turned a quarter
+/// turn about Z: Y along the axis, X0 on its centreline, and the same A words, turning about +Y.
+///
 /// A straight line on the sheet becomes a helix on the blank, which the controller makes by moving X, A and Z
 /// together, so no line needs splitting. Arcs do (no controller can arc in X and A), so wrapped toolpaths are cut
 /// as lines. Feeds are written as inverse time (G93): F is one over the move's time in minutes, worked out from the
@@ -318,13 +321,19 @@ protocol WrapModalState {
     var a: Double? { get set }
 }
 
-/// Writes a wrapped toolpath as X, Z and A words, for every G-code post, so their inverse-time handling can't drift
-/// apart. Following Avid's own wrap posts:
+extension WrapModalState {
+    /// The position along the blank last written: X, or Y on an axis along Y.
+    func along(_ frame: RotaryFrame) -> Double? { frame.alignment == .x ? x : y }
+}
+
+/// Writes a wrapped toolpath as words along the axis (X, or Y on an axis along Y), Z and A, for every G-code post, so
+/// their inverse-time handling can't drift apart. Following Avid's own wrap posts:
 /// - a move that turns the blank is `G93 G1 X.. Z.. A.. F<1/min>`, with F on every such line;
-/// - other moves (plunges, moves along X) stay in G94 with an ordinary feed, restated after each switch back;
+/// - other moves (plunges, moves along the blank) stay in G94 with an ordinary feed, restated after each switch back;
 /// - G94 is back on before the toolpath ends, so tool changes and the program end never run in G93.
 struct WrappedWriter {
-    let stock: Stock
+    /// Where the blank lies on the machine: the tool stays over its centreline.
+    let frame: RotaryFrame
     let rotary: RotaryOutput
     let units: LengthUnit
     let decimals: Int
@@ -353,18 +362,19 @@ struct WrappedWriter {
 
     /// The A value written for the sheet's line `y`.
     func aValue(_ y: Double, diameter: Double) -> Double {
-        rotary.value(RotaryWrap.angle(y: y, centerY: stock.originPoint.y, diameter: diameter))
+        rotary.value(RotaryWrap.angle(y: y, centerY: frame.stock.originPoint.y, diameter: diameter))
     }
 
-    /// From safe Z: over the start along X with the tool on the axis centreline, then the turn that brings the start
-    /// under it, the shorter way round from `last` (the A value last written) when it's more than a turn away. True
-    /// when the blank turns; `offset` (whole turns) goes to `motions`.
+    /// From safe Z: over the start along the blank with the tool on the axis centreline, then the turn that brings the
+    /// start under it, the shorter way round from `last` (the A value last written) when it's more than a turn away.
+    /// True when the blank turns; `offset` (whole turns) goes to `motions`.
     func approach<S: WrapModalState>(_ tp: Toolpath, state: inout S, after last: Double?) -> (lines: [String], turned: Bool, offset: Double) {
         guard let d = tp.wrapDiameter else { return ([], false, 0) }
-        let x = round(stock.toWork(tp.start).x)
-        var lines = ["\(rapidWord) X\(fmt(x)) Y\(fmt(0))"]
+        let w = frame.overAxis(tp.start)
+        let x = round(w.x), y = round(w.y)
+        var lines = ["\(rapidWord) X\(fmt(x)) Y\(fmt(y))"]
         state.x = x
-        state.y = 0
+        state.y = y
         let start = aValue(tp.start.y, diameter: d)
         let a = RotaryOutput.nearestTurn(start, after: last)
         guard state.a != a else { return (lines, false, a - start) }
@@ -391,13 +401,14 @@ struct WrappedWriter {
                 lines.append(dwell(m.feed))
                 continue
             }
-            let w = stock.toWork(m.end)
-            let ex = round(w.x), ez = round(w.z)
+            let w = frame.overAxis(m.end)
+            let ex = round(w.x), ey = round(w.y), ez = round(w.z)
             let ea = offset == 0 ? aValue(m.end.y, diameter: d) : ((aValue(m.end.y, diameter: d) + offset) * 1000).rounded() / 1000
             let turns = ea != state.a
-            guard ex != state.x || ez != state.z || turns else { continue }
+            guard ex != state.x || ey != state.y || ez != state.z || turns else { continue }
             var words = ""
             if ex != state.x { words += " X\(fmt(ex))" }
+            if ey != state.y { words += " Y\(fmt(ey))" }
             if ez != state.z { words += " Z\(fmt(ez))" }
             if turns { words += " \(rotary.letter)\(String(format: "%.3f", ea))" }
             if m.kind != .rapid {
@@ -406,9 +417,11 @@ struct WrappedWriter {
             }
             if m.kind == .rapid {
                 lines.append(rapidWord + words)
-            } else if turns, let sx = state.x, let sz = state.z, let sa = state.a {
+            } else if turns, let sx = state.along(frame), let sz = state.z, let sa = state.a {
+                // Along the blank: X, or Y on an axis along Y.
+                let along = frame.alignment == .x ? ex : ey
                 let length = RotaryWrap.tipLength(x0: units.toMM(sx), r0: units.toMM(sz), degrees0: sa,
-                                                  x1: units.toMM(ex), r1: units.toMM(ez), degrees1: ea)
+                                                  x1: units.toMM(along), r1: units.toMM(ez), degrees1: ea)
                 switch feeds {
                 case .inverseTime:
                     let f = RotaryWrap.inverseTime(length: length, feed: m.feed, degrees: ea - sa, turnSpeed: turnSpeed)
@@ -419,7 +432,7 @@ struct WrappedWriter {
                     // The F words in G93 are times, not feeds: the next G94 move must give its feed again.
                     state.feed = nil
                 case let .perMinute(rule):
-                    let f = roundFeed(RotaryWrap.perMinuteFeed(rule, dx: ex - sx, dz: ez - sz, da: ea - sa,
+                    let f = roundFeed(RotaryWrap.perMinuteFeed(rule, dx: along - sx, dz: ez - sz, da: ea - sa,
                                                                length: units.fromMM(length), feed: units.fromMM(m.feed),
                                                                turnSpeed: turnSpeed))
                     if f != state.feed { words += " F\(fmtFeed(f))"; state.feed = f }
@@ -438,6 +451,7 @@ struct WrappedWriter {
             }
             if turns { turned = true }
             state.x = ex
+            state.y = ey
             state.z = ez
             state.a = ea
         }
