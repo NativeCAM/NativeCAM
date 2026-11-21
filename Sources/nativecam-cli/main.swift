@@ -5,6 +5,7 @@ import Foundation
 //
 //   nativecam-cli demo <out.nativecam>                       write the demo sign project
 //   nativecam-cli demo3d <out.nativecam>                     write the 3D relief demo project
+//   nativecam-cli demonest <out.nativecam>                   write the shelf-parts demo project (for Nest Parts)
 //   nativecam-cli new <out.nativecam>                        write an empty project (default PRO6060 setup)
 //   nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]
 //                                                      generate toolpaths + G-code, check the file against the
@@ -37,6 +38,13 @@ import Foundation
 //                                                      each toolpath found; --setup uses the template's job setup.
 //                                                      Writes "<project> + <template>.nativecam" beside the project
 //                                                      unless -o names the file or --in-place overwrites the project
+//   nativecam-cli nest <project.nativecam> [-o out.nativecam | --in-place] [--spacing x] [--margin x] [--turns none|90|N]
+//                     [--grain] [--seconds s] [--seed n] [--evaluations n] [--svg preview.svg]
+//                                                      nest every part on the sheet as Toolpaths ▸ Nest Parts does
+//                                                      (lengths in the project's units; spacing and margin default to
+//                                                      the cut-out bit plus 1/8 in or 3 mm); prints the utilization and
+//                                                      what didn't fit. Writes "<project> nested.nativecam" beside the
+//                                                      project unless -o or --in-place
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
@@ -86,9 +94,10 @@ guard let command = args.first else {
 }
 
 switch command {
-case "demo", "demo3d", "new":
+case "demo", "demo3d", "demonest", "new":
     guard args.count >= 2 else { fail("usage: nativecam-cli \(command) <out.nativecam>") }
-    let project = command == "demo3d" ? Project.demoRelief() : command == "new" ? Project() : Project.demoSign()
+    let project = command == "demo3d" ? Project.demoRelief() : command == "demonest" ? Project.demoNesting()
+        : command == "new" ? Project() : Project.demoSign()
     do {
         var url = URL(fileURLWithPath: args[1])
         try project.encoded().write(to: url)
@@ -357,6 +366,77 @@ case "sim":
     if let png = option("--png", in: args) {
         do { try HeightmapImage.writePNG(grid, to: URL(fileURLWithPath: png)); print("Wrote \(png)") } catch { fail("PNG: \(error)") }
     }
+
+case "nest":
+    let usage = "usage: nativecam-cli nest <project.nativecam> [-o out.nativecam | --in-place] [--spacing x] [--margin x]"
+        + " [--turns none|90|N] [--grain] [--seconds s] [--seed n] [--evaluations n] [--svg preview.svg]"
+    guard args.count >= 2 else { fail(usage) }
+    if option("-o", in: args) != nil && args.contains("--in-place") { fail("Pass -o or --in-place, not both.\n" + usage) }
+    let project = loadProject(args[1])
+    let u = project.displayUnits
+    func length(_ name: String) -> Double? {
+        guard let text = option(name, in: args) else { return nil }
+        guard let v = Double(text), v >= 0 else { fail("\(name) takes a length in \(u.symbol)") }
+        return u.toMM(v)
+    }
+    let job: NestJob
+    do { job = try NestJob.prepare(project, selection: []) } catch {
+        fail(error.localizedDescription)
+    }
+    var settings = job.defaultSettings
+    if let v = length("--spacing") { settings.spacing = v }
+    settings.edgeMargin = length("--margin") ?? settings.spacing
+    switch option("--turns", in: args) {
+    case nil, "90": settings.rotation = .quarterTurns
+    case "none", "0": settings.rotation = .none
+    case let t?:
+        guard let n = Int(t), n >= 1, n <= 72 else { fail("--turns takes none, 90 or a number of steps (1–72)") }
+        settings.rotation = .steps(n)
+    }
+    settings.keepGrain = args.contains("--grain")
+    if let t = option("--seconds", in: args) { settings.timeLimit = Double(t) ?? settings.timeLimit }
+    if let t = option("--seed", in: args) { settings.seed = UInt64(t) ?? settings.seed }
+    if let t = option("--evaluations", in: args) { settings.maxEvaluations = Int(t) }
+    let result = job.nest(settings)
+    let applied = job.apply(result, to: project, settings: settings)
+    print("Nested \(result.placedCount) of \(counted(job.parts.count, "part")) in \(String(format: "%.1f", result.elapsed)) s "
+          + "(\(counted(result.evaluations, "layout")) tried), spacing \(u.format(settings.spacing)) \(u.symbol), "
+          + "edge margin \(u.format(settings.edgeMargin)) \(u.symbol)")
+    print(String(format: "Parts fill %.0f%% of the %@ %@ of the sheet they use (%.0f%% of the whole sheet)", result.utilization * 100,
+                 u.format(result.usedLength), u.symbol, result.sheetUtilization * 100))
+    for part in job.parts where part.reach > settings.spacing + 1e-6 {
+        print("  \(part.name): “\(part.reachToolpath ?? "")” cuts \(u.format(part.reach)) \(u.symbol) outside it, so it keeps that far from the others")
+    }
+    for part in job.parts where (part.leadReach ?? 0) > settings.spacing + 1e-6 {
+        print("  \(part.name): “\(part.leadToolpath ?? "")” has lead-ins reaching \(u.format(part.leadReach ?? 0)) \(u.symbol); "
+              + "nearer another part they're shortened or left off")
+    }
+    for name in applied.leftInPlace { print("  Didn't fit, stays where it is: \(name)") }
+    for name in applied.movedAside { print("  Didn't fit, moved beside the sheet: \(name)") }
+    for note in job.notes { print("  \(note)") }
+    if let svg = option("--svg", in: args) {
+        let sheet = job.sheet
+        let pad = 10.0
+        func points(_ p: Polyline) -> String {
+            p.points.map { String(format: "%.2f,%.2f", $0.x, sheet.max.y - $0.y) }.joined(separator: " ")
+        }
+        let width = sheet.width + 2 * pad
+        var out = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"\(-pad) \(-pad) \(width) \(sheet.height + 2 * pad)\">\n"
+        out += "<rect x=\"0\" y=\"0\" width=\"\(sheet.width)\" height=\"\(sheet.height)\" fill=\"#f3ead8\" stroke=\"#8a7a5a\"/>\n"
+        for o in job.obstacles { for p in o.outlines { out += "<polygon points=\"\(points(p))\" fill=\"#bbb\" stroke=\"#777\"/>\n" } }
+        for (i, part) in job.parts.enumerated() {
+            guard let place = result.placements[i] else { continue }
+            for p in part.outlines { out += "<polygon points=\"\(points(place.apply(p)))\" fill=\"#7fb0e0\" stroke=\"#2a5d8f\"/>\n" }
+        }
+        out += "</svg>\n"
+        do { try out.write(toFile: svg, atomically: true, encoding: .utf8) } catch { fail("Can't write \(svg): \(error.localizedDescription)") }
+        print("Wrote \(svg)")
+    }
+    let url = URL(fileURLWithPath: args[1])
+    let out = option("-o", in: args) ?? (args.contains("--in-place") ? args[1]
+        : url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + " nested.nativecam").path)
+    do { try applied.project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
+    print("Wrote \(out)")
 
 default:
     fail("unknown command \(command)")

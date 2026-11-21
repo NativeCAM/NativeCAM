@@ -272,3 +272,62 @@ public struct SpiralSpec: Hashable, Codable, Sendable {
         }
     }
 }
+
+// MARK: Moving parts as one
+
+/// A turn about a point followed by a move, with no scaling: how Toolpaths ▸ Nest Parts moves a part, every shape in it
+/// together.
+public struct RigidMotion: Hashable, Sendable {
+    /// The point turned about, design coordinates.
+    public var pivot: Vec2
+    /// Degrees counter-clockwise.
+    public var rotation: Double
+    /// Where the pivot ends up.
+    public var position: Vec2
+
+    public init(pivot: Vec2, rotation: Double, position: Vec2) {
+        self.pivot = pivot
+        self.rotation = rotation
+        self.position = position
+    }
+
+    public static let identity = RigidMotion(pivot: .zero, rotation: 0, position: .zero)
+
+    public var transform: Transform2D {
+        Transform2D.translation(-pivot).then(.rotation(rotation.radians)).then(.translation(position))
+    }
+
+    public var isIdentity: Bool {
+        abs(rotation.truncatingRemainder(dividingBy: 360)) < 1e-9 && pivot.isApprox(position, tolerance: 1e-9)
+    }
+}
+
+public extension DesignShape {
+    /// The shape moved rigidly by `motion`: its position follows and its rotation turns with it, so every point of it
+    /// lands where `motion` takes it. Geometry, scale and layer stay as they are.
+    func moved(_ motion: RigidMotion) -> DesignShape {
+        var s = self
+        s.position = motion.transform.apply(position)
+        var r = (rotation + motion.rotation).truncatingRemainder(dividingBy: 360)
+        if r > 180 + 1e-9 { r -= 360 }
+        if r <= -180 + 1e-9 { r += 360 }
+        s.rotation = abs(r) < 1e-9 ? 0 : r
+        return s
+    }
+
+    /// The same motion in the shape's own coordinates (before its position, rotation and scale): for moving some of
+    /// an imported shape's vectors within it, or a point stored in its own coordinates.
+    func localMotion(_ motion: RigidMotion) -> Transform2D? {
+        guard let inverse = transform.inverted else { return nil }
+        return transform.then(motion.transform).then(inverse)
+    }
+
+    /// An imported shape (`.paths`) with the vectors at `indices` moved rigidly by `motion` and the rest left where
+    /// they are. Other kinds come back unchanged.
+    func movingPaths(_ indices: Set<Int>, by motion: RigidMotion) -> DesignShape {
+        guard case let .paths(paths) = kind, let local = localMotion(motion) else { return self }
+        var s = self
+        s.kind = .paths(paths.enumerated().map { indices.contains($0.offset) ? $0.element.transformed(local) : $0.element })
+        return s
+    }
+}

@@ -13,6 +13,7 @@
 - [V-carve inlays](#v-carve-inlays)
 - [Chamfers, flutes and prisms](#chamfers-flutes-and-prisms)
 - [Jobs bigger than the bed](#jobs-bigger-than-the-bed)
+- [Nesting parts](#nesting-parts)
 - [Rotary jobs](#rotary-jobs)
 - [Templates](#templates)
 
@@ -207,6 +208,39 @@ When the material is longer or wider than the machine reaches, NativeCAM cuts it
 **How cuts are split.** Each cut belongs to the tile whose share of the material it's in. A cut that crosses a tile line runs on into the overlap before it breaks, so it never breaks on the seam itself. Where a cut breaks, the tool lifts and the tile that cuts the rest comes back down onto the same point: straight down at the plunge rate, or ramping along the cut when the toolpath ramps in (and always for a surfacing bit). A toolpath that relies on another having cut first (a rest-machined pocket's larger bit, a V-carve's flat clearing, a 3D rough before its finish) runs on further at the tile lines, by both bits' radii, so the later bit never meets material the earlier one leaves for the next tile; Checks says if the overlap is too narrow for that. 3D and V-carve paths split the same way. The moves between cuts are worked out again from the material as the tiles really leave it.
 
 **⌘R** simulates the tiles one after another with the material in place, so the finished part is the whole job. **Tiles** in the simulation bar jumps to the start of any tile. Rotary jobs can't be tiled.
+
+## Nesting parts
+
+**Toolpaths ▸ Nest Parts…** arranges parts on the material sheet by their true shapes, so they use as little of it as they can: what's left over is one strip across the sheet, ready for the next job. It's for sheet goods: cabinet sides and shelves, brackets, signs, flat-pack furniture. **File ▸ New Demo Shelf Parts (Nesting)** opens a shelf's parts laid out loosely on a 48" × 48" sheet to try it on.
+
+<table>
+  <tr>
+    <td width="50%"><img src="images/nest-before.png" alt="The demo shelf's parts laid out loosely on a 48 inch sheet, with their toolpaths and two clamps at the left edge"></td>
+    <td width="50%"><img src="images/nest-after.png" alt="The same parts after Nest Parts, packed toward the sheet's left edge round the clamps, their toolpaths following them"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>The demo's parts as drawn</sub></td>
+    <td align="center"><sub>After Nest Parts: a third of the sheet left in one piece</sub></td>
+  </tr>
+</table>
+
+1. **Choose the parts.** A part is a closed outline and everything inside or overlapping it: a cabinet side with its shelf-pin holes, a sign with its lettering. Select any shape of the parts you want to nest, or nothing to nest them all. An imported file with every part on one layer comes in as one shape, and each separate outline in it is a part of its own. Open vectors on their own (an engraved line nothing surrounds) aren't nested.
+2. **Choose Toolpaths ▸ Nest Parts….** A sheet shows the parts on the material, and the search starts at once, trying other orders and turns for the time you choose and showing the best layout so far.
+   - **Spacing** is the least gap between parts, and between a part and a clamp or a part that stays put. It starts at the diameter of the largest bit that cuts the parts out plus 1/8 in (3 mm in a metric job), so the bits cutting two neighbours never cut into each other's parts. **Edge margin** is the least gap to the sheet's edges and starts the same.
+   - **Turns**: **Keep as drawn**, **90° steps** or **Finer steps** (2 to 72 evenly spaced turns). **Keep the grain direction** only turns parts end for end (0° or 180°), so the grain runs the way they're drawn.
+   - **Search for** 2, 5, 10 or 30 seconds. **Stop** keeps the best layout found so far. Changing a setting starts the search again.
+3. **Check the layout.** Below the preview: how many parts fit, how much of the strip of sheet they use they fill, and how big a piece is left.
+4. **Apply.** The parts move to the layout shown, every shape in a part together, and their toolpaths follow and are worked out again. **⌘Z** puts them all back.
+
+<p align="center"><img src="images/nest-parts-sheet.png" width="720" alt="The Nest Parts sheet: spacing, edge margin, turns and search time on the left, the demo shelf's parts nested on the sheet on the right, with how much of the sheet they use"></p>
+
+**What parts keep clear of.** Parts that aren't nested stay where they are, and the nested ones keep the spacing from them, from clamps and keep-outs and from the sheet's edges. A part whose toolpaths cut further outside it than the spacing (a 3D roughing set to clear past its vectors, say) keeps that far from everything else; the sheet says which. Lead-ins don't count: near another part a profile's lead-ins are shortened or left off, as they always are, and **Checks** lists any left off. The sheet notes when lead-ins are longer than the spacing allows, so you can widen it.
+
+**Parts that don't fit** are listed. Each stays where it is, unless a nested part now takes its place, when it goes beside the sheet, past its right edge (its toolpaths are then off the material: cut it from the next sheet, or turn them off). Nesting fills one sheet.
+
+**Turns and toolpaths.** A part turns about its own centre; its shapes keep their own geometry and settings, corner choices made on the canvas included. A raster pocket or 3D raster keeps its angle on the sheet rather than turning with the part.
+
+Rotary jobs can't be nested (nest the parts in a flat job, then copy them over). A tiled job is nested on the whole material. `nativecam-cli nest` does the same from the [command line](command-line.md#commands).
 
 ## Rotary jobs
 
