@@ -69,7 +69,7 @@ scripts/build-app.sh --open
 
 This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launches it. Drag it to `/Applications` to keep it; leave off `--open` to build without launching.
 
-1. Choose **File ▸ New Demo Sign Project** (2.5D), **File ▸ New Demo Relief Project (3D)**, **File ▸ New Demo Rotary Project (3D)** (a chess pawn turned on the rotary) or **File ▸ New Demo Table Leg (Rotary 3D)** (a leg roughed from a square bar and finished) to open a ready-made job. All four are also saved in [`examples/`](examples/) with their G-code.
+1. Choose **File ▸ New Demo Sign Project** (2.5D), **File ▸ New Demo Relief Project (3D)**, **File ▸ New Demo Rotary Project (3D)** (a chess pawn turned on the rotary) or **File ▸ New Demo Table Leg (Rotary 3D)** (a leg roughed from a square bar and finished) to open a ready-made job. All four are also saved in [`examples/`](examples/) with their G-code. The two rotary demos leave the rotary axis's **Turn speed** unset, so they open with a chip-load warning near the axis; see [Rotary jobs](docs/using-nativecam.md#rotary-jobs).
 2. Press **⌘R** to simulate, and scrub the timeline at the bottom of the window.
 3. Set up your machine under **Settings ▸ Machine ▸ Set Up a Machine…** (new documents start on an Avid PRO6060 with Mach4), then press **⌘E** to export.
 

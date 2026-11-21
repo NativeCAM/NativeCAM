@@ -579,7 +579,7 @@ public enum GCodeCheck {
             }
             if e.turnsA {
                 if let problem = wrappedFeedProblem(w.motion, start: w.start, startA: w.startA, expected: e, dialect: dialect,
-                                                    units: units, feedTolerance: feedTol) {
+                                                    units: units, feedTolerance: feedTol, turnSpeed: RotaryWrap.turnSpeed(project.machine)) {
                     fail(line, problem)
                 }
             } else if w.motion.inverseTime != nil {
@@ -625,10 +625,11 @@ public enum GCodeCheck {
     }
 
     /// What's wrong with the feed of a wrapped move that turns the blank, read back from the file; nil when it gives
-    /// the toolpath's feed at the tool tip. The tip's path is worked out from the coordinates as written, the way the
-    /// post does, so only a wrong value (not rounding) shows.
+    /// the toolpath's feed at the tool tip, no faster than the blank turns at `turnSpeed` (degrees per minute). The tip's
+    /// path is worked out from the coordinates as written, the way the post does, so only a wrong value (not rounding)
+    /// shows.
     static func wrappedFeedProblem(_ m: Motion, start: Vec3, startA: Double?, expected e: ExpectedMove, dialect: Dialect,
-                                   units: LengthUnit, feedTolerance: Double) -> String? {
+                                   units: LengthUnit, feedTolerance: Double, turnSpeed: Double) -> String? {
         guard let a0 = startA, let a1 = m.a else { return "Turns the blank without a known A position (“\(e.toolpath)”)." }
         let length = RotaryWrap.tipLength(x0: start.x, r0: start.z, degrees0: a0, x1: m.end.x, r1: m.end.z, degrees1: a1)
         switch RotaryWrap.feedMode(dialect) {
@@ -636,13 +637,14 @@ public enum GCodeCheck {
             guard let f = m.inverseTime else {
                 return "Turns the blank at an ordinary feed, where “\(e.toolpath)” needs inverse time (G93)."
             }
-            let want = RotaryWrap.inverseTime(length: length, feed: e.feed)
+            let want = RotaryWrap.inverseTime(length: length, feed: e.feed, degrees: a1 - a0, turnSpeed: turnSpeed)
             if abs(f - want) > 0.5 * pow(10, -Double(RotaryWrap.inverseTimeDecimals)) + 1e-9 * want {
                 return "Inverse-time F\(String(format: "%.4f", f)) reads back where “\(e.toolpath)” needs F\(String(format: "%.4f", want))."
             }
         case let .perMinute(rule)?:
             let want = units.toMM(RotaryWrap.perMinuteFeed(rule, dx: units.fromMM(m.end.x - start.x), dz: units.fromMM(m.end.z - start.z),
-                                                           da: a1 - a0, length: units.fromMM(length), feed: units.fromMM(e.feed)))
+                                                           da: a1 - a0, length: units.fromMM(length), feed: units.fromMM(e.feed),
+                                                           turnSpeed: turnSpeed))
             if abs(m.feed - want) > feedTolerance {
                 return "Reads back at F\(String(format: "%.1f", units.fromMM(m.feed))) where “\(e.toolpath)” needs "
                     + "F\(String(format: "%.1f", units.fromMM(want))) to turn the blank at its feed."

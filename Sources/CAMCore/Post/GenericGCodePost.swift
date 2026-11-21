@@ -306,7 +306,8 @@ public struct GenericGCodePost: PostProcessor {
     private func wrappedWriter(_ rotary: RotaryOutput) -> WrappedWriter? {
         guard let feeds = RotaryWrap.feedMode(dialect) else { return nil }
         return WrappedWriter(stock: stock, rotary: rotary, units: units, decimals: decimals, feedDecimals: feedDecimals,
-                             feeds: feeds, rapidWord: "G0", feedWord: "G1", dwell: { dwell($0) })
+                             feeds: feeds, turnSpeed: RotaryWrap.turnSpeed(machine), rapidWord: "G0", feedWord: "G1",
+                             dwell: { dwell($0) })
     }
 
     // MARK: Numbers

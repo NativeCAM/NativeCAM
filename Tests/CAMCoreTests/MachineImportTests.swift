@@ -108,6 +108,62 @@ struct MachineImportTests {
         #expect(i.setting(.accelerationXY)?.source.note?.contains("Motor0/Motor1/Motor3 MaxAccel ÷ CountsPerUnit") == true)
     }
 
+    /// #74: the A axis (Axis3) of a Mach4 Machine.ini counts in degrees whatever the linear units, and its motor's
+    /// velocity is the rotary axis's Turn speed, with its acceleration in the import's notes. Avid publishes no speed
+    /// for its rotary, so a machine's own Machine.ini is where it comes from. It goes to a rotary axis the machine has,
+    /// and never turns one on.
+    @Test func mach4MachineIniGivesTheRotaryTurnSpeed() throws {
+        // 100 counts per degree: 36,000 counts/s is 360°/s, 21,600°/min; 60,000 counts/s² is 600°/s². The linear axes
+        // are in inches.
+        let ini = """
+        [Preferences]
+        setupunits=200
+        [Axis0]
+        Enabled=1
+        ChildMotor0=Motor0
+        [Axis3]
+        Enabled=1
+        ChildMotor0=Motor4
+        [Motor0]
+        Enabled=1
+        CountsPerUnit=2000.000000
+        MaxVelocity=20000.000000
+        MaxAccel=30000.000000
+        [Motor4]
+        Enabled=1
+        CountsPerUnit=100.000000
+        MaxVelocity=36000.000000
+        MaxAccel=60000.000000
+        """
+        let i = try MachineSettingsImporter.read(ini)
+        let turn = try #require(i.setting(.turnSpeed))
+        #expect(near(turn.value, 21_600))
+        #expect(turn.display(.inch) == "21,600°/min")
+        #expect(turn.source.note?.contains("Motor4 MaxVelocity ÷ CountsPerUnit (degrees) × 60") == true)
+        let note = i.notes.first { $0.contains("A axis") } ?? ""
+        #expect(note.contains("21,600°/min") && note.contains("600°/s²") && note.contains("Turn speed"), "\(note)")
+        // The X motor still reads in inches.
+        #expect(near(value(i, .rapidXY), 600.inch))
+
+        // Onto a machine with a rotary axis: its turn speed, and where it came from.
+        var rotary = MachineProfile.avidPRO6060
+        rotary.rotary = RotaryAxis()
+        #expect(turn.current(rotary) == nil)
+        i.apply(to: &rotary, keys: Set(i.settings.map(\.key)))
+        #expect(rotary.rotary?.turnSpeed == 21_600)
+        #expect(rotary.source(of: .turnSpeed)?.kind == .controllerSettings)
+        #expect(turn.current(rotary) == 21_600)
+        // Without one, the import doesn't add one.
+        var flat = MachineProfile.avidPRO6060
+        #expect(!MachineImport.Key.turnSpeed.applies(to: flat))
+        i.apply(to: &flat, keys: Set(i.settings.map(\.key)))
+        #expect(flat.rotary == nil)
+        #expect(flat.source(of: .turnSpeed) == nil)
+        // An A axis that's turned off gives none.
+        let off = try MachineSettingsImporter.read(ini.replacingOccurrences(of: "[Axis3]\nEnabled=1", with: "[Axis3]\nEnabled=0"))
+        #expect(off.setting(.turnSpeed) == nil)
+    }
+
     @Test func linuxCNCIni() throws {
         let ini = """
         [EMC]

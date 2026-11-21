@@ -358,6 +358,40 @@ struct RotaryOutput {
     /// Turns the program end winds back at most, at A's rapid rate.
     static let maxUnwindTurns = 10
 
+    /// The A values a program of `paths` cuts at, as the posts write them (the Avid post's program-extents comment): a
+    /// wrapped toolpath's feed moves, each toolpath started a whole number of turns on from where the one before left
+    /// the blank (`WrappedWriter.approach`), and the angle each face is cut at. nil when the program writes no A for a
+    /// cut (a blank turned by hand). `units` and `decimals` are the post's coordinates', which decide the moves it
+    /// writes.
+    func cutRange(_ paths: [Toolpath], stock: Stock, units: LengthUnit, decimals: Int) -> ClosedRange<Double>? {
+        struct State: WrapModalState { var x: Double?, y: Double?, z: Double?, feed: Double?, a: Double? }
+        let writer = WrappedWriter(stock: stock, rotary: self, units: units, decimals: decimals, feedDecimals: 1, feeds: .inverseTime,
+                                   turnSpeed: .infinity, rapidWord: "G0", feedWord: "G1", dwell: { _ in "" })
+        var state = State()
+        var lastA: Double?
+        var range: ClosedRange<Double>?
+        func cuts(_ r: ClosedRange<Double>) {
+            range = range.map { min($0.lowerBound, r.lowerBound)...max($0.upperBound, r.upperBound) } ?? r
+        }
+        for tp in paths {
+            // Every toolpath starts from safe Z.
+            state.z = writer.round(stock.toWork(Vec3(0, 0, stock.clearanceHeight)).z)
+            if tp.wrapDiameter != nil {
+                let approach = writer.approach(tp, state: &state, after: lastA)
+                if let a = writer.motions(tp, state: &state, offset: approach.offset).cutA { cuts(a) }
+                lastA = state.a ?? lastA
+                continue
+            }
+            if !manual, let angle = tp.indexAngle {
+                let target = Self.nearestTurn(value(angle), after: lastA)
+                state.a = target
+                lastA = target
+            }
+            if let a = state.a, tp.motions.contains(where: { $0.kind != .rapid && $0.kind != .dwell }) { cuts(a...a) }
+        }
+        return range
+    }
+
     /// The note before the end of a program that leaves A on a whole turn other than 0.
     static func homeNote(_ home: Double, avid: Bool) -> String? {
         guard home != 0 else { return nil }

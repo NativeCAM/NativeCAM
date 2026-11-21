@@ -32,7 +32,7 @@ Controller settings are the only files that hold a machine's real per-axis speed
 
 | Source | What NativeCAM takes from it |
 |---|---|
-| Mach4 `Machine.ini` | Motor velocity and acceleration (stored in counts, divided by `CountsPerUnit`), axis-to-motor mapping (a gantry takes its slower motor), soft-limit travel, the spindle range and the G-code units |
+| Mach4 `Machine.ini` | Motor velocity and acceleration (stored in counts, divided by `CountsPerUnit`), axis-to-motor mapping (a gantry takes its slower motor), soft-limit travel, the spindle range and the G-code units. The A motor's velocity (in degrees, whatever the linear units) becomes the rotary axis's **Turn speed**, when the machine's rotary axis is on; its acceleration is shown in the notes but not used yet. Avid publishes no speed for its rotary: its Mach4 setup writes the A motor's tuning when you choose the rotary, so your own `Machine.ini` is where it comes from. |
 | Grbl / grblHAL `$$` | `$110`–`$112` rates, `$120`–`$122` accelerations, `$130`–`$132` travel, `$11` junction deviation, `$30`/`$31` spindle range, with notes for laser mode, soft limits off and grblHAL's `$341` tool-change mode. Grbl 0.8's older numbering is refused. |
 | LinuxCNC INI | `[AXIS_X]` (or `[AXIS_0]`) limits, velocities and accelerations (per second), `LINEAR_UNITS`, `[SPINDLE_0]` |
 | FluidNC `config.yaml` | The `axes` map's rates, accelerations and travel, the spindle `speed_map`, and whether an ATC is configured |

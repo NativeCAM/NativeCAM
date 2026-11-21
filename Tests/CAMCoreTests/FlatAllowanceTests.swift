@@ -17,15 +17,28 @@ struct FlatAllowanceTests {
         return t
     }
 
-    /// 3D rotary finishing a turned part with a shoulder: 8 mm from the axis for 40 mm, then 16 mm for 40 mm, from a
-    /// 36 mm round blank. Simulated, the finish (and the layers down to it) never cuts within the allowance of the
-    /// shoulder's face or anywhere else on the part, and still finishes the small diameter to the allowance up to a
-    /// stepover from that. (The spiral passes each angle once a turn, so the last turn before the tool has to climb onto
-    /// the shoulder can be up to a stepover short of it, as it always could.)
-    @Test func aRotaryFinishKeepsItsAllowanceBesideAShoulder() throws {
+    /// The shoulder cases: a pattern, its stepover (a fraction of the bit) and whether the small diameter is at the
+    /// tailstock end. The rings are 3.08 mm apart, which puts the last before the shoulder about 2.5 mm short of where
+    /// the tool has to climb onto it (or past where it comes down off it).
+    static let shoulders: [(pattern: RotaryFinishParams.Pattern, stepover: Double, mirrored: Bool)] = [
+        (.spiral, 0.1, false), (.rings, 0.4882, false), (.spiral, 0.1, true), (.rings, 0.4882, true),
+    ]
+
+    /// 3D rotary finishing a turned part with a shoulder: 8 mm from the axis for 40 mm, then 16 mm for 40 mm (or the
+    /// other way round), from a 36 mm round blank. Simulated, the finish (and the layers down to it) never cuts within
+    /// the allowance of the shoulder's face or anywhere else on the part, and finishes the small diameter to the
+    /// allowance right up to the allowance from the shoulder, as a spiral and as rings, coming to the shoulder from
+    /// either side. A spiral passes each angle once a turn and rings sit at fixed stations, so the last pass before the
+    /// flat bottom has to climb onto the shoulder (or the first after it comes down) could be up to a stepover from it,
+    /// leaving a band that wide (#72): each now cuts a turn at the shoulder's foot as well. The blank still only ever
+    /// turns one way.
+    @Test(arguments: shoulders.indices)
+    func aRotaryFinishKeepsItsAllowanceBesideAShoulder(_ n: Int) throws {
+        let (pattern, stepover, mirrored) = Self.shoulders[n]
         let a = Self.allowance
-        let mesh = MeshModel.revolved(name: "Shoulder", profile: [(0, 8), (40, 8), (40, 16), (80, 16)], segments: 256)
-        let params = RotaryFinishParams(allowance: a)
+        let profile: [(x: Double, r: Double)] = mirrored ? [(0, 16), (40, 16), (40, 8), (80, 8)] : [(0, 8), (40, 8), (40, 16), (80, 16)]
+        let mesh = MeshModel.revolved(name: "Shoulder", profile: profile, segments: 256)
+        let params = RotaryFinishParams(pattern: pattern, stepoverFraction: stepover, allowance: a)
         let p = Rotary3DTests.job(mesh: mesh, blank: RotaryStock(diameter: 36, length: 120), params: params, tool: Self.endMill)
         let job = CAMEngine.generate(p)
         #expect(!job.hasErrors, "\(job.issues.map(\.message))")
@@ -35,7 +48,16 @@ struct FlatAllowanceTests {
         #expect(s.rapidCollisions.isEmpty)
         let g = try #require(s.radialGrid)
         let blank = try #require(p.stock.rotary)
-        // The part runs from 20 to 100 along the blank, with its shoulder at 60.
+        // A only ever increases.
+        var y = finish.start.y, back = 0
+        for m in finish.motions where m.kind != .dwell {
+            if m.end.y < y - 1e-6 { back += 1 }
+            y = m.end.y
+        }
+        #expect(back == 0)
+        // The small diameter, from a tool radius past its end right up to the allowance from the shoulder (less a
+        // cell of the grid). The part runs from 20 to 100 along the blank, with its shoulder at 60.
+        let small = mirrored ? (60 + a + 0.25)...96.0 : 24.0...(60 - a - 0.25)
         var tri: [Double] = []
         for m in p.shapes where m.modelSpec != nil {
             m.forEachBlankTriangle { a, b, c in tri += [a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z] }
@@ -55,9 +77,7 @@ struct FlatAllowanceTests {
                     gouge = inside
                     gougeAt = "x \(x) angle \(angle): \(r) under \(limit)"
                 }
-                // The small diameter, from a tool radius past its end up to a stepover short of the allowance from
-                // the shoulder.
-                guard x > 24, x < 60 - a - params.stepover(Self.endMill) - 0.25 else { continue }
+                guard small.contains(x) else { continue }
                 if r - (8 + a) > left {
                     left = r - (8 + a)
                     leftAt = "x \(x) angle \(angle): \(r)"
