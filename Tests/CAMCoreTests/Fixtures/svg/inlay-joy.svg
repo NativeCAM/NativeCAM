@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written for NativeCAM's inlay tests (GPL-3.0-or-later). JOY in block capitals 2 in tall, with strokes 0.42 in
+     wide, on a 7 x 4.5 in board (100 user units per inch). At a 0.2 in pocket depth with a 60 degree V-bit, a 1/8 in
+     end mill fits the pocket's flats and a 1/4 in barely does; round the letters, a whole-board plug has a large open
+     flat with narrow gaps between and inside the letters. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="7in" height="4.5in" viewBox="0 0 700 450">
+  <g id="JOY">
+    <path d="M 120 125 L 202 125 L 202 325 L 90 325 L 90 240 L 132 240 L 132 283 L 160 283 L 160 167 L 120 167 Z"/>
+    <path fill-rule="evenodd" d="M 410 225 A 80 100 0 1 1 250 225 A 80 100 0 1 1 410 225 Z M 368 225 A 38 58 0 1 0 292 225 A 38 58 0 1 0 368 225 Z"/>
+    <path d="M 440 125 L 488 125 L 525 190 L 562 125 L 610 125 L 546 232 L 546 325 L 504 325 L 504 232 Z"/>
+  </g>
+</svg>
