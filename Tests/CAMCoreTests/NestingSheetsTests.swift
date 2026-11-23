@@ -170,7 +170,6 @@ struct NestingSheetsTests {
         #expect(a.insideOf == b.insideOf)
         #expect(a.sheetCount == b.sheetCount)
         #expect(!a.inHoles.isEmpty)
-        #expect(Self.problems(parts, a, sheet: Self.small, settings: s).isEmpty || true)
         #expect(Nesting.violations(parts, placements: a.placements, sheet: Self.small, settings: s).isEmpty)
     }
 }
@@ -399,6 +398,28 @@ struct NestSheetsJobTests {
         let again = try Self.nested(p)
         #expect(again.sheetCount == 1 && again.project.additionalSheets.isEmpty)
         #expect(again.project.formatVersion == 1)
+    }
+
+    @Test func theFramesDemoNestsOntoTwoSheetsWithPartsInTheWindows() throws {
+        let p = Project.demoNestingSheets()
+        let job = try NestJob.prepare(p, selection: [])
+        // The frames' windows take parts; the top's hand hold, cut by its own profile first, takes none.
+        let frames = job.parts.filter { $0.name.hasPrefix("Frame") }
+        #expect(frames.count == 2 && frames.allSatisfy { $0.holes.count == 1 && $0.holes[0].accepts?.isEmpty == false })
+        let top = try #require(job.parts.first { $0.name == "Top" })
+        #expect(top.holes.allSatisfy { $0.accepts?.isEmpty == true })
+        var s = job.defaultSettings
+        s.maxSheets = 3
+        s.maxEvaluations = 20
+        let r = job.nest(s)
+        #expect(r.placedCount == job.parts.count)
+        #expect(r.sheetCount == 2)
+        #expect(!r.inHoles.isEmpty)
+        #expect(r.inHoles.allSatisfy { r.insideOf[$0].map { job.parts[$0].name.hasPrefix("Frame") } ?? false })
+        #expect(job.check(r, settings: s).isEmpty)
+        let applied = job.apply(r, to: p, settings: s).project
+        #expect(OperationScheduler.optimize(applied).outOfOrder.isEmpty)
+        #expect(!CAMEngine.generate(applied).hasErrors)
     }
 
     // MARK: Saved two-sheet job

@@ -6,6 +6,7 @@ import Foundation
 //   nativecam-cli demo <out.nativecam>                       write the demo sign project
 //   nativecam-cli demo3d <out.nativecam>                     write the 3D relief demo project
 //   nativecam-cli demonest <out.nativecam>                   write the shelf-parts demo project (for Nest Parts)
+//   nativecam-cli demosheets <out.nativecam>                 write the shelf, frames and coasters demo (more sheets, part in part)
 //   nativecam-cli new <out.nativecam>                        write an empty project (default PRO6060 setup)
 //   nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]
 //                                                      generate toolpaths + G-code, check the file against the
@@ -98,10 +99,10 @@ guard let command = args.first else {
 }
 
 switch command {
-case "demo", "demo3d", "demonest", "new":
+case "demo", "demo3d", "demonest", "demosheets", "new":
     guard args.count >= 2 else { fail("usage: nativecam-cli \(command) <out.nativecam>") }
     let project = command == "demo3d" ? Project.demoRelief() : command == "demonest" ? Project.demoNesting()
-        : command == "new" ? Project() : Project.demoSign()
+        : command == "demosheets" ? Project.demoNestingSheets() : command == "new" ? Project() : Project.demoSign()
     do {
         var url = URL(fileURLWithPath: args[1])
         try project.encoded().write(to: url)

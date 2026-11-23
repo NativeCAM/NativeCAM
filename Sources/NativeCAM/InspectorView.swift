@@ -50,8 +50,19 @@ struct SetupInspector: View {
                 .help("Used for chip-load recommendations and warnings")
                 RotaryBlankRows(project: $project, units: units)
                 if project.stock.rotary == nil {
-                    LengthField(title: "Width (X)", mm: $project.stock.width, units: units, minimum: 1)
-                    LengthField(title: "Height (Y)", mm: $project.stock.height, units: units, minimum: 1)
+                    LengthField(title: project.sheetCount > 1 ? "Sheet 1 width (X)" : "Width (X)", mm: $project.stock.width, units: units, minimum: 1)
+                    LengthField(title: project.sheetCount > 1 ? "Sheet 1 height (Y)" : "Height (Y)", mm: $project.stock.height, units: units, minimum: 1)
+                    if project.sheetCount > 1 {
+                        // Nest Parts made the other sheets; they share one size.
+                        let next = project.sheetSize(1)
+                        let others = project.sheetCount == 2 ? "Sheet 2" : "Sheets 2–\(project.sheetCount)"
+                        LengthField(title: "\(others) width", mm: Binding(get: { next.x }, set: { w in
+                            for i in project.additionalSheets.indices { project.additionalSheets[i].width = w }
+                        }), units: units, help: "Width of every sheet after the first (Toolpaths ▸ Nest Parts put parts on them)", minimum: 1)
+                        LengthField(title: "\(others) height", mm: Binding(get: { next.y }, set: { h in
+                            for i in project.additionalSheets.indices { project.additionalSheets[i].height = h }
+                        }), units: units, help: "Height of every sheet after the first", minimum: 1)
+                    }
                     LengthField(title: "Thickness (Z)", mm: $project.stock.thickness, units: units,
                                 help: "Measure your material with calipers; through-cuts are set relative to this.", minimum: 0.1)
                 } else {

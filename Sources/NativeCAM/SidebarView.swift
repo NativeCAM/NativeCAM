@@ -24,7 +24,14 @@ struct SidebarView: View {
 
             Section {
                 ForEach(Array(project.shapes.enumerated()), id: \.element.id) { index, shape in
-                    Label(shape.name, systemImage: shape.isKeepOut ? "exclamationmark.shield" : icon(for: shape.kind))
+                    HStack {
+                        Label(shape.name, systemImage: shape.isKeepOut ? "exclamationmark.shield" : icon(for: shape.kind))
+                        // On a job of several sheets, the sheet each shape is on (clamps are on every sheet).
+                        if project.sheetCount > 1 && !shape.isKeepOut {
+                            Spacer(minLength: 4)
+                            Text("Sheet \(project.sheetIndex(of: shape) + 1)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                         .tag(SidebarItem.shape(shape.id))
                         .cardRow(index, of: project.shapes.count)
                         .contextMenu {
