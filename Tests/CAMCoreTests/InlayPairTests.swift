@@ -367,15 +367,15 @@ struct InlayPairTests {
                        notes: "Saved by format 14: Add Toolpath ▸ Inlay… with a whole-board plug and raster flat clearing; the plug is the side included.")
     }
 
-    @Test func wholeBoardInlaySavedByFormatFourteenStillDecodesAndPosts() throws {
-        let p = try GoldenPostTests.savedProject("inlay-board-v14", make: Self.savedBoardInlay)
+    @Test func inlayUpgradesSavedByFormatFourteenStillDecodeAndPost() throws {
+        let p = try GoldenPostTests.savedProject("inlay-upgrades-v14", make: Self.savedBoardInlay)
         #expect(p.formatVersion == 14)
         #expect(p == Self.savedBoardInlay())
         #expect(p.operations.map(\.name) == ["Inlay pocket", "Inlay plug"])
         let job = CAMEngine.generate(p)
         #expect(!job.issues.contains { $0.severity != .info }, "\(job.issues.map(\.message))")
         let data = GoldenPostTests.post(p)
-        try GoldenPostTests.check(data, golden: "decoded-inlay-board-v14")
+        try GoldenPostTests.check(data, golden: "decoded-inlay-upgrades-v14")
         let issues = GCodeCheck.run(String(decoding: data, as: UTF8.self), toolpaths: job.toolpaths, project: p, dialect: .avidMach4)
         #expect(issues.filter { $0.severity != .info }.isEmpty, "\(issues.map(\.text))")
         #expect(InlayTests.lowRapids(job.toolpaths).isEmpty)
