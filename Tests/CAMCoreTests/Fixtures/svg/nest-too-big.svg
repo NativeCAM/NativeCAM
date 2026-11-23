@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- NativeCAM nesting fixture (original drawing, GPL-3.0-or-later like the project), millimetres.
+     A 700 x 120 rail, longer than a 600 x 400 sheet either way round, and three 100 mm squares that fit. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="720mm" height="300mm" viewBox="0 0 720 300">
+  <rect x="10" y="10" width="700" height="120"/>
+  <rect x="10" y="180" width="100" height="100"/>
+  <rect x="140" y="180" width="100" height="100"/>
+  <rect x="270" y="180" width="100" height="100"/>
+</svg>

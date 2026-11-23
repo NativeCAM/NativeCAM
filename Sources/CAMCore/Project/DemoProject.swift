@@ -384,3 +384,35 @@ public extension Project {
                        operations: ops)
     }
 }
+
+// MARK: Shelf, frames and coasters (nesting onto sheets, part in part)
+
+public extension Project {
+    /// The shelf demo's parts, with two picture frames (16" × 12", a 12" × 8" window cut from inside by the same
+    /// profile) and six 3.5" coasters, on a 24" × 48" sheet: too many for one sheet, and the brackets and coasters fit in
+    /// the frames' windows. For trying Toolpaths ▸ Nest Parts onto more than one sheet with parts in holes.
+    static func demoNestingSheets() -> Project {
+        var p = demoNesting()
+        p.name = "Demo shelf, frames and coasters"
+        p.stock.width = 24.inch
+        func rect(_ w: Double, _ h: Double) -> Polyline {
+            Polyline([Vec2(-w / 2, -h / 2), Vec2(w / 2, -h / 2), Vec2(w / 2, h / 2), Vec2(-w / 2, h / 2)], closed: true)
+        }
+        var added: [DesignShape] = []
+        for (i, y) in [10.0, 30.0].enumerated() {
+            var frame = DesignShape(id: demoID(100 + i), name: "Frame \(i + 1)",
+                                    kind: .paths([rect(16.inch, 12.inch), rect(12.inch, 8.inch)]), position: Vec2(60.inch, y.inch))
+            frame.layer = "Parts"
+            added.append(frame)
+        }
+        for i in 0..<6 {
+            added.append(DesignShape(id: demoID(110 + i), name: "Coaster \(i + 1)", kind: .circle(radius: 1.75.inch),
+                                     position: Vec2((80 + 5 * Double(i % 3)).inch, (10 + 5 * Double(i / 3)).inch)))
+        }
+        p.shapes += added
+        if let cut = p.operations.firstIndex(where: { $0.id == demoID(82) }) {
+            p.operations[cut].shapeIDs += added.map(\.id)
+        }
+        return p
+    }
+}

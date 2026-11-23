@@ -1,7 +1,8 @@
 import Foundation
 
 /// The G-code files a job is saved as, exactly as File ▸ Export G-code (and the command-line tool) saves them: one
-/// file, or one per tool where the controller can't stop for a tool change, and on a tiled job that for every tile.
+/// file, or one per tool where the controller can't stop for a tool change, on a tiled job that for every tile, and on
+/// a job nested onto several sheets that for every sheet.
 public enum JobExport {
     public struct File: Sendable {
         /// Added to the file's name, e.g. " - tile 1 of 2" or " 2 of 3 - T5"; nil for a job saved as one file.
@@ -13,11 +14,34 @@ public enum JobExport {
         public var project: Project
         /// The tile the file is for, from 0; nil when the job isn't tiled.
         public var tile: Int?
+        /// The sheet the file is for, from 0; nil on a job of one sheet.
+        public var sheet: Int?
     }
 
     /// The files for `job`, raised for an air cut when `airCut` (mm) is set; nil when the machine has no post.
     public static func files(_ project: Project, job: JobResult, airCut: Double? = nil, date: Date = Date())
         -> (files: [File], post: any PostProcessor)? {
+        if let sheets = job.sheets {
+            // Each sheet as a job of its own (`Project.sheetProject`): its files, named for the sheet. A sheet with nothing
+            // to cut gets none (the others keep their numbers).
+            var out: [File] = []
+            var anyPost: (any PostProcessor)?
+            for s in sheets where s.cutsAnything {
+                guard let own = files(s.project, job: s.job, airCut: airCut, date: date) else { return nil }
+                anyPost = anyPost ?? own.post
+                for f in own.files {
+                    var rest = f.suffix ?? ""
+                    if airCut != nil, rest.hasPrefix(" (air cut)") { rest = String(rest.dropFirst(" (air cut)".count)) }
+                    if !rest.isEmpty && !rest.hasPrefix(" - ") { rest = " -" + rest }
+                    var file = f
+                    file.suffix = (airCut == nil ? "" : " (air cut)") + Project.sheetSuffix(s.index, of: sheets.count) + rest
+                    file.sheet = s.index
+                    out.append(file)
+                }
+            }
+            guard let post = anyPost else { return nil }
+            return (out, post)
+        }
         guard let tiled = job.tiling else {
             if let height = airCut {
                 guard let air = AirCut.files(project, toolpaths: job.toolpaths, height: height, date: date) else { return nil }

@@ -24,7 +24,14 @@ struct SidebarView: View {
 
             Section {
                 ForEach(Array(project.shapes.enumerated()), id: \.element.id) { index, shape in
-                    Label(shape.name, systemImage: shape.isKeepOut ? "exclamationmark.shield" : icon(for: shape.kind))
+                    HStack {
+                        Label(shape.name, systemImage: shape.isKeepOut ? "exclamationmark.shield" : icon(for: shape.kind))
+                        // On a job of several sheets, the sheet each shape is on (clamps are on every sheet).
+                        if project.sheetCount > 1 && !shape.isKeepOut {
+                            Spacer(minLength: 4)
+                            Text("Sheet \(project.sheetIndex(of: shape) + 1)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                         .tag(SidebarItem.shape(shape.id))
                         .cardRow(index, of: project.shapes.count)
                         .contextMenu {
@@ -175,8 +182,12 @@ struct SidebarView: View {
     }
 
     private func delete(shapes ids: Set<UUID>) {
-        project.shapes.removeAll { ids.contains($0.id) }
-        for i in project.operations.indices { project.operations[i].shapeIDs.removeAll { ids.contains($0) } }
+        var p = project
+        p.shapes.removeAll { ids.contains($0.id) }
+        for i in p.operations.indices { p.operations[i].shapeIDs.removeAll { ids.contains($0) } }
+        // A last sheet left with nothing on it goes too (in the same Undo step).
+        p.removeEmptySheets()
+        project = p
         workspace.selection = [.setup]
     }
 
@@ -204,20 +215,21 @@ struct AddShapeMenu: View {
     let workspace: Workspace
 
     var body: some View {
-        Button("Rectangle") { add(ShapeFactory.rectangle(project)) }
-        Button("Circle") { add(ShapeFactory.circle(project)) }
-        Button("Ellipse") { add(ShapeFactory.ellipse(project)) }
-        Button("Polygon") { add(ShapeFactory.polygon(project)) }
-        Button("Star") { add(ShapeFactory.star(project)) }
+        Button("Rectangle") { add(ShapeFactory.rectangle(workspace.shown(project))) }
+        Button("Circle") { add(ShapeFactory.circle(workspace.shown(project))) }
+        Button("Ellipse") { add(ShapeFactory.ellipse(workspace.shown(project))) }
+        Button("Polygon") { add(ShapeFactory.polygon(workspace.shown(project))) }
+        Button("Star") { add(ShapeFactory.star(workspace.shown(project))) }
         Divider()
-        Button("Text") { add(ShapeFactory.text(project)) }
+        Button("Text") { add(ShapeFactory.text(workspace.shown(project))) }
         if project.stock.rotary?.isWrapped == true {
-            Button("Spiral") { add(ShapeFactory.spiral(project)) }
+            Button("Spiral") { add(ShapeFactory.spiral(workspace.shown(project))) }
                 .help("Spiral lines that wrap around the blank, for a rope or barley twist")
         }
     }
 
     private func add(_ shape: DesignShape) {
+        let shape = workspace.placedOnSheet(shape, of: project)
         project.shapes.append(shape)
         workspace.selection = [.shape(shape.id)]
     }

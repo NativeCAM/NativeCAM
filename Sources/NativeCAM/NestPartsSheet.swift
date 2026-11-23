@@ -68,14 +68,15 @@ final class NestSession {
         }
     }
 
-    /// For snapshot checks: prepares and nests synchronously, with a fixed number of layouts.
-    func runNow(evaluations: Int) {
+    /// For snapshot checks: prepares and nests synchronously, with a fixed number of layouts (and sheets, when given).
+    func runNow(evaluations: Int, sheets: Int? = nil) {
         do {
             let job = try NestJob.prepare(project, selection: selection)
             self.job = job
             draw(job)
             var s = Self.recalled(job.defaultSettings)
             s.maxEvaluations = evaluations
+            if let sheets { s.maxSheets = sheets }
             settings = s
             phase = .ready
             result = job.nest(s)
@@ -160,10 +161,14 @@ final class NestSession {
 
     // MARK: Remembered settings
 
-    /// The turns, grain and search time last used (spacing and margin follow each job's cut-out bit).
+    /// The turns, grain, search time, sheet limit and part in part last used (spacing and margin follow each job's
+    /// cut-out bit, and the other sheets' size the job's).
     static func recalled(_ base: Nesting.Settings) -> Nesting.Settings {
         var s = base
         let d = UserDefaults.standard
+        let sheets = d.integer(forKey: "NestSheets")
+        s.maxSheets = max(base.maxSheets, sheets > 0 ? sheets : defaultSheetLimit)
+        s.partInPart = d.object(forKey: "NestPartInPart") as? Bool ?? true
         switch d.integer(forKey: "NestTurnSteps") {
         case 0, 4: s.rotation = .quarterTurns
         case 1: s.rotation = .none
@@ -184,7 +189,12 @@ final class NestSession {
         }
         d.set(s.keepGrain, forKey: "NestKeepGrain")
         d.set(s.timeLimit, forKey: "NestSeconds")
+        d.set(s.maxSheets, forKey: "NestSheets")
+        d.set(s.partInPart, forKey: "NestPartInPart")
     }
+
+    /// Sheets parts may go on until the user sets a limit.
+    static let defaultSheetLimit = 10
 }
 
 /// A layout that didn't pass the final check (it never should): nothing is moved.
@@ -272,7 +282,8 @@ struct NestPartsSheet: View {
         let size = "\(length(stock.width)) × \(length(stock.height)) \(units.symbol)"
         guard let job = session.job else { return "Arranges the parts on the \(size) sheet to use as little of it as it can." }
         let which = session.selection.isEmpty ? "every part" : "the selected \(job.parts.count == 1 ? "part" : "parts")"
-        return "Arranges \(which) (\(job.parts.count)) on the \(size) sheet, packed toward its \(alongX ? "left" : "bottom") edge so what's left is one piece."
+        let more = session.settings.sheetLimit > 1 ? ", then on more sheets," : ","
+        return "Arranges \(which) (\(job.parts.count)) on the \(size) sheet\(more) packed toward the \(alongX ? "left" : "bottom") edge so what's left is one piece."
     }
 
     private var alongX: Bool { session.result?.alongX ?? (session.project.stock.width >= session.project.stock.height) }
@@ -290,6 +301,31 @@ struct NestPartsSheet: View {
                 Text("Gaps")
             } footer: {
                 Text(spacingNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
+                Stepper(value: Binding(get: { session.settings.sheetLimit }, set: { session.settings.maxSheets = max(1, min(50, $0)) }),
+                        in: 1...50) {
+                    LabeledContent("Sheets", value: session.settings.sheetLimit == 1 ? "1 only" : "Up to \(session.settings.sheetLimit)")
+                }
+                .help("Parts that don't fit on a sheet go on the next, up to this many")
+                if session.settings.sheetLimit > 1 {
+                    Picker("Next sheets", selection: sameSize) {
+                        Text("Same size").tag(true)
+                        Text("Another size").tag(false)
+                    }
+                    if let size = session.settings.nextSheetSize {
+                        LengthField(title: "Width", mm: Binding(get: { size.x }, set: { session.settings.nextSheetSize = Vec2($0, size.y) }),
+                                    units: units, help: "Width of every sheet after the first", minimum: 1)
+                        LengthField(title: "Height", mm: Binding(get: { size.y }, set: { session.settings.nextSheetSize = Vec2(size.x, $0) }),
+                                    units: units, help: "Height of every sheet after the first", minimum: 1)
+                    }
+                }
+                Toggle("Put small parts in holes", isOn: $session.settings.partInPart)
+                    .help("A part may go in another part's hole, with the spacing all round, when the hole is cut right through and the part is cut out before it")
+            } header: {
+                Text("Sheets and holes")
+            } footer: {
+                Text(holesNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Section("Turning parts") {
                 Picker("Turns", selection: turnsChoice) {
@@ -321,6 +357,29 @@ struct NestPartsSheet: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Whether the sheets after the first are the first's size.
+    private var sameSize: Binding<Bool> {
+        Binding(get: { session.settings.nextSheetSize == nil }, set: { same in
+            let stock = session.project.stock
+            session.settings.nextSheetSize = same ? nil : (session.job?.nextSheetSize ?? Vec2(stock.width, stock.height))
+        })
+    }
+
+    private var holesNote: String {
+        guard let job = session.job else { return "" }
+        let n = job.partsWithHoles, closed = job.partsWithClosedHoles
+        if !session.settings.partInPart { return "Parts stay out of other parts' holes." }
+        var note = n == 0 ? "No part has a hole other parts can go in."
+            : "\(n == 1 ? "1 part has a hole" : "\(n) parts have holes") other parts can go in: each is cut out before the hole "
+                + "it sits in, and keeps the spacing (or the hole's own cut) from its edge."
+        if let first = closed.first {
+            let who = closed.count == 1 ? "“\(first.name)”'s hole is" : "\(closed.count) parts' holes are"
+            note += " \(who) cut free before the other parts are cut out, so \(closed.count == 1 ? "it stays" : "they stay") empty: "
+                + "cut those parts earlier, or in the same profile, to use \(closed.count == 1 ? "it" : "them")."
+        }
+        return note
     }
 
     /// 0 keep as drawn, 4 quarter turns, -1 finer steps.
@@ -376,20 +435,27 @@ struct NestPartsSheet: View {
         VStack(alignment: .leading, spacing: 4) {
             if let r = session.result, let job = session.job {
                 let placed = r.placedCount
-                Text("\(placed) of \(job.parts.count) part\(job.parts.count == 1 ? "" : "s") placed. "
-                     + String(format: "They fill %.0f%% of the %@ %@ of the sheet they use (%.0f%% of the whole sheet).",
-                              r.utilization * 100, rough(r.usedLength), units.symbol, r.sheetUtilization * 100))
-                if placed > 0, r.sheetLength - r.usedLength > session.settings.spacing {
+                let sheets = r.sheetCount > 1 ? " on \(r.sheetCount) sheets" : ""
+                let holes = r.inHoles.isEmpty ? "" : " (\(r.inHoles.count) in other parts' holes)"
+                let last = r.sheetCount > 1 ? "the last sheet" : "the sheet"
+                Text("\(placed) of \(job.parts.count) part\(job.parts.count == 1 ? "" : "s") placed\(sheets)\(holes). "
+                     + String(format: "They fill %.0f%% of the %@ %@ of %@ they use (%.0f%% of the whole of %@).",
+                              r.utilization * 100, rough(r.usedLength), units.symbol, last,
+                              r.sheetUtilization * 100, r.sheetCount > 1 ? "every sheet" : "the sheet"))
+                if placed > 0, r.sheetLength - r.usedLength > session.settings.spacing, let use = r.sheets.last {
                     let left = r.sheetLength - r.usedLength - session.settings.spacing
-                    let across = alongX ? session.project.stock.height : session.project.stock.width
-                    Text("About \(rough(left)) × \(rough(across)) \(units.symbol) is left in one piece.")
+                    let across = r.alongX ? use.sheet.height : use.sheet.width
+                    Text("About \(rough(left)) × \(rough(across)) \(units.symbol) of \(last) is left in one piece.")
                         .foregroundStyle(.secondary)
                 }
                 if !r.unplaced.isEmpty {
                     let names = r.unplaced.map { job.parts[$0].name }
+                    let why = r.sheetCount >= session.settings.sheetLimit
+                        ? (session.settings.sheetLimit == 1 ? "Allow more sheets to nest them on another." : "Allow more sheets to nest them too.")
+                        : "They're too big for a sheet, or for the room between clamps."
                     Label("Didn't fit: \(names.prefix(8).joined(separator: ", "))\(names.count > 8 ? " and \(names.count - 8) more" : ""). "
-                          + "Each stays where it is, or goes beside the sheet if a nested part now takes its place. One sheet only: "
-                          + "cut these from the next.", systemImage: "exclamationmark.triangle")
+                          + "Each stays where it is, or goes beside its sheet if a nested part now takes its place. \(why)",
+                          systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                 }
             }
@@ -463,55 +529,90 @@ struct NestPartsSheet: View {
     }
 }
 
-/// The sheet with the layout so far: the margin, clamps and parts that stay put, and each nested part where it goes.
+/// The sheets with the layout so far, side by side (in rows when there are many): the margin, clamps (on every sheet)
+/// and parts that stay put, and each nested part where it goes, those in another part's hole a shade darker.
 struct NestPreview: View {
     let session: NestSession
 
     var body: some View {
         Canvas { ctx, size in
-            let stock = session.project.stock
-            let sheet = Rect2(x: 0, y: 0, width: stock.width, height: stock.height)
+            let project = session.project
+            let first = Rect2(x: 0, y: 0, width: project.stock.width, height: project.stock.height)
+            let used = max(session.result?.sheetCount ?? 1, session.job?.sheetCount ?? 1, 1)
+            let sheets = (0..<used).map { k in
+                session.result.flatMap { k < $0.sheets.count ? $0.sheets[k].sheet : nil } ?? session.settings.sheet(k, first: first)
+            }
+            // A grid of sheets, a gap apart, laid out in sheet units.
+            let columns = used <= 3 ? used : Int(Double(used).squareRoot().rounded(.up))
+            let rows = (used + columns - 1) / columns
+            let cellW = sheets.map(\.width).max() ?? first.width, cellH = sheets.map(\.height).max() ?? first.height
+            let gap = max(cellW, cellH) * 0.06
+            let labelRoom: CGFloat = used > 1 ? 16 : 0
+            let totalW = Double(columns) * cellW + Double(columns - 1) * gap
+            let totalH = Double(rows) * cellH + Double(rows - 1) * gap
             let pad: CGFloat = 8
-            let scale = min((size.width - 2 * pad) / sheet.width, (size.height - 2 * pad) / sheet.height)
-            let origin = CGPoint(x: (size.width - sheet.width * scale) / 2, y: (size.height + sheet.height * scale) / 2)
-            func pt(_ p: Vec2) -> CGPoint { CGPoint(x: origin.x + p.x * scale, y: origin.y - p.y * scale) }
-            func path(_ lines: [Polyline]) -> Path {
+            let scale = min((size.width - 2 * pad) / totalW, (size.height - 2 * pad - CGFloat(rows) * labelRoom) / totalH)
+            let drawnW = totalW * scale, drawnH = totalH * scale + CGFloat(rows) * labelRoom
+            let origin0 = CGPoint(x: (size.width - drawnW) / 2, y: (size.height - drawnH) / 2)
+            func originOf(_ k: Int) -> CGPoint {
+                let c = k % columns, r = k / columns
+                // Each sheet's lower-left corner, rows from the top.
+                return CGPoint(x: origin0.x + Double(c) * (cellW + gap) * scale,
+                               y: origin0.y + CGFloat(r) * labelRoom + (Double(r) * (cellH + gap) + sheets[k].height) * scale)
+            }
+            func pt(_ p: Vec2, _ k: Int) -> CGPoint {
+                let o = originOf(k)
+                return CGPoint(x: o.x + p.x * scale, y: o.y - p.y * scale)
+            }
+            func path(_ lines: [Polyline], _ k: Int) -> Path {
                 var path = Path()
                 for line in lines where line.count >= 2 {
-                    path.move(to: pt(line.points[0]))
-                    for p in line.points.dropFirst() { path.addLine(to: pt(p)) }
+                    path.move(to: pt(line.points[0], k))
+                    for p in line.points.dropFirst() { path.addLine(to: pt(p, k)) }
                     if line.isClosed { path.closeSubpath() }
                 }
                 return path
             }
-            func rect(_ r: Rect2) -> Path {
-                path([Polyline([r.min, Vec2(r.max.x, r.min.y), r.max, Vec2(r.min.x, r.max.y)], closed: true)])
+            func rect(_ r: Rect2, _ k: Int) -> Path {
+                path([Polyline([r.min, Vec2(r.max.x, r.min.y), r.max, Vec2(r.min.x, r.max.y)], closed: true)], k)
             }
-            ctx.fill(rect(sheet), with: .color(Color(red: 0.93, green: 0.86, blue: 0.72)))
-            ctx.stroke(rect(sheet), with: .color(Color(red: 0.55, green: 0.45, blue: 0.3)), lineWidth: 1)
             let margin = session.settings.edgeMargin
-            if margin > 0, margin * 2 < min(sheet.width, sheet.height) {
-                ctx.stroke(rect(sheet.insetBy(margin)), with: .color(.black.opacity(0.25)), style: StrokeStyle(lineWidth: 0.75, dash: [4, 3]))
+            for (k, sheet) in sheets.enumerated() {
+                ctx.fill(rect(sheet, k), with: .color(Color(red: 0.93, green: 0.86, blue: 0.72)))
+                ctx.stroke(rect(sheet, k), with: .color(Color(red: 0.55, green: 0.45, blue: 0.3)), lineWidth: 1)
+                if margin > 0, margin * 2 < min(sheet.width, sheet.height) {
+                    ctx.stroke(rect(sheet.insetBy(margin), k), with: .color(.black.opacity(0.25)), style: StrokeStyle(lineWidth: 0.75, dash: [4, 3]))
+                }
+                if used > 1 {
+                    let o = originOf(k)
+                    let labelX: CGFloat = o.x + CGFloat(sheet.width) * scale / 2
+                    let labelY: CGFloat = o.y + labelRoom / 2 + 2
+                    ctx.draw(Text("Sheet \(k + 1)").font(.caption).foregroundStyle(.secondary),
+                             at: CGPoint(x: labelX, y: labelY), anchor: .center)
+                }
+                for outline in session.job?.keepOuts ?? [] {
+                    let p = path([outline], k)
+                    ctx.fill(p, with: .color(.red.opacity(0.3)))
+                    ctx.stroke(p, with: .color(.red), lineWidth: 1)
+                }
             }
-            for lines in session.fixedLines {
-                let p = path(lines)
+            for (i, lines) in session.fixedLines.enumerated() {
+                let k = session.job.map { i < $0.fixed.count ? $0.fixed[i].sheet : 0 } ?? 0
+                guard k < used else { continue }
+                let p = path(lines, k)
                 ctx.fill(p, with: .color(.gray.opacity(0.35)), style: FillStyle(eoFill: true))
                 ctx.stroke(p, with: .color(.gray), lineWidth: 0.75)
             }
-            for outline in session.job?.keepOuts ?? [] {
-                let p = path([outline])
-                ctx.fill(p, with: .color(.red.opacity(0.3)))
-                ctx.stroke(p, with: .color(.red), lineWidth: 1)
-            }
             guard let result = session.result else { return }
             for (i, placement) in result.placements.enumerated() where i < session.partLines.count {
-                guard let placement else { continue }
-                let p = path(session.partLines[i].map(placement.apply))
-                ctx.fill(p, with: .color(.accentColor.opacity(0.28)), style: FillStyle(eoFill: true))
+                guard let placement, placement.sheet < used else { continue }
+                let p = path(session.partLines[i].map(placement.apply), placement.sheet)
+                let inHole = i < result.insideOf.count && result.insideOf[i] != nil
+                ctx.fill(p, with: .color(.accentColor.opacity(inHole ? 0.5 : 0.28)), style: FillStyle(eoFill: true))
                 ctx.stroke(p, with: .color(.accentColor), lineWidth: 1)
             }
         }
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityLabel("Preview of the nested parts on the sheet")
+        .accessibilityLabel("Preview of the nested parts on the sheets")
     }
 }

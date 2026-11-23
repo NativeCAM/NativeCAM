@@ -5,6 +5,161 @@ import Foundation
 public enum SetupSheet {
     public static func html(project: Project, job: JobResult, gcodeFile: String? = nil, checks: [GCodeCheck.Issue] = [],
                             date: Date = Date()) -> String {
+        if let sheets = job.sheets {
+            return head(project.name) + sheetsCover(project: project, job: job, sheets: sheets, gcodeFile: gcodeFile, checks: checks, date: date)
+                + "</body></html>\n"
+        }
+        return head(project.name) + content(project: project, job: job, gcodeFile: gcodeFile, checks: checks, date: date)
+            + "</body></html>\n"
+    }
+
+    /// The page's head and styles.
+    static func head(_ title: String) -> String {
+        """
+        <!doctype html>
+        <html lang="en"><head><meta charset="utf-8"><title>\(esc(title)) setup sheet</title>
+        <style>
+        body { font: 13px/1.4 -apple-system, "Helvetica Neue", sans-serif; color: #111; margin: 24px; }
+        h1 { font-size: 20px; margin: 0 0 2px; } h2 { font-size: 15px; margin: 22px 0 6px; }
+        .sub { color: #555; margin-bottom: 14px; }
+        table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #ddd; vertical-align: top; }
+        th { font-weight: 600; background: #f4f4f4; } td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; margin: 0; } dt { color: #555; } dd { margin: 0; }
+        .change td { background: #fff7e0; } tr.tilerow td { background: #e8f1ff; } .error { color: #b00020; } .warning { color: #8a5a00; }
+        section.tile { break-before: page; margin-top: 28px; border-top: 2px solid #ccc; padding-top: 6px; }
+        svg.preview { width: 100%; max-height: 520px; border: 1px solid #ddd; background: #fafafa; margin-top: 10px; }
+        @media print { body { margin: 0; } h2 { break-after: avoid; } tr { break-inside: avoid; } section.tile { border-top: none; margin-top: 0; } }
+        </style></head><body>
+
+        """
+    }
+
+    /// A job nested onto several sheets: the job as a whole (the sheets, the bits, the checks), then a page for each
+    /// sheet, as a setup sheet of its own for its files.
+    static func sheetsCover(project: Project, job: JobResult, sheets: [SheetJob], gcodeFile: String?,
+                            checks: [GCodeCheck.Issue], date: Date) -> String {
+        let u = project.displayUnits, stock = project.stock, machine = project.machine
+        func len(_ mm: Double) -> String { "\(u.format(mm, decimals: u == .inch ? 3 : 1)) \(u.symbol)" }
+        func size(_ v: Vec2) -> String { "\(u.format(v.x, decimals: u == .inch ? 3 : 1)) × \(len(v.y))" }
+        func time(_ s: Double) -> String {
+            let t = Int(s.rounded())
+            return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
+        }
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.dateFormat = "yyyy-MM-dd HH:mm"
+        let export = JobExport.files(project, job: job, date: date)
+        let base = gcodeFile ?? ((project.name.isEmpty ? "Untitled" : project.name) + "." + (export?.post.fileExtension ?? "tap"))
+        let names = export.map { JobExport.fileNames($0.files, base: base, fileExtension: $0.post.fileExtension) } ?? []
+        func files(ofSheet k: Int) -> [String] {
+            guard let export else { return [] }
+            return zip(export.files, names).filter { $0.0.sheet == k }.map(\.1)
+        }
+        let sizes = sheets.map { project.sheetSize($0.index) }
+        let sameSize = sizes.allSatisfy { $0.isApprox(sizes[0], tolerance: 1e-6) }
+        var h = """
+        <h1>\(esc(project.name))</h1>
+        <div class="sub">Setup sheet · \(esc(df.string(from: date)))\(gcodeFile.map { " · " + esc($0) } ?? "")</div>
+
+        <h2>Job</h2>
+        <dl>
+        <dt>Machine</dt><dd>\(esc(machine.displayName)), \(esc(machine.controllerLabel)), \(esc(machine.spindle.label)), \(esc(machine.toolChange.label))</dd>
+        <dt>Material</dt><dd>\(esc(stock.materialName)), \(len(stock.thickness)) thick: \(sheets.count) sheets\(sameSize ? " of \(size(sizes[0]))" : ""), cut one after another. A page for each follows.</dd>
+        <dt>XY zero</dt><dd>\(esc(stock.xyOrigin.label)) of each sheet</dd>
+        <dt>Z zero</dt><dd>\(esc(stock.zZero.label))</dd>
+        <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the material</dd>
+        <dt>G-code units</dt><dd>\(machine.outputUnits == .inch ? "Inches (G20)" : "Millimetres (G21)")</dd>
+        <dt>Run time</dt><dd>About \(time(job.estimatedSeconds)), all sheets</dd>
+        </dl>
+
+        """
+        h += "<h2>Sheets</h2>\n<table><tr><th>#</th><th>Size</th><th class=\"num\">Parts</th><th>File</th><th class=\"num\">Time</th></tr>\n"
+        for s in sheets {
+            let parts = NestJob.parts(of: s.project).filter(\.isClosed).count
+            let file = s.cutsAnything ? files(ofSheet: s.index).map(esc).joined(separator: "<br>") : "Nothing to cut: no file"
+            h += "<tr><td>\(s.index + 1)</td><td>\(size(sizes[s.index]))</td><td class=\"num\">\(parts)</td><td>\(file)</td>"
+                + "<td class=\"num\">\(time(s.job.estimatedSeconds))</td></tr>\n"
+        }
+        h += "</table>\n"
+        // Every bit the job uses, once, in the order they first go in.
+        var order: [Tool] = []
+        for tp in job.toolpaths where !tp.isEmpty && !order.contains(where: { $0.number == tp.tool.number && $0.isSameBit(as: tp.tool) }) {
+            order.append(tp.tool)
+        }
+        h += "<h2>Tools</h2>\n<table><tr><th>#</th><th>Tool</th><th>Type</th><th class=\"num\">Diameter</th><th class=\"num\">Cutting length</th><th class=\"num\">Stick-out</th></tr>\n"
+        for (i, t) in order.enumerated() {
+            var type = t.shape.label
+            if t.shape.usesAngle { type += " \(Int(t.includedAngle.rounded()))°" }
+            h += "<tr><td>\(i + 1)</td><td>T\(t.number) \(esc(t.name))</td><td>\(esc(type))</td><td class=\"num\">\(len(t.diameter))</td>"
+                + "<td class=\"num\">\(len(t.fluteLength))</td><td class=\"num\">\(len(t.stickout))</td></tr>\n"
+        }
+        h += "</table>\n"
+        let open = job.issues.filter { $0.severity != .info }
+        let fileChecks = checks.filter { $0.severity != .info }
+        if !open.isEmpty || !fileChecks.isEmpty {
+            h += "<h2>Checks</h2>\n<ul>\n"
+            for i in open {
+                h += "<li class=\"\(i.severity.rawValue)\">\(i.operation.map { esc($0) + ": " } ?? "")\(esc(i.message))</li>\n"
+            }
+            for i in fileChecks { h += "<li class=\"\(i.severity.rawValue)\">G-code: \(esc(i.text))</li>\n" }
+            h += "</ul>\n"
+        }
+        // A page for each sheet: its own setup sheet, for its files (the checks are the job's, above).
+        for s in sheets where s.cutsAnything {
+            let mine = files(ofSheet: s.index)
+            h += "<section class=\"tile\">\n"
+            h += content(project: s.project, job: s.job, gcodeFile: mine.isEmpty ? nil : mine.joined(separator: ", "), checks: [],
+                         date: date, listChecks: false)
+            h += sheetPreview(project: s.project, job: s.job)
+            h += "</section>\n"
+        }
+        return h
+    }
+
+    /// One sheet from above: the material, its shapes and its cuts, and the XY zero.
+    static func sheetPreview(project: Project, job: JobResult) -> String {
+        let stock = project.stock
+        let pad = max(stock.width, stock.height) * 0.03
+        let lo = Vec2(-pad, -pad), hi = Vec2(stock.width + pad, stock.height + pad)
+        let size = hi - lo
+        let stroke = max(size.x, size.y) / 500
+        func n(_ v: Double) -> String { String(format: "%.2f", v) }
+        // SVG's Y runs down: flip it so the sheet's lower-left is at the bottom left.
+        func y(_ v: Double) -> Double { hi.y - v + lo.y }
+        var s = "<svg class=\"preview\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"\(n(lo.x)) \(n(lo.y)) \(n(size.x)) \(n(size.y))\">\n"
+        s += "<rect x=\"0\" y=\"\(n(y(stock.height)))\" width=\"\(n(stock.width))\" height=\"\(n(stock.height))\" fill=\"#f1ebdd\" stroke=\"#8a7f6a\" stroke-width=\"\(n(stroke))\"/>\n"
+        var shapes = ""
+        for shape in project.shapes {
+            for line in shape.polylines(tolerance: 0.2) where line.count >= 2 {
+                shapes += "M" + line.points.map { "\(n($0.x)) \(n(y($0.y)))" }.joined(separator: "L") + (line.isClosed ? "Z" : "")
+            }
+        }
+        if !shapes.isEmpty { s += "<path d=\"\(shapes)\" fill=\"none\" stroke=\"#8a7f6a\" stroke-width=\"\(n(stroke))\"/>\n" }
+        let step = max(1.0, max(size.x, size.y) / 800)
+        var d = ""
+        for tp in job.toolpaths {
+            var last: Vec2?
+            tp.forEachMotion { start, m in
+                guard m.kind != .dwell else { return }
+                if m.kind == .rapid || m.end.z >= 0 { last = nil; return }
+                if last == nil { d += "M\(n(start.xy.x)) \(n(y(start.xy.y)))"; last = start.xy }
+                for q in m.samples(from: start, maxStep: step) where q.xy.distance(to: last!) >= step {
+                    d += "L\(n(q.x)) \(n(y(q.y)))"
+                    last = q.xy
+                }
+            }
+        }
+        if !d.isEmpty { s += "<path d=\"\(d)\" fill=\"none\" stroke=\"#0b4fb3\" stroke-width=\"\(n(stroke * 1.5))\"/>\n" }
+        let zero = stock.originPoint
+        let arm = max(size.x, size.y) / 60
+        s += "<path d=\"M\(n(zero.x - arm)) \(n(y(zero.y)))L\(n(zero.x + arm)) \(n(y(zero.y)))M\(n(zero.x)) \(n(y(zero.y - arm)))L\(n(zero.x)) \(n(y(zero.y + arm)))\" stroke=\"#000\" stroke-width=\"\(n(stroke * 2))\"/>\n"
+        s += "</svg>\n"
+        return s
+    }
+
+    /// The setup sheet's content for one job (a sheet's, on a nested job), from its title to the tile pages.
+    static func content(project: Project, job: JobResult, gcodeFile: String?, checks: [GCodeCheck.Issue], date: Date,
+                        listChecks: Bool = true) -> String {
         let u = project.displayUnits, stock = project.stock, machine = project.machine
         func len(_ mm: Double) -> String { "\(u.format(mm, decimals: u == .inch ? 3 : 1)) \(u.symbol)" }
         func feed(_ mmPerMin: Double) -> String { "\(u.format(mmPerMin, decimals: u == .inch ? 0 : 0)) \(u.feedSymbol)" }
@@ -64,20 +219,6 @@ public enum SetupSheet {
         let angleColumn = stock.rotary.map { !$0.isWrapped } ?? false
 
         var h = """
-        <!doctype html>
-        <html lang="en"><head><meta charset="utf-8"><title>\(esc(project.name)) setup sheet</title>
-        <style>
-        body { font: 13px/1.4 -apple-system, "Helvetica Neue", sans-serif; color: #111; margin: 24px; }
-        h1 { font-size: 20px; margin: 0 0 2px; } h2 { font-size: 15px; margin: 22px 0 6px; }
-        .sub { color: #555; margin-bottom: 14px; }
-        table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #ddd; vertical-align: top; }
-        th { font-weight: 600; background: #f4f4f4; } td.num { text-align: right; font-variant-numeric: tabular-nums; }
-        dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; margin: 0; } dt { color: #555; } dd { margin: 0; }
-        .change td { background: #fff7e0; } tr.tilerow td { background: #e8f1ff; } .error { color: #b00020; } .warning { color: #8a5a00; }
-        section.tile { break-before: page; margin-top: 28px; border-top: 2px solid #ccc; padding-top: 6px; }
-        svg.preview { width: 100%; max-height: 520px; border: 1px solid #ddd; background: #fafafa; margin-top: 10px; }
-        @media print { body { margin: 0; } h2 { break-after: avoid; } tr { break-inside: avoid; } section.tile { border-top: none; margin-top: 0; } }
-        </style></head><body>
         <h1>\(esc(project.name))</h1>
         <div class="sub">Setup sheet · \(esc(df.string(from: date)))\(gcodeFile.map { " · " + esc($0) } ?? "")</div>
 
@@ -324,7 +465,7 @@ public enum SetupSheet {
             h += "</ul>\n"
         }
 
-        let open = job.issues.filter { $0.severity != .info }
+        let open = listChecks ? job.issues.filter { $0.severity != .info } : []
         let fileChecks = checks.filter { $0.severity != .info }
         if !open.isEmpty || !fileChecks.isEmpty {
             h += "<h2>Checks</h2>\n<ul>\n"
@@ -340,8 +481,6 @@ public enum SetupSheet {
                 h += tilePage(project: project, job: job, tiled: tiled, tile: tile, files: files(ofTile: tile.index), len: len, time: time)
             }
         }
-
-        h += "</body></html>\n"
         return h
     }
 
