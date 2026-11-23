@@ -95,7 +95,7 @@ public enum OperationScheduler {
                 } else if !a.kind.needsShapes, b.kind.needsShapes {
                     // Rounding turns the blank down before anything is cut on it.
                     hard = true
-                } else if i < j, !aFreesB, !roughs(b, before: a), overlaps(boxes[i], boxes[j]) {
+                } else if i < j, !aFreesB, !roughs(b, before: a), !restsOn[i].contains(b.id), overlaps(boxes[i], boxes[j]) {
                     before[j] |= 1 << UInt64(i)
                 }
                 if hard {
