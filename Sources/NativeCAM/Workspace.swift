@@ -23,6 +23,8 @@ final class Workspace {
 
     // Selection and view
     var selection: Set<SidebarItem> = [.setup]
+    /// Add Toolpath ▸ Inlay…, waiting in its sheet (any of the add-toolpath menus can ask for it).
+    var inlayRequest: InlayRequest?
     var viewPreset: ViewPreset? = .iso
     var fitRequest = 0
     var showVectors = true

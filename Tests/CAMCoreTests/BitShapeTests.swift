@@ -393,7 +393,7 @@ struct BitShapeTests {
         }
         // Not the cut-out: only the relief is compared.
         p.operations.removeAll { if case .profile = $0.kind { return true } else { return false } }
-        #expect(p.formatVersion == 14)
+        #expect(p.formatVersion == 15)
         let job = CAMEngine.generate(p)
         #expect(!job.hasErrors)
         let finish = try #require(job.toolpaths.first { $0.tool.shape == .taperedBallNose })
@@ -448,7 +448,7 @@ struct BitShapeTests {
         let bit = Self.form(.roundover, radius: 6.35, pilot: 12.7)
         let op = CAMOperation(kind: Self.profile(.outside, depth: 6.35), shapeIDs: [shape.id], tool: bit)
         let p = Self.project([shape], [op])
-        #expect(p.formatVersion == 14)
+        #expect(p.formatVersion == 15)
         let tp = try #require(CAMEngine.generate(p).toolpaths.first)
         let ext = try #require(tp.cuttingExtents)
         // The square spans 10–50; the pilot's radius (6.35) out from it.
@@ -582,7 +582,7 @@ struct BitShapeTests {
 
     // MARK: File format
 
-    /// The project these shapes take: format 14 only when a toolpath uses one, and it reads back the same.
+    /// The project these shapes take: format 15 only when a toolpath uses one, and it reads back the same.
     static func savedBits() -> Project {
         let square = DesignShape(id: UUID(uuidString: "B1750000-0000-4000-8000-000000000001")!, name: "Square",
                                  kind: .rectangle(width: 40, height: 40, cornerRadius: 0), position: Vec2(30, 30))
@@ -610,9 +610,9 @@ struct BitShapeTests {
         return project([square, line], ops)
     }
 
-    @Test func newShapesTakeFormat14OnlyWhenUsedAndRoundTrip() throws {
+    @Test func newShapesTakeFormat15OnlyWhenUsedAndRoundTrip() throws {
         let p = Self.savedBits()
-        #expect(p.formatVersion == 14)
+        #expect(p.formatVersion == 15)
         let back = try Project.decode(p.encoded())
         #expect(back == p)
         #expect(back.operations.map(\.tool) == p.operations.map(\.tool))
@@ -623,17 +623,17 @@ struct BitShapeTests {
         // A pocket whose clearance tool is a new shape needs the new format too.
         var pp = PocketParams(depth: DepthSettings(startDepth: 0, cutDepth: 3))
         pp.clearanceTool = Self.dovetail()
-        #expect(CAMOperation(kind: .pocket(pp), shapeIDs: [], tool: ToolLibrary.starter.tool(number: 2)!).requiredFormatVersion == 14)
+        #expect(CAMOperation(kind: .pocket(pp), shapeIDs: [], tool: ToolLibrary.starter.tool(number: 2)!).requiredFormatVersion == 15)
     }
 
-    @Test func bitShapesSavedByFormat14StillDecodeAndPost() throws {
-        let p = try GoldenPostTests.savedProject("bit-shapes-v14", make: Self.savedBits)
-        #expect(p.formatVersion == 14)
+    @Test func bitShapesSavedByFormat15StillDecodeAndPost() throws {
+        let p = try GoldenPostTests.savedProject("bit-shapes-v15", make: Self.savedBits)
+        #expect(p.formatVersion == 15)
         let made = Self.savedBits()
         #expect(p.operations == made.operations)
         #expect(p.shapes == made.shapes)
         let job = CAMEngine.generate(p)
         #expect(!job.hasErrors)
-        try GoldenPostTests.check(GoldenPostTests.post(p), golden: "decoded-bit-shapes-v14")
+        try GoldenPostTests.check(GoldenPostTests.post(p), golden: "decoded-bit-shapes-v15")
     }
 }

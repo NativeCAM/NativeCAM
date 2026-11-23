@@ -45,10 +45,10 @@ public enum ToolShape: String, Codable, Sendable, CaseIterable, Identifiable {
     public var cutsEdgesOnly: Bool { self == .form || self == .dovetail }
 
     /// The project file format a toolpath using this shape needs: tapered ball noses, form and dovetail bits are format
-    /// 14 (a format-13 build can't read them).
+    /// 15 (a format-14 build can't read them).
     public var requiredFormatVersion: Int {
         switch self {
-        case .taperedBallNose, .form, .dovetail: 14
+        case .taperedBallNose, .form, .dovetail: 15
         default: 1
         }
     }

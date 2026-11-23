@@ -5,6 +5,8 @@ struct OperationInspector: View {
     @Binding var op: CAMOperation
     let project: Project
     let workspace: Workspace
+    /// Replaces another toolpath in the project (an inlay's other side, when its shared settings are brought in line).
+    var updateOperation: (CAMOperation) -> Void = { _ in }
     @Environment(ToolLibraryStore.self) private var library
 
     var units: LengthUnit { project.displayUnits }
@@ -223,7 +225,8 @@ struct OperationInspector: View {
             }
         case let .vcarve(p):
             let set: (VCarveParams) -> Void = { op.kind = .vcarve($0) }
-            InlaySection(params: p, op: $op, project: project, units: units, set: set)
+            InlaySection(params: p, op: $op, project: project, units: units, set: set, updateOperation: updateOperation,
+                         select: { workspace.selection = [.operation($0)] })
             Section("V-carve") {
                 if !p.isPlug {
                     LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }),
@@ -251,6 +254,9 @@ struct OperationInspector: View {
                         ForEach(library.tools.filter { !$0.shape.isTapered }) { t in
                             Text("T\(t.number) \(t.name)").tag(Optional(t.id))
                         }
+                    }
+                    if p.vBitClearsFlats, op.tool.shape.isTapered {
+                        FlatClearingRows(params: p, tool: op.tool, units: units, set: set)
                     }
                 }
                 Toggle("Multiple passes", isOn: Binding(get: { p.passDepth != nil }, set: { var q = p; q.passDepth = $0 ? op.tool.cutting.stepdown : nil; set(q) }))
@@ -563,14 +569,62 @@ struct RotaryFinishSection: View {
     }
 }
 
+/// How a V-bit clears flats itself: rings, or raster lines with a stepover and an angle, and the ridges that leaves.
+struct FlatClearingRows: View {
+    let params: VCarveParams
+    let tool: Tool
+    let units: LengthUnit
+    let set: (VCarveParams) -> Void
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm, decimals: 3)) \(units.symbol)" }
+
+    var body: some View {
+        Picker("V-bit clears flats in", selection: Binding(get: { params.flatRaster != nil }, set: { raster in
+            var q = params
+            q.flatRaster = raster ? VCarveRaster() : nil
+            set(q)
+        })) {
+            Text("Rings").tag(false)
+            Text("Raster").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .help("Offset rings follow the flat's outline; raster lines run straight across it, which suits large flats")
+        if let raster = params.flatRaster {
+            let auto = params.vBitRasterSpacing(tool)
+            OptionalLengthField(title: "Stepover", mm: Binding(get: { raster.stepover }, set: { v in
+                var q = params
+                q.flatRaster?.stepover = v
+                set(q)
+            }), units: units, prompt: units.fromMM(auto).formatted(.number.precision(.fractionLength(0...max(3, units.displayDecimals)))),
+                                help: "Distance between the lines. Empty: the automatic stepover, which keeps the ridges between them as low as the rings'")
+            NumberField(title: "Raster angle", value: Binding(get: { raster.angle }, set: { v in
+                var q = params
+                q.flatRaster?.angle = v
+                set(q)
+            }), suffix: "°", decimals: 1)
+            let ridge = VCarveParams.vBitRidge(tool, spacing: params.vBitRasterStepover(tool))
+            LabeledContent("Ridge height", value: len(ridge))
+            if ridge > params.vBitRasterRidge + 1e-6 {
+                Label("Taller than the \(len(params.vBitRasterRidge)) the automatic stepover keeps to", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            LabeledContent("Ring spacing", value: len(params.vBitClearingSpacing(tool)))
+        }
+    }
+}
+
 /// A V-carve's inlay role: none, the pocket (female) or the plug (male), with the plug's settings (Vectric's pocket
-/// depth, glue gap and surface clearance) and the depths they give.
+/// depth, glue gap and surface clearance) and the depths they give. Each side shows the other's, and offers to bring
+/// the settings they share (P, the V-bit, the clearance tool) in line when they differ.
 struct InlaySection: View {
     let params: VCarveParams
     @Binding var op: CAMOperation
     let project: Project
     let units: LengthUnit
     let set: (VCarveParams) -> Void
+    var updateOperation: (CAMOperation) -> Void = { _ in }
+    var select: (UUID) -> Void = { _ in }
 
     enum Choice: String, CaseIterable, Identifiable {
         case none, pocket, plug
@@ -629,10 +683,12 @@ struct InlaySection: View {
             }
             .pickerStyle(.segmented)
             if let inlay = params.inlay {
+                ForEach(project.inlayPartners(of: op)) { partner in
+                    PartnerRow(op: $op, partner: partner, units: units, update: updateOperation, select: select)
+                }
                 switch inlay.role {
                 case .pocket:
-                    Text("The pocket for a V-carve inlay: an ordinary V-carve to its flat depth. Make the plug with a second V-carve set to Plug, using the same V-bit and this flat depth as its pocket depth.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    pocketSettings
                 case .plug:
                     plugSettings(inlay)
                 }
@@ -641,19 +697,26 @@ struct InlaySection: View {
     }
 
     @ViewBuilder
+    private var pocketSettings: some View {
+        let plugs = project.inlayPartners(of: op)
+        if plugs.isEmpty {
+            Text("The pocket for a V-carve inlay: an ordinary V-carve to its flat depth. Make the plug with a second V-carve set to Plug, using the same V-bit and this flat depth as its pocket depth, or make both together with Add Toolpath ▸ Inlay….")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } else {
+            ForEach(plugs) { plug in
+                if case let .vcarve(q) = plug.kind, let inlay = q.inlay {
+                    LabeledContent("“\(plug.name)”", value: "glue gap \(len(inlay.glueGap)), surface clearance \(len(inlay.surfaceClearance))")
+                }
+            }
+            Text("The pocket for a V-carve inlay: an ordinary V-carve to its flat depth. Its plug's glue gap and surface clearance are set on the plug.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
     private func plugSettings(_ inlay: VCarveInlay) -> some View {
         LengthField(title: "Pocket depth", mm: value(\.pocketDepth, minimum: 0.01), units: units,
                     help: "The flat depth of the V-carve pocket this plug goes into")
-        if let pocket, let flat = pocket.flat, abs(flat - inlay.pocketDepth) > 0.005 {
-            HStack(alignment: .firstTextBaseline) {
-                Label("“\(pocket.op.name)” is \(len(flat)) deep", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange).font(.caption)
-                Spacer(minLength: 4)
-                Button("Match") { var q = params; q.inlay?.pocketDepth = flat; set(q) }
-                    .controlSize(.small)
-                    .help("Set the pocket depth to that pocket's flat depth")
-            }
-        }
         LengthField(title: "Glue gap", mm: value(\.glueGap, minimum: 0), units: units,
                     help: "The gap left between the plug's face and the pocket's floor, for glue")
         LengthField(title: "Surface clearance", mm: value(\.surfaceClearance, minimum: 0.01), units: units,
@@ -662,23 +725,85 @@ struct InlaySection: View {
             ForEach(VCarveInlay.Boundary.allCases) { Text($0.label).tag($0) }
         }
         .pickerStyle(.segmented)
-        .help("Where the carving round the design stops: a margin round it, or a closed vector selected round it with the design")
-        if inlay.boundary == .vector {
+        .help("Where the carving round the design stops: a margin round it, a closed vector selected round it with the design, or the edges of the plug board")
+        switch inlay.boundary {
+        case .vector:
             if let boundary = project.plugBoundary(for: op) {
                 LabeledContent("Boundary vector", value: boundary.name)
             } else {
                 Label("Select a closed vector round the design with it; until then the margin is used.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+                LengthField(title: "Boundary margin", mm: value(\.boundaryMargin, minimum: 0.1), units: units,
+                            help: "How far past the design the plug is carved")
             }
-        }
-        if inlay.boundary == .margin || project.plugBoundary(for: op) == nil {
+        case .margin:
             LengthField(title: "Boundary margin", mm: value(\.boundaryMargin, minimum: 0.1), units: units,
                         help: "How far past the design the plug is carved")
+        case .board:
+            BoardSizeRows(size: Binding(get: { inlay.boardSize }, set: { v in var q = params; q.inlay?.boardSize = v; set(q) }),
+                          stock: project.stock, units: units, placed: inlay.boardSize == nil ? nil : project.plugBoard(for: op))
         }
         LabeledContent("Start depth", value: len(inlay.plugStartDepth))
         LabeledContent("Cut depth", value: len(inlay.plugCutDepth))
-        Text("Carves around the design, mirrored left to right, so the design stands proud. Turned over, it goes into the pocket until the walls meet, with the glue gap under its face: start depth = pocket depth − glue gap. Cut it from its own board with the same V-bit as the pocket, saw it free inside the carved band, glue it in and plane it flush.")
+        Text(inlay.boundary == .board
+             ? "Carves the whole plug board, right out to its edges, around the design mirrored left to right, so the design stands proud. Turned over, it goes into the pocket until the walls meet, with the glue gap under its face: start depth = pocket depth − glue gap. Cut it from its own board with the same V-bit as the pocket, glue it in and plane it flush."
+             : "Carves around the design, mirrored left to right, so the design stands proud. Turned over, it goes into the pocket until the walls meet, with the glue gap under its face: start depth = pocket depth − glue gap. Cut it from its own board with the same V-bit as the pocket, saw it free inside the carved band, glue it in and plane it flush.")
             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The other side of an inlay, and when the settings the two share differ, what differs and buttons to bring either
+/// side in line with the other.
+struct PartnerRow: View {
+    @Binding var op: CAMOperation
+    let partner: CAMOperation
+    let units: LengthUnit
+    let update: (CAMOperation) -> Void
+    let select: (UUID) -> Void
+
+    private func len(_ mm: Double?) -> String { mm.map { "\(units.format($0)) \(units.symbol)" } ?? "no flat depth" }
+    private func bit(_ t: Tool) -> String { "T\(t.number) \(t.name)" }
+
+    private var isPlug: Bool { if case let .vcarve(p) = op.kind { p.isPlug } else { false } }
+
+    var body: some View {
+        let differences = op.inlayDifferences(from: partner)
+        LabeledContent(isPlug ? "Its pocket" : "Its plug") {
+            Button("“\(partner.name)”") { select(partner.id) }
+                .buttonStyle(.link)
+                .help("Select it")
+        }
+        if !differences.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Doesn't match “\(partner.name)”: " + differences.map(describe).joined(separator: "; ") + ".",
+                      systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Spacer()
+                    Button("Update “\(partner.name)”") { update(op.inlayPartnerMatched(partner)) }
+                        .help("Give “\(partner.name)” this toolpath's pocket depth, V-bit and clearance tool")
+                    Button("Match It") { op = partner.inlayPartnerMatched(op) }
+                        .help("Take “\(partner.name)”'s pocket depth, V-bit and clearance tool for this toolpath")
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func describe(_ d: InlayDifference) -> String {
+        switch d {
+        case let .pocketDepth(mine, theirs):
+            let this = isPlug ? "pocket depth" : "flat depth", that = isPlug ? "its flat depth" : "its pocket depth"
+            return "\(this) \(len(mine)), \(that) \(len(theirs))"
+        case .bit:
+            return "this uses \(bit(op.tool)), it uses \(bit(partner.tool))"
+        case .clearanceTool:
+            func name(_ o: CAMOperation) -> String {
+                if case let .vcarve(p) = o.kind, let t = p.clearanceTool { return bit(t) }
+                return "no clearance tool"
+            }
+            return "clearing with \(name(op)), it with \(name(partner))"
+        }
     }
 }
 

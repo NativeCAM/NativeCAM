@@ -20,6 +20,12 @@ import UniformTypeIdentifiers
 /// `-NativeCAMSnapshotNestLayouts n`, so the result repeats), logs the layout and checks it with the parts' exact
 /// outlines, draws the Nest Parts sheet (nest-sheet.png) and the toolpaths from above before and after
 /// (nest-before.png, nest-after.png), then snapshots the project with the parts moved.
+///
+/// With `-NativeCAMSnapshotInlay YES` it makes an inlay pair from every closed vector as Add Toolpath ▸ Inlay… does,
+/// with `-NativeCAMSnapshotInlayBoundary margin|vector|board` and, with `-NativeCAMSnapshotInlayRaster YES`, the V-bit
+/// clearing the flats in raster lines. It draws the dialog for each boundary (inlay-sheet-*.png), logs the pair and its
+/// checks, draws the plug's inspector with its pocket depth changed so the offer to update the pocket shows
+/// (inspector-inlay-mismatch.png), then snapshots the project with the pair added.
 enum DebugSnapshot {
     static var requested: (project: String, outDir: String)? {
         let d = UserDefaults.standard
@@ -62,6 +68,9 @@ enum DebugSnapshot {
         }
         if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotNest") {
             project = nest(project, out: out, log: log, spin: spin)
+        }
+        if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotInlay") {
+            project = inlay(project, out: out, log: log, spin: spin)
         }
 
         // 1. The whole window (sidebar, viewport, inspector) hosted offscreen.
@@ -281,6 +290,69 @@ enum DebugSnapshot {
         top(project, "nest-before.png")
         top(applied.project, "nest-after.png")
         return applied.project
+    }
+
+    /// Add Toolpath ▸ Inlay… on every closed vector (see the type's notes), returning the project with the pair added.
+    @MainActor
+    private static func inlay(_ project: Project, out: URL, log: (String) -> Void, spin: (Double) -> Void) -> Project {
+        let d = UserDefaults.standard
+        let ids = project.inlayShapes(project.shapes.map(\.id)).map(\.id)
+        let tools = ToolLibraryStore.shared.tools
+        var settings = InlaySheet.defaults(tools: tools)
+        settings.boundary = VCarveInlay.Boundary(rawValue: d.string(forKey: "NativeCAMSnapshotInlayBoundary") ?? "") ?? .margin
+        if d.bool(forKey: "NativeCAMSnapshotInlayRaster") {
+            settings.clearanceTool = nil
+            settings.flatRaster = VCarveRaster()
+        }
+        log("menu Add Toolpath: Profile (cut out / inside) | Pocket | Drill | V-carve | Inlay… | Chamfer | Fluting | Prism")
+        // The dialog as it opens, and with each boundary (whole board both ways), the V-bit alone clearing in raster lines.
+        var sheets: [(String, InlayPairSettings)] = [("inlay-sheet.png", InlaySheet.defaults(tools: tools))]
+        for boundary in VCarveInlay.Boundary.allCases {
+            var s = settings
+            s.boundary = boundary
+            sheets.append(("inlay-sheet-\(boundary.rawValue).png", s))
+        }
+        var custom = settings
+        custom.boundary = .board
+        custom.boardSize = Vec2(project.stock.width / 2, project.stock.height / 2)
+        custom.clearanceTool = nil
+        custom.flatRaster = VCarveRaster(angle: 45)
+        sheets.append(("inlay-sheet-board-size-raster.png", custom))
+        for (name, s) in sheets {
+            render(InlaySheet(project: project, selection: ids, tools: tools, settings: s, height: 1000) { _ in },
+                   size: NSSize(width: 520, height: 1000), out: out, name: name, spin: spin)
+        }
+        var result = project
+        guard let pair = result.addInlay(settings, shapes: ids) else {
+            log("inlay: no closed vectors to make one from")
+            return project
+        }
+        let u = project.displayUnits
+        for op in [pair.pocket, pair.plug] {
+            guard case let .vcarve(p) = op.kind else { continue }
+            log("inlay \(op.name): \(op.shapeIDs.count) vectors, T\(op.tool.number) \(op.tool.name), "
+                + "P \(op.inlayPocketDepth.map { u.format($0) } ?? "-"), clearing \(p.clearanceTool.map { "T\($0.number)" } ?? "V-bit")"
+                + (p.flatRaster.map { " raster \(u.format(p.vBitRasterStepover(op.tool), decimals: 4)) at \($0.angle)°" } ?? " rings")
+                + (p.inlay.map { " \($0.role.rawValue) boundary \($0.boundary.rawValue)" } ?? "")
+                + ", \(op.enabled ? "included" : "not included") in the output")
+        }
+        let job = CAMEngine.generate(result)
+        for issue in job.issues { log("inlay check [\(issue.severity)] \(issue.operation ?? "job"): \(issue.message)") }
+        log("inlay differences: \(pair.pocket.inlayDifferences(from: pair.plug).count)")
+        // The plug's pocket depth changed: it offers to update the pocket.
+        var plug = pair.plug
+        if case var .vcarve(p) = plug.kind, var inlay = p.inlay {
+            inlay.pocketDepth += 0.05.inch
+            p.inlay = inlay
+            plug.kind = .vcarve(p)
+        }
+        var mismatched = result
+        if let i = mismatched.operations.firstIndex(where: { $0.id == plug.id }) { mismatched.operations[i] = plug }
+        log("inlay differences after a new pocket depth on the plug: "
+            + plug.inlayDifferences(from: pair.pocket).map { "\($0)" }.joined(separator: ", "))
+        render(OperationInspector(op: .constant(plug), project: mismatched, workspace: Workspace()), size: NSSize(width: 440, height: 2000),
+               out: out, name: "inspector-inlay-mismatch.png", spin: spin)
+        return result
     }
 
     /// Job Setup, each toolpath's inspector, the first shape's and the machine setup assistant's setup step, to inspector-*.png,

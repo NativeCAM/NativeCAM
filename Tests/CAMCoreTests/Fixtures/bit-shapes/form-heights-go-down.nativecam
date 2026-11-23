@@ -1,6 +1,6 @@
 {
   "displayUnits" : "mm",
-  "formatVersion" : 14,
+  "formatVersion" : 15,
   "machine" : {
     "arcFitTolerance" : 0.01,
     "dustCollection" : true,

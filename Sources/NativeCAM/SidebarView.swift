@@ -236,6 +236,8 @@ struct AddOperationMenu: View {
             Button("Pocket") { add(.pocket) }
             Button("Drill") { add(.drill) }
             Button("V-carve") { add(.vcarve) }
+            Button("Inlay…") { workspace.inlayRequest = InlayRequest(selection: selected) }
+                .help("Make a V-carve inlay's pocket and plug together, with one V-bit and depths that fit")
             Button("Chamfer") { add(.chamfer) }
                 .help("Bevel the edges of closed shapes with a V-bit")
             Button("Fluting") { add(.fluting) }

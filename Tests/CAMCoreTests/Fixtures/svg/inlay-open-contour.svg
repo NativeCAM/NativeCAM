@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written for NativeCAM's inlay tests (GPL-3.0-or-later). An inlay design with open contours: the "Design" layer
+     holds a closed L and an open stroke beside it; the "Swash" layer holds only an open curve. Add Toolpath > Inlay...
+     makes its pair from the closed L alone. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="120mm" height="100mm" viewBox="0 0 120 100">
+  <g id="Design">
+    <path d="M 40 35 L 80 35 L 80 49 L 46 49 L 46 65 L 40 65 Z"/>
+    <path d="M 96 15 L 110 25"/>
+  </g>
+  <g id="Swash">
+    <path d="M 20 88 Q 60 98 100 88"/>
+  </g>
+</svg>
