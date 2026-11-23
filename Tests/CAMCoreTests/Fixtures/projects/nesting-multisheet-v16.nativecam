@@ -6,7 +6,7 @@
     }
   ],
   "displayUnits" : "inch",
-  "formatVersion" : 14,
+  "formatVersion" : 16,
   "machine" : {
     "arcFitTolerance" : 0.01,
     "dustCollection" : true,

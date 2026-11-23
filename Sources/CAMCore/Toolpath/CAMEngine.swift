@@ -93,6 +93,9 @@ public struct SheetJob: Sendable {
     public var index: Int
     public var project: Project
     public var job: JobResult
+
+    /// Whether any toolpath cuts on this sheet: one with nothing to cut gets no file.
+    public var cutsAnything: Bool { job.toolpaths.contains { !$0.isEmpty } }
 }
 
 /// Turns a project into ordered toolpaths and checks them against the material and machine.
@@ -135,8 +138,14 @@ public enum CAMEngine {
                 }
             }
         }
-        let files = sheets.reduce(0) { $0 + (JobExport.files($1.project, job: $1.job)?.files.count ?? 1) }
-        let perTool = files > n ? ", one per tool on each sheet," : ", one per sheet,"
+        // A sheet with nothing to cut (its parts nested elsewhere, or taken off it) gets no file.
+        for s in sheets where !s.cutsAnything {
+            issues.append(JobIssue(.warning, "Sheet \(s.index + 1) has nothing to cut, so Export skips it. Nest the parts again to "
+                + "close the gap, or put parts on it."))
+        }
+        let cutting = sheets.filter(\.cutsAnything)
+        let files = cutting.reduce(0) { $0 + (JobExport.files($1.project, job: $1.job)?.files.count ?? 1) }
+        let perTool = files > cutting.count ? ", one per tool on each sheet," : ", one per sheet,"
         issues.append(JobIssue(.info, "Nested onto \(n) sheets, cut one after another. Export saves \(files) files\(perTool) "
             + "and a setup sheet with a page for each sheet."))
         var estimate: CycleTimeEstimate?

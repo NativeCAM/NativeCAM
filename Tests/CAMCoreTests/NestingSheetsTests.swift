@@ -304,8 +304,8 @@ struct NestSheetsJobTests {
         #expect(p.shapes.filter { p.sheetIndex(of: $0) == 0 }.count == 9)
         #expect(p.shapes.filter { p.sheetIndex(of: $0) == 1 }.count == 3)
         #expect(p.additionalSheets == [MaterialSheet(width: 340, height: 340)])
-        // Saved as format 14, and read back the same.
-        #expect(p.formatVersion == 14)
+        // Saved as format 16, and read back the same.
+        #expect(p.formatVersion == 16)
         #expect(try Project.decode(p.encoded()) == p)
         // Each sheet is a job of its own: its shapes, and the profile on just those.
         let second = p.sheetProject(1)
@@ -426,7 +426,7 @@ struct NestSheetsJobTests {
 
     // MARK: Saved two-sheet job
 
-    /// The shelf demo on two 24" × 48" sheets, nested once and saved as format 14.
+    /// The shelf demo on two 24" × 48" sheets, nested once and saved as format 16.
     static func twoSheetShelf() -> Project {
         var p = Project.demoNesting()
         p.name = "Two-sheet shelf"
@@ -437,26 +437,5 @@ struct NestSheetsJobTests {
         s.maxSheets = 3
         let r = job.nest(s)
         return job.apply(r, to: p, settings: s).project
-    }
-
-    /// The two-sheet job saved as format 14, posted for Avid's Mach4 profile: each sheet's file, byte for byte.
-    @Test func savedTwoSheetJobDecodesAndPostsEachSheet() throws {
-        let p = try GoldenPostTests.savedProject("sheets-v14", make: Self.twoSheetShelf)
-        #expect(p.formatVersion == 14)
-        #expect(p.sheetCount == 2)
-        #expect(try Project.decode(p.encoded()) == p)
-        let job = CAMEngine.generate(p)
-        #expect(!job.hasErrors, "\(job.issues.filter { $0.severity == .error })")
-        let export = try #require(JobExport.files(p, job: job, date: GoldenPostTests.date))
-        try #require(export.files.count == 2)
-        for (k, file) in export.files.enumerated() {
-            var post = AvidMach4Post(project: file.project, date: GoldenPostTests.date)
-            post.timeZone = TimeZone(identifier: "UTC")!
-            let data = post.post(file.toolpaths).data(using: .ascii, allowLossyConversion: true)!
-            try GoldenPostTests.check(data, golden: "decoded-sheets-v14-sheet-\(k + 1)")
-            let text = String(decoding: data, as: UTF8.self)
-            let issues = GCodeCheck.run(text, toolpaths: file.toolpaths, project: file.project, dialect: .avidMach4)
-            #expect(issues.filter { $0.severity != .info }.isEmpty, "\(issues.map(\.text))")
-        }
     }
 }

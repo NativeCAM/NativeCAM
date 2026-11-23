@@ -1,0 +1,283 @@
+{
+  "additionalSheets" : [
+    {
+      "height" : 340,
+      "width" : 340
+    },
+    {
+      "height" : 340,
+      "width" : 340
+    }
+  ],
+  "displayUnits" : "mm",
+  "formatVersion" : 16,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : false,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Gapped sheets",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "A329BE06-EF81-4439-B613-A475B2862F15",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 18.5,
+              "passDepth" : 6,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Profile",
+      "shapeIDs" : [
+        "92DA6A63-A92C-49F3-AAF7-4A49279588D6",
+        "92B01F96-9C1F-4F63-9F25-0238F66DB632",
+        "96874339-4F58-453C-A925-D7A37F7F1B20",
+        "CE62FBC6-3FAE-4EFD-92EC-5810C2655F15",
+        "00F96946-CDA0-4930-A022-DF458690BAC5",
+        "C66F702F-3F4D-4369-843F-F012153FCB4A",
+        "EFA2414A-1E33-4E59-A3AE-FF91D377EE28",
+        "A956585E-6697-42F5-9389-15FB37A165D5",
+        "36EBAD08-A1EB-48C0-8273-C57C0063A047"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "92DA6A63-A92C-49F3-AAF7-4A49279588D6",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 1",
+      "position" : {
+        "x" : 60,
+        "y" : 60
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "92B01F96-9C1F-4F63-9F25-0238F66DB632",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 2",
+      "position" : {
+        "x" : 165,
+        "y" : 60
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "96874339-4F58-453C-A925-D7A37F7F1B20",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 3",
+      "position" : {
+        "x" : 270,
+        "y" : 60
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "CE62FBC6-3FAE-4EFD-92EC-5810C2655F15",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 4",
+      "position" : {
+        "x" : 60,
+        "y" : 165
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "00F96946-CDA0-4930-A022-DF458690BAC5",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 5",
+      "position" : {
+        "x" : 165,
+        "y" : 165
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "C66F702F-3F4D-4369-843F-F012153FCB4A",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 6",
+      "position" : {
+        "x" : 270,
+        "y" : 165
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "EFA2414A-1E33-4E59-A3AE-FF91D377EE28",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 7",
+      "position" : {
+        "x" : 60,
+        "y" : 270
+      },
+      "rotation" : 0,
+      "scale" : 1,
+      "sheet" : 2
+    },
+    {
+      "id" : "A956585E-6697-42F5-9389-15FB37A165D5",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 8",
+      "position" : {
+        "x" : 165,
+        "y" : 270
+      },
+      "rotation" : 0,
+      "scale" : 1,
+      "sheet" : 2
+    },
+    {
+      "id" : "36EBAD08-A1EB-48C0-8273-C57C0063A047",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 100,
+          "width" : 100
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square 9",
+      "position" : {
+        "x" : 270,
+        "y" : 270
+      },
+      "rotation" : 0,
+      "scale" : 1,
+      "sheet" : 2
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 340,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 18,
+    "width" : 340,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

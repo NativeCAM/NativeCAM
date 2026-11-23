@@ -76,7 +76,7 @@ public enum SetupSheet {
         h += "<h2>Sheets</h2>\n<table><tr><th>#</th><th>Size</th><th class=\"num\">Parts</th><th>File</th><th class=\"num\">Time</th></tr>\n"
         for s in sheets {
             let parts = NestJob.parts(of: s.project).filter(\.isClosed).count
-            let file = files(ofSheet: s.index).map(esc).joined(separator: "<br>")
+            let file = s.cutsAnything ? files(ofSheet: s.index).map(esc).joined(separator: "<br>") : "Nothing to cut: no file"
             h += "<tr><td>\(s.index + 1)</td><td>\(size(sizes[s.index]))</td><td class=\"num\">\(parts)</td><td>\(file)</td>"
                 + "<td class=\"num\">\(time(s.job.estimatedSeconds))</td></tr>\n"
         }
@@ -105,7 +105,7 @@ public enum SetupSheet {
             h += "</ul>\n"
         }
         // A page for each sheet: its own setup sheet, for its files (the checks are the job's, above).
-        for s in sheets {
+        for s in sheets where s.cutsAnything {
             let mine = files(ofSheet: s.index)
             h += "<section class=\"tile\">\n"
             h += content(project: s.project, job: s.job, gcodeFile: mine.isEmpty ? nil : mine.joined(separator: ", "), checks: [],

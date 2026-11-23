@@ -22,10 +22,11 @@ public enum JobExport {
     public static func files(_ project: Project, job: JobResult, airCut: Double? = nil, date: Date = Date())
         -> (files: [File], post: any PostProcessor)? {
         if let sheets = job.sheets {
-            // Each sheet as a job of its own (`Project.sheetProject`): its files, named for the sheet.
+            // Each sheet as a job of its own (`Project.sheetProject`): its files, named for the sheet. A sheet with nothing
+            // to cut gets none (the others keep their numbers).
             var out: [File] = []
             var anyPost: (any PostProcessor)?
-            for s in sheets {
+            for s in sheets where s.cutsAnything {
                 guard let own = files(s.project, job: s.job, airCut: airCut, date: date) else { return nil }
                 anyPost = anyPost ?? own.post
                 for f in own.files {
