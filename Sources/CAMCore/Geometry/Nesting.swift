@@ -141,6 +141,10 @@ public enum Nesting {
         /// The groups (`Part.group`) of parts that may go in it, because all their toolpaths run before the hole is cut
         /// free; nil = any part.
         public var accepts: Set<Int>?
+        /// Where the first toolpath that cuts it free is in the run order, and whether that's a profile (which cuts
+        /// the loops inside the hole before the hole): what `accepts` is worked out from (`NestJob`).
+        public var freedAt: Int?
+        public var freedByProfile = false
 
         public init(outline: Polyline, reach: Double, accepts: Set<Int>? = nil) {
             self.outline = outline.isClosed ? outline.oriented(counterClockwise: true) : outline
