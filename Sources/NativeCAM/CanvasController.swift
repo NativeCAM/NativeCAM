@@ -113,7 +113,7 @@ final class CanvasController: ViewportInteractionDelegate {
         guard quad.count == 4 else { return }
         let poly = Polyline(quad, closed: true)
         var ids = Set<UUID>()
-        for shape in p.shapes {
+        for shape in p.shapes where workspace.isShown(shape, in: p) {
             let b = workspace.outlines(shape).bounds
             guard !b.isEmpty else { continue }
             let corners = [b.min, Vec2(b.max.x, b.min.y), b.max, Vec2(b.min.x, b.max.y)]
@@ -166,7 +166,7 @@ final class CanvasController: ViewportInteractionDelegate {
 
     func viewportCanPerform(_ command: CanvasCommand) -> Bool {
         switch command {
-        case .selectAll: return !p.shapes.isEmpty
+        case .selectAll: return p.shapes.contains { workspace.isShown($0, in: p) }
         case .paste: return NSPasteboard.general.data(forType: Self.pasteboardType) != nil
         case .deselect: return !workspace.selection.isEmpty
         case .delete, .cut, .copy, .duplicate: return !selected.isEmpty
@@ -176,7 +176,7 @@ final class CanvasController: ViewportInteractionDelegate {
     func viewportPerform(_ command: CanvasCommand) {
         switch command {
         case .selectAll:
-            select(Set(p.shapes.map(\.id)))
+            select(Set(p.shapes.filter { workspace.isShown($0, in: p) }.map(\.id)))
         case .deselect:
             workspace.selection = []
         case .delete:
@@ -229,6 +229,8 @@ final class CanvasController: ViewportInteractionDelegate {
         for var s in shapes {
             s.id = UUID()
             s.position += offset
+            // Pasted onto the sheet shown (a duplicate stays on its own sheet, which is the one shown).
+            s = workspace.placedOnSheet(s, of: proj)
             proj.shapes.append(s)
             newIDs.insert(s.id)
         }
