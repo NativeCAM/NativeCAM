@@ -408,6 +408,8 @@ struct NestSheetsJobTests {
         #expect(frames.count == 2 && frames.allSatisfy { $0.holes.count == 1 && $0.holes[0].accepts?.isEmpty == false })
         let top = try #require(job.parts.first { $0.name == "Top" })
         #expect(top.holes.allSatisfy { $0.accepts?.isEmpty == true })
+        #expect(job.partsWithHoles == 2)
+        #expect(job.partsWithClosedHoles.map(\.name) == ["Top"])
         var s = job.defaultSettings
         s.maxSheets = 3
         s.maxEvaluations = 20

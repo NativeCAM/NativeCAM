@@ -201,6 +201,8 @@ final class CanvasController: ViewportInteractionDelegate {
         var proj = p
         proj.shapes.removeAll { ids.contains($0.id) }
         for i in proj.operations.indices { proj.operations[i].shapeIDs.removeAll { ids.contains($0) } }
+        // A last sheet left with nothing on it goes too (in the same Undo step).
+        proj.removeEmptySheets()
         project.wrappedValue = proj
         workspace.selection = []
     }

@@ -180,8 +180,17 @@ public struct NestJob: Sendable {
         parts.map { Nesting.Part(outlines: $0.outlines, reach: $0.reach, holes: $0.holes, group: $0.group) }
     }
 
-    /// Parts with a hole another part could sit in.
-    public var partsWithHoles: Int { parts.count { !$0.holes.isEmpty } }
+    /// Parts with a hole another of the parts may sit in.
+    public var partsWithHoles: Int {
+        let groups = Set(parts.map(\.group))
+        return parts.count { $0.holes.contains { $0.accepts.map { !$0.isDisjoint(with: groups) } ?? true } }
+    }
+
+    /// Parts whose holes are all cut free before the parts that could go in them: their holes stay empty.
+    public var partsWithClosedHoles: [Part] {
+        let groups = Set(parts.map(\.group))
+        return parts.filter { !$0.holes.isEmpty && !$0.holes.contains { $0.accepts.map { !$0.isDisjoint(with: groups) } ?? true } }
+    }
 
     /// What the parts keep clear of: parts that stay put (open vectors as thin strips) on their sheets, and clamps and
     /// keep-outs on every sheet.

@@ -234,13 +234,15 @@ When the material is longer or wider than the machine reaches, NativeCAM cuts it
 3. **Check the layout.** The preview shows every sheet the layout uses, side by side, with the parts in holes a shade darker. Below it: how many parts fit, on how many sheets and how many in holes, how much of the strip of the last sheet they use they fill, and how big a piece of the last sheet is left.
 4. **Apply.** The parts move to the layout shown, every shape in a part together, onto their sheets, and their toolpaths follow and are worked out again. **⌘Z** puts them all back.
 
-<p align="center"><img src="images/nest-parts-sheet.png" width="720" alt="The Nest Parts sheet: spacing, edge margin, turns and search time on the left, the demo shelf's parts nested on the sheet on the right, with how much of the sheet they use"></p>
+<p align="center"><img src="images/nest-parts-sheet.png" width="720" alt="The Nest Parts sheet: spacing, edge margin, sheets and holes, turns and search time on the left, the demo shelf's parts nested on the sheet on the right, with how much of the sheet they use"></p>
 
 **What parts keep clear of.** Parts that aren't nested stay where they are, and the nested ones keep the spacing from them, from clamps and keep-outs and from the sheet's edges. A part whose toolpaths cut further outside it than the spacing (a 3D roughing set to clear past its vectors, say) keeps that far from everything else; the sheet says which. Lead-ins don't count: near another part a profile's lead-ins are shortened or left off, as they always are, and **Checks** lists any left off. The sheet notes when lead-ins are longer than the spacing allows, so you can widen it.
 
 **Parts that don't fit** are listed: there was no room on the sheets allowed, or a part is too big for a sheet. Each stays where it is, unless a nested part now takes its place, when it goes beside its sheet, past its right edge (its toolpaths are then off the material: nest again with more sheets, or turn them off).
 
 ### More than one sheet
+
+<p align="center"><img src="images/nest-sheets.png" width="720" alt="The Nest Parts sheet with the frames and coasters demo nested on two 24 by 48 inch sheets: brackets and coasters sit in the two frames' windows, and the summary says 19 of 19 parts are placed on 2 sheets, 7 in other parts' holes"></p>
 
 A job nested onto several sheets keeps them all in one project: the toolpaths are shared, and each sheet cuts the parts on it. The canvas shows one sheet at a time, its size and its parts. **Sheet 1 of 2** at the right of the bar below the canvas, with the arrows either side, shows another; picking a shape on another sheet in the sidebar shows that one. Shapes you draw, import or paste go on the sheet shown. Clamps and keep-outs are on every sheet: each sheet is clamped the same way.
 

@@ -182,8 +182,12 @@ struct SidebarView: View {
     }
 
     private func delete(shapes ids: Set<UUID>) {
-        project.shapes.removeAll { ids.contains($0.id) }
-        for i in project.operations.indices { project.operations[i].shapeIDs.removeAll { ids.contains($0) } }
+        var p = project
+        p.shapes.removeAll { ids.contains($0.id) }
+        for i in p.operations.indices { p.operations[i].shapeIDs.removeAll { ids.contains($0) } }
+        // A last sheet left with nothing on it goes too (in the same Undo step).
+        p.removeEmptySheets()
+        project = p
         workspace.selection = [.setup]
     }
 

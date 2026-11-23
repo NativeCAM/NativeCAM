@@ -282,7 +282,7 @@ struct NestPartsSheet: View {
         let size = "\(length(stock.width)) × \(length(stock.height)) \(units.symbol)"
         guard let job = session.job else { return "Arranges the parts on the \(size) sheet to use as little of it as it can." }
         let which = session.selection.isEmpty ? "every part" : "the selected \(job.parts.count == 1 ? "part" : "parts")"
-        let more = session.settings.sheetLimit > 1 ? ", then on more sheets," : ""
+        let more = session.settings.sheetLimit > 1 ? ", then on more sheets," : ","
         return "Arranges \(which) (\(job.parts.count)) on the \(size) sheet\(more) packed toward the \(alongX ? "left" : "bottom") edge so what's left is one piece."
     }
 
@@ -369,13 +369,17 @@ struct NestPartsSheet: View {
 
     private var holesNote: String {
         guard let job = session.job else { return "" }
-        let n = job.partsWithHoles
+        let n = job.partsWithHoles, closed = job.partsWithClosedHoles
         if !session.settings.partInPart { return "Parts stay out of other parts' holes." }
-        if n == 0 {
-            return "No part has a hole cut right through, from inside, before the parts that could go in it."
+        var note = n == 0 ? "No part has a hole other parts can go in."
+            : "\(n == 1 ? "1 part has a hole" : "\(n) parts have holes") other parts can go in: each is cut out before the hole "
+                + "it sits in, and keeps the spacing (or the hole's own cut) from its edge."
+        if let first = closed.first {
+            let who = closed.count == 1 ? "“\(first.name)”'s hole is" : "\(closed.count) parts' holes are"
+            note += " \(who) cut free before the other parts are cut out, so \(closed.count == 1 ? "it stays" : "they stay") empty: "
+                + "cut those parts earlier, or in the same profile, to use \(closed.count == 1 ? "it" : "them")."
         }
-        return "\(n == 1 ? "1 part has a hole" : "\(n) parts have holes") other parts can go in: each is cut out before the hole "
-            + "it sits in, and keeps the spacing (or the hole's own cut) from its edge."
+        return note
     }
 
     /// 0 keep as drawn, 4 quarter turns, -1 finer steps.
