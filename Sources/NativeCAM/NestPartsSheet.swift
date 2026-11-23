@@ -68,14 +68,15 @@ final class NestSession {
         }
     }
 
-    /// For snapshot checks: prepares and nests synchronously, with a fixed number of layouts.
-    func runNow(evaluations: Int) {
+    /// For snapshot checks: prepares and nests synchronously, with a fixed number of layouts (and sheets, when given).
+    func runNow(evaluations: Int, sheets: Int? = nil) {
         do {
             let job = try NestJob.prepare(project, selection: selection)
             self.job = job
             draw(job)
             var s = Self.recalled(job.defaultSettings)
             s.maxEvaluations = evaluations
+            if let sheets { s.maxSheets = sheets }
             settings = s
             phase = .ready
             result = job.nest(s)

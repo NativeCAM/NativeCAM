@@ -226,22 +226,29 @@ enum DebugSnapshot {
     @MainActor
     private static func nest(_ project: Project, out: URL, log: (String) -> Void, spin: (Double) -> Void) -> Project {
         let layouts = UserDefaults.standard.integer(forKey: "NativeCAMSnapshotNestLayouts")
+        let sheets = UserDefaults.standard.integer(forKey: "NativeCAMSnapshotNestSheets")
         let session = NestSession(project: project, selection: [])
-        session.runNow(evaluations: layouts > 0 ? layouts : 300)
+        session.runNow(evaluations: layouts > 0 ? layouts : 300, sheets: sheets > 0 ? sheets : nil)
         guard let job = session.job, let result = session.result, case let .success(applied)? = session.applied() else {
             log("nest refused: \(session.phase)")
             return project
         }
         let u = project.displayUnits
-        log("nest: \(result.placedCount) of \(job.parts.count) parts placed, \(job.fixed.count) stay put, \(job.keepOuts.count) keep-outs; "
-            + String(format: "utilization %.1f%% of %@ %@ used, %.1f%% of the sheet; %d layouts", result.utilization * 100,
+        log("nest: \(result.placedCount) of \(job.parts.count) parts placed on \(result.sheetCount) sheet\(result.sheetCount == 1 ? "" : "s") "
+            + "(\(result.sheets.map { String($0.partCount) }.joined(separator: " + "))), \(result.inHoles.count) in holes, "
+            + "\(job.fixed.count) stay put, \(job.keepOuts.count) keep-outs; "
+            + String(format: "utilization %.1f%% of %@ %@ used on the last sheet, %.1f%% of the sheets; %d layouts", result.utilization * 100,
                      u.format(result.usedLength), u.symbol, result.sheetUtilization * 100, result.evaluations))
         log("nest settings: spacing \(u.format(session.settings.spacing)) \(u.symbol), margin \(u.format(session.settings.edgeMargin)) \(u.symbol), "
-            + "turns \(session.settings.angles.map { String(Int($0)) }.joined(separator: "/")), grain \(session.settings.keepGrain)")
+            + "turns \(session.settings.angles.map { String(Int($0)) }.joined(separator: "/")), grain \(session.settings.keepGrain), "
+            + "up to \(session.settings.sheetLimit) sheets, part in part \(session.settings.partInPart)")
         for (i, part) in job.parts.enumerated() {
-            let where_ = result.placements[i].map { p in "turned \(Int(p.rotation))°, centre at \(u.format(p.position.x)), \(u.format(p.position.y))" }
-                ?? "didn't fit"
-            log("nest part \(part.name): \(where_), reach \(u.format(part.reach)) \(u.symbol)\(part.reachToolpath.map { " (\($0))" } ?? "")")
+            let where_ = result.placements[i].map { p in
+                "sheet \(p.sheet + 1), turned \(Int(p.rotation))°, centre at \(u.format(p.position.x)), \(u.format(p.position.y))"
+                    + (result.insideOf[i].map { ", in a hole of \(job.parts[$0].name)" } ?? "")
+            } ?? "didn't fit"
+            let holes = part.holes.isEmpty ? "" : ", \(part.holes.count) usable hole\(part.holes.count == 1 ? "" : "s")"
+            log("nest part \(part.name): \(where_), reach \(u.format(part.reach)) \(u.symbol)\(part.reachToolpath.map { " (\($0))" } ?? "")\(holes)")
         }
         for note in job.notes { log("nest note: \(note)") }
         for name in applied.movedAside { log("nest moved aside: \(name)") }
@@ -274,12 +281,28 @@ enum DebugSnapshot {
             ws.regenerate(p, debounce: false)
             let deadline = Date().addingTimeInterval(30)
             while ws.job == nil && Date() < deadline { spin(0.05) }
-            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(p), width: 1600, height: 1000, preset: .top) {
-                write(img, to: out.appendingPathComponent(name))
+            // Each sheet of a job nested onto several: nest-after.png, nest-after-sheet-2.png, …
+            for k in 0..<p.sheetCount {
+                ws.show(sheet: k, project: p)
+                let file = k == 0 ? name : name.replacingOccurrences(of: ".png", with: "-sheet-\(k + 1).png")
+                if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(p), width: 1600, height: 1000, preset: .top) {
+                    write(img, to: out.appendingPathComponent(file))
+                }
             }
         }
         top(project, "nest-before.png")
         top(applied.project, "nest-after.png")
+        if applied.sheetCount > 1 {
+            // Each sheet's job keeps its toolpaths to its own parts, and each file stays in the machine's travel.
+            let job = CAMEngine.generate(applied.project)
+            let files = JobExport.files(applied.project, job: job)?.files ?? []
+            let travel = applied.project.machine.travel
+            let inTravel = files.allSatisfy { f in
+                f.toolpaths.compactMap(\.cuttingExtents).allSatisfy { $0.min.x >= -1e-6 && $0.max.x <= travel.x && $0.min.y >= -1e-6 && $0.max.y <= travel.y }
+            }
+            log("check \(files.count >= applied.sheetCount && inTravel ? "PASS" : "FAIL"): \(applied.sheetCount) sheets export as "
+                + "\(files.count) files (\(files.compactMap(\.suffix).joined(separator: ",")))\(inTravel ? ", each in travel" : ", one past the travel")")
+        }
         return applied.project
     }
 
