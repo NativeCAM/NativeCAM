@@ -1,0 +1,181 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 15,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Wider than every chart",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "B1750000-0000-4000-8000-000000001068",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 19.049999999999997,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Big cove",
+      "shapeIDs" : [
+        "B1750000-0000-4000-8000-000000001065"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2540,
+          "plungeRate" : 762,
+          "spindleRPM" : 18000,
+          "stepdown" : 6.35,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 101.6,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 41.275,
+        "form" : {
+          "kind" : "cove",
+          "pilotDiameter" : 25.4,
+          "points" : [
+
+          ],
+          "radius" : 38.099999999999994,
+          "upperRadius" : 3.175
+        },
+        "id" : "B1750000-0000-4000-8000-000000001066",
+        "includedAngle" : 90,
+        "name" : "4\" Cove",
+        "notes" : "",
+        "number" : 6,
+        "shankDiameter" : 12.7,
+        "shape" : "form",
+        "stickout" : 53.974999999999994,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "B1750000-0000-4000-8000-000000001069",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 6.35,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Wide mill",
+      "shapeIDs" : [
+        "B1750000-0000-4000-8000-000000001065"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 1524,
+          "plungeRate" : 762,
+          "spindleRPM" : 18000,
+          "stepdown" : 6.35,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 31.75,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 31.75,
+        "id" : "B1750000-0000-4000-8000-000000001067",
+        "includedAngle" : 90,
+        "name" : "End mill",
+        "notes" : "",
+        "number" : 7,
+        "shankDiameter" : 31.75,
+        "shape" : "flatEndMill",
+        "stickout" : 44.45,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "B1750000-0000-4000-8000-000000001065",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 152.39999999999998,
+          "width" : 203.2
+        }
+      },
+      "layer" : "Default",
+      "name" : "Panel",
+      "position" : {
+        "x" : 152.39999999999998,
+        "y" : 127
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 254,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialKind" : "hardwood",
+    "materialName" : "Maple",
+    "plungeHeight" : 2.54,
+    "thickness" : 38.099999999999994,
+    "width" : 304.79999999999995,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

@@ -1,48 +1,59 @@
 import Foundation
 
 /// The chip-load check: a toolpath's chip against the chart for the job's material (`ChipLoad`). Thin chips rub, burn
-/// and dull the bit; very thick ones leave a rough edge.
+/// and dull the bit; very thick ones leave a rough edge. A form or dovetail bit set to turn faster than router-bit makers
+/// allow for its diameter is warned about too.
 extension CAMEngine {
     /// The chip at the toolpath's set feed, and at the lowest feed it keeps up over a stretch of cutting
     /// (`sustainedFeed`) when it lowers its own feed: an A-rate limit on a wrapped toolpath, feeds that follow the load.
     /// An adaptive toolpath's chip is thinned by its light radial cut (`Toolpath.radialLoad`), and the feed it's
     /// recommended keeps to what its loops can hold (`AdaptiveSettings.loopFeedLimit`, from `operation`'s settings).
+    /// Each message names the chart and how it was read (`ChipLoad.Reading.source`).
     static func chipLoadIssues(_ tp: Toolpath, project: Project, operation: CAMOperation? = nil) -> [JobIssue] {
         let tool = tp.tool
         guard ChipLoad.applies(to: tool), tp.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
         let material = project.stock.material
         // A bit whose width changes with depth is read at the widest it cuts with (the toolpath's deepest cut).
         let depth = tp.cuttingExtents.map { max(0, -$0.min.z) }
-        let chartDiameter = ChipLoad.chartDiameter(tool, depth: depth)
-        let r = ChipLoad.range(material, diameter: chartDiameter)
+        let reading = ChipLoad.reading(tool, material: material, depth: depth)
+        let r = reading.range
         let z = Double(tool.fluteCount)
         let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         let set = tool.cutting.feedRate
         let chip = set / (tp.spindleRPM * z) * thin
         let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
         let units = project.displayUnits
-        let range = "the \(inch(r.lowerBound))–\(inch(r.upperBound)) range for this bit in \(material.label.lowercased())"
+        let range = "the \(inch(r.lowerBound))–\(inch(r.upperBound)) range for this bit in \(material.label.lowercased()) "
+            + "(\(reading.source(units)))"
         var loops: Double?
         if tp.radialLoad != nil, case let .pocket(p)? = operation?.kind, p.strategy == .adaptive {
             loops = p.adaptiveSettings.loopFeedLimit(tool: tool, machine: project.machine)
         }
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops,
-                                     diameter: chartDiameter)
+        let rec = ChipLoad.recommendation(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops,
+                                          depth: depth)
         let held = loops.map { rec.feed >= $0 - 1e-6 && $0 < project.machine.maxFeedRate } ?? false
+        let notes = reading.notes(units)
         let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM"
             + (held ? ", as fast as its loops can run with this machine's acceleration." : ".")
+            + (notes.isEmpty ? "" : " " + notes.joined(separator: " "))
+        var issues: [JobIssue] = []
+        if let speed = overSpeedMessage(tp, reading: reading, project: project) {
+            issues.append(JobIssue(.warning, speed, operation: tp.name))
+        }
         // What the chip is: thinned, at an adaptive toolpath's light cut.
         let what = thin < 1 ? "Chip load \(inch(chip)) at the \(Int((100 * (tp.radialLoad ?? 0)).rounded()))% adaptive load (a light cut thins "
             + "the chip to \(Int((100 * thin).rounded()))% of the feed per tooth)" : "Chip load \(inch(chip))"
-        // Ball and bull noses finish at light engagement, so allow them a little below the end-mill floor.
+        // Ball and bull noses finish at light engagement, so allow them a little below the end-mill floor; form and
+        // dovetail bits too, whose chart's thin end is already half the thinnest a maker gives.
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         if chip < floor {
-            return [JobIssue(.warning, "\(what) is below \(range); thin chips rub, burn and dull the bit. \(suggestion)",
-                             operation: tp.name)]
+            issues.append(JobIssue(.warning, "\(what) is below \(range); thin chips rub, burn and dull the bit. \(suggestion)",
+                                   operation: tp.name))
+            return issues
         }
-        var issues: [JobIssue] = []
         if let low = sustainedFeed(tp), low.feed < set - 1e-6, low.feed / (tp.spindleRPM * z) * thin < floor {
-            issues.append(JobIssue(.warning, loweredChipMessage(tp, low: low, range: r, floor: floor, rangeText: range, project: project),
+            issues.append(JobIssue(.warning, loweredChipMessage(tp, low: low, reading: reading, floor: floor, rangeText: range,
+                                                                project: project),
                                    operation: tp.name))
         }
         if chip > r.upperBound * 1.25 {
@@ -52,9 +63,30 @@ extension CAMEngine {
         return issues
     }
 
+    /// The warning for a form or dovetail bit (or one wider than every chart) set to turn faster than its speed limit
+    /// (`ChipLoad.Reading.maxRPM`), or nil.
+    static func overSpeedMessage(_ tp: Toolpath, reading: ChipLoad.Reading, project: Project) -> String? {
+        guard let top = reading.maxRPM, tp.spindleRPM > top + 0.5 else { return nil }
+        let size = ChipLoad.size(reading.fullDiameter, project.displayUnits)
+        let rpm = { (v: Double) in "\(Int(v.rounded()).formatted()) RPM" }
+        var s = "Spindle speed \(rpm(tp.spindleRPM)) is faster than "
+        if reading.outsideChart {
+            s += "the \(rpm(top)) NativeCAM allows a \(size) \(reading.bitName), wider than every chart"
+        } else {
+            s += "the \(rpm(top)) router-bit makers allow a bit \(size) across (\(reading.chart.label))"
+        }
+        s += "; a bit turned past its rated speed can break. Check the speed on its shank or packaging"
+        if project.machine.minRPM > top + 1e-9 {
+            s += ". This spindle can't turn that slowly (its slowest is \(rpm(project.machine.minRPM))): don't run this bit on it."
+        } else {
+            s += ", and set the spindle no faster."
+        }
+        return s
+    }
+
     /// The warning for a chip that's thin only where the toolpath slows itself: where and why, and the spindle speed
     /// that makes the chip right at that feed (the fix the set feed's recommendation can't give).
-    static func loweredChipMessage(_ tp: Toolpath, low: (feed: Double, at: Vec3), range r: ClosedRange<Double>, floor: Double,
+    static func loweredChipMessage(_ tp: Toolpath, low: (feed: Double, at: Vec3), reading: ChipLoad.Reading, floor: Double,
                                    rangeText: String, project: Project) -> String {
         let tool = tp.tool, machine = project.machine
         let z = Double(tool.fluteCount)
@@ -73,9 +105,11 @@ extension CAMEngine {
         } else {
             place = "where the toolpath slows to \(ctx.feed(low.feed)) (from around X \(point(low.at.x)) Y \(point(low.at.y)) \(units.symbol))"
         }
-        // The speed that puts the chip a quarter into the range at that feed, as the set feed's recommendation does.
-        let target = r.lowerBound + (r.upperBound - r.lowerBound) * 0.25
-        let rpm = machine.clampRPM(low.feed * thin / (z * target))
+        // The speed that puts the chip at the chart's target at that feed, as the set feed's recommendation does (a quarter
+        // into the end-mill chart's range, the router-bit chart's thin end), never past the bit's speed limit.
+        let target = reading.target
+        var rpm = machine.clampRPM(low.feed * thin / (z * target))
+        if let top = reading.maxRPM { rpm = min(rpm, top) }
         var fix: String
         if low.feed / (rpm * z) * thin >= floor - 1e-12 {
             fix = "At that feed, \(Int(rpm.rounded()).formatted()) RPM keeps the chip in range."

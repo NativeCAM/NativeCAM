@@ -557,17 +557,20 @@ struct BitShapeTests {
         #expect(ChipLoad.applies(to: t) && ChipLoad.applies(to: dt))
     }
 
-    /// New tools start from a typical bit of each shape, with dimensions that make a bit and a chip load inside the chart
-    /// for plywood at a typical depth.
+    /// New tools start from a typical bit of each shape, with dimensions that make a bit and a chip load inside its chart
+    /// for plywood at a typical depth (the router-bit chart for form and dovetail bits), within their speed limit.
     @Test func newToolsStartFromATypicalBit() {
         for (shape, depth) in [(ToolShape.taperedBallNose, 2.0), (.form, 6.35), (.dovetail, 12.7)] {
             let t = ToolLibrary.template(for: shape)
             #expect(t.shape == shape && t.geometryProblem == nil, "\(shape)")
-            let r = ChipLoad.range(.plywood, diameter: ChipLoad.chartDiameter(t, depth: depth))
+            let reading = ChipLoad.reading(t, material: .plywood, depth: depth)
+            let r = reading.range
+            #expect(reading.chart == (shape == .taperedBallNose ? .endMill : .routerBit))
             let (lo, hi) = (r.lowerBound * 0.8, r.upperBound * 1.25)
             #expect(t.chipLoad >= lo, "\(shape): \(t.chipLoad) vs \(r)")
             #expect(t.chipLoad <= hi, "\(shape): \(t.chipLoad) vs \(r)")
             #expect(t.cutting.feedRate <= 250.inch + 1e-9 && t.cutting.spindleRPM >= 6000)
+            #expect(t.cutting.spindleRPM <= (reading.maxRPM ?? 24000))
         }
         #expect(ToolLibrary.template(for: .ballNose) == ToolLibrary.starter.tool(number: 7)!)
         // A Fusion tapered mill whose corner is smaller than its tip is a tapered bull nose, not imported as a ball.
