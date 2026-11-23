@@ -231,9 +231,18 @@ extension Model3DGenerator {
                 let sample = CLMap.sample(dropper, floor: floor, p, hint: &hint)
                 zs[i] = sample.z
                 model[i] = sample.onModel
-                guard within[i], sample.onModel, sample.winner >= 0,
-                      let touch = exact.contact(at: p, tip: sample.exactZ, triangle: Int(sample.winner)),
-                      touch.point.z < -1e-6 else { continue }
+                guard within[i] else { continue }
+                let touch: (point: SIMD3<Double>, normal: SIMD3<Double>)
+                if sample.onModel, sample.winner >= 0,
+                   let t = exact.contact(at: p, tip: sample.exactZ, triangle: Int(sample.winner)) {
+                    touch = t
+                } else if !sample.onModel, sample.z <= floor + 1e-6, s.mode != .model {
+                    // On the floor cleared round the model: the tip touches it.
+                    touch = (SIMD3(p.x, p.y, s.baseZ), SIMD3(0, 0, 1))
+                } else {
+                    continue
+                }
+                guard touch.point.z < -1e-6 else { continue }
                 var thickest = true
                 for reach in all where reach.left <= tol {
                     if reach.thickness(at: touch.point, normal: touch.normal, enough: tol / 2) <= tol {
