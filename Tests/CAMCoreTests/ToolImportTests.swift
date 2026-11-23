@@ -26,6 +26,9 @@ struct ToolImportTests {
             ["type": "tapered mill", "unit": "inches", "description": "1005 Tapered Ball Tip",
              "geometry": ["DC": 0.06, "LCF": 1, "NOF": 2, "RE": 0.03, "TA": 5.4, "SFDM": 0.25]],
             ["type": "radius mill", "unit": "inches", "description": "1006 Roundover", "geometry": ["DC": 0.375, "RE": 0.1875]],
+            ["type": "dovetail mill", "unit": "inches", "description": "1007 14 Deg Dovetail 1/2 Dia x 1/2 CH",
+             "geometry": ["DC": 0.5, "LCF": 0.5, "NOF": 2, "TA": 14, "SFDM": 0.25]],
+            ["type": "slot mill", "unit": "inches", "description": "1008 Slot cutter", "geometry": ["DC": 1]],
             ["type": "holder", "unit": "inches", "description": "ER20 holder"],
         ]
         return ["data": tools, "version": 18]
@@ -36,8 +39,8 @@ struct ToolImportTests {
         let archive = MeshImportTests.zip([("tools.json", json, true)])
         let r = try ToolLibraryImporter.load(data: archive)
         #expect(r.format == .fusion)
-        #expect(r.tools.count == 4)
-        #expect(Set(r.skipped.map(\.reason)) == ["tapered ball nose (not supported yet)", "roundover / radius bit (profile cutter)"])
+        #expect(r.tools.count == 7)
+        #expect(r.skipped.map(\.reason) == ["slot cutter"])
 
         let flat = try #require(r.tools.first { $0.tool.name.hasPrefix("1001") }).tool
         #expect(flat.id == UUID(uuidString: "0022A200-E317-4DB7-B43B-8EACD93C3A66"))
@@ -55,6 +58,25 @@ struct ToolImportTests {
         #expect(vee.shape == .vBit && vee.includedAngle == 60)
         let bull = try #require(r.tools.first { $0.tool.name.hasPrefix("1004") }).tool
         #expect(bull.shape == .bullNose && bull.cornerRadius == 2 && bull.diameter == 12 && bull.cutting.feedRate == 3000)
+
+        // Tapered ball nose: Fusion's diameter is its tip, its taper angle per side; it widens up the flutes.
+        let tb = try #require(r.tools.first { $0.tool.name.hasPrefix("1005") }).tool
+        #expect(tb.shape == .taperedBallNose)
+        #expect(abs(tb.tipDiameter - 1.524) < 1e-9 && abs(tb.includedAngle - 10.8) < 1e-9)
+        #expect(tb.geometryProblem == nil)
+        #expect(tb.diameter > tb.tipDiameter && tb.diameter <= 6.35 + 1e-9)
+        #expect(abs(tb.stepoverBasis - tb.tipDiameter) < 1e-12)
+        // Roundover: the pilot is the diameter less twice the radius, and the note says it was worked out.
+        let round = try #require(r.tools.first { $0.tool.name.hasPrefix("1006") }).tool
+        let roundForm = try #require(round.form)
+        #expect(round.shape == .form && roundForm.kind == .roundover)
+        #expect(abs(roundForm.radius - 4.7625) < 1e-9 && roundForm.pilotDiameter == 0)
+        #expect(abs(round.diameter - 9.525) < 1e-9 && round.notes.contains("⚠"))
+        let tail = try #require(r.tools.first { $0.tool.name.hasPrefix("1007") }).tool
+        #expect(tail.shape == .dovetail && abs(tail.includedAngle - 28) < 1e-9 && abs(tail.diameter - 12.7) < 1e-9)
+        let neck = 12.7 - 2 * 12.7 * tan(14 * Double.pi / 180)
+        #expect(abs(tail.dovetailSmallDiameter - neck) < 1e-9)
+        #expect(tail.hasUndercut)
     }
 
     @Test func fusionJSONAndNativeCAMLibrariesLoad() throws {
@@ -109,9 +131,14 @@ struct ToolImportTests {
             INSERT INTO tool_tree_entry VALUES ('t3', 'g14', 1, '33333333-3333-3333-3333-333333333333', NULL);
             INSERT INTO tool_tree_entry VALUES ('t4', 'g14', 2, '44444444-4444-4444-4444-444444444444', NULL);
             INSERT INTO tool_tree_entry VALUES ('t5', 'g14', 3, '55555555-5555-5555-5555-555555555555', NULL);
-            -- Unsupported: tapered ball nose and a form tool.
+            -- A tapered ball nose (Vectric's angle is per side), form tools named for what they are, and one that isn't.
             INSERT INTO tool_geometry VALUES ('66666666-6666-6666-6666-666666666666', '#2006 Tapered Ball Nose', NULL, 5, 1, 0.125, 6.2, NULL, 2, NULL, 0.0156);
             INSERT INTO tool_geometry VALUES ('77777777-7777-7777-7777-777777777777', '#2007 Ogee', NULL, 8, 1, 1, NULL, NULL, 2, NULL, NULL);
+            INSERT INTO tool_geometry VALUES ('88888888-8888-8888-8888-888888888888', '#2008 1/4" RADIUS ROUNDOVER 1-1/8 DIA', NULL, 8, 1, 1.125, NULL, NULL, 2, NULL, NULL);
+            INSERT INTO tool_geometry VALUES ('99999999-9999-9999-9999-999999999999', '#2009 14° DOVETAIL 1/2 DIA x 1/2 CH', NULL, 8, 1, 0.5, NULL, NULL, 2, NULL, NULL);
+            INSERT INTO tool_tree_entry VALUES ('t6', 'g14', 4, '66666666-6666-6666-6666-666666666666', NULL);
+            INSERT INTO tool_tree_entry VALUES ('t8', 'g14', 5, '88888888-8888-8888-8888-888888888888', NULL);
+            INSERT INTO tool_tree_entry VALUES ('t9', 'g14', 6, '99999999-9999-9999-9999-999999999999', NULL);
             """
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
             throw ToolImportError.unreadable(String(cString: sqlite3_errmsg(db)))
@@ -126,9 +153,9 @@ struct ToolImportTests {
         try Self.makeVTDB(at: url)
         let r = try ToolLibraryImporter.load(url: url)
         #expect(r.format == .vectric)
-        #expect(r.skipped.map(\.reason).sorted() == ["form tool (custom profile)", "tapered ball nose (not supported yet)"])
+        #expect(r.skipped.map(\.reason) == ["form tool (custom profile)"])
         // Folder order: "6mm Shank" (sibling 0) before "1/4" Shank" (sibling 1), tools in their order within.
-        #expect(r.tools.map { $0.tool.name.prefix(5) } == ["#2002", "#2001", "#2003", "#2004", "#2005"])
+        #expect(r.tools.map { $0.tool.name.prefix(5) } == ["#2002", "#2001", "#2003", "#2004", "#2005", "#2006", "#2008", "#2009"])
         #expect(r.tools[0].group == "Acme Master ▸ 6mm Shank" && r.tools[1].group == "Acme Master ▸ 1/4\" Shank")
 
         let ball = r.tools[0].tool
@@ -157,6 +184,21 @@ struct ToolImportTests {
         // Unknown cutting length: a short estimate (the depth check then warns rather than missing a too-deep cut).
         #expect(abs(bull.fluteLength - 25.4) < 1e-9 && bull.notes.contains("Cutting length estimated"))
         #expect(ChipLoad.applies(to: bull) && bull.notes.contains("plywood chip-load chart"))
+
+        let tb = r.tools[5].tool
+        let tip = 2 * 0.0156 * 25.4
+        #expect(tb.shape == .taperedBallNose && abs(tb.includedAngle - 12.4) < 1e-9)
+        #expect(abs(tb.tipDiameter - tip) < 1e-9)
+        #expect(abs(tb.shankDiameter - 3.175) < 1e-9 && tb.geometryProblem == nil)
+        #expect(tb.notes.contains("per side"))
+        let round = r.tools[6].tool
+        let roundForm = try #require(round.form)
+        #expect(round.shape == .form && roundForm.kind == .roundover)
+        #expect(abs(roundForm.radius - 6.35) < 1e-9)
+        #expect(abs(roundForm.pilotDiameter - 15.875) < 1e-9 && abs(round.diameter - 28.575) < 1e-9)
+        #expect(round.notes.contains("⚠ Roundover read from the name"))
+        let tail = r.tools[7].tool
+        #expect(tail.shape == .dovetail && abs(tail.includedAngle - 28) < 1e-9 && abs(tail.fluteLength - 12.7) < 1e-9)
     }
 
     // MARK: Names

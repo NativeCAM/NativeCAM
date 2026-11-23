@@ -13,6 +13,13 @@ public enum ToolShape: String, Codable, Sendable, CaseIterable, Identifiable {
     /// Large-diameter flat spoilboard / surfacing bit.
     case surfacing
     case drill
+    /// Tapered ball nose (3D relief carving): a ball tip of diameter `tipDiameter` running into a cone that widens by
+    /// half the `includedAngle` per side, up to `diameter` at the top of the flutes.
+    case taperedBallNose
+    /// A bit with a profile of its own for cutting edges (roundover, cove, ogee or custom), described by `Tool.form`.
+    case form
+    /// Dovetail: widest at the tip (`diameter`), narrowing by half the `includedAngle` per side up to `fluteLength`.
+    case dovetail
 
     public var id: String { rawValue }
 
@@ -25,12 +32,26 @@ public enum ToolShape: String, Codable, Sendable, CaseIterable, Identifiable {
         case .engraving: "Engraving"
         case .surfacing: "Surfacing"
         case .drill: "Drill"
+        case .taperedBallNose: "Tapered Ball Nose"
+        case .form: "Form"
+        case .dovetail: "Dovetail"
         }
     }
 
     public var isTapered: Bool { self == .vBit || self == .engraving }
     public var usesCornerRadius: Bool { self == .bullNose }
     public var usesAngle: Bool { self == .vBit || self == .engraving || self == .drill }
+    /// Form and dovetail bits, which only cut edges (a profile toolpath at depth), never floors or 3D surfaces.
+    public var cutsEdgesOnly: Bool { self == .form || self == .dovetail }
+
+    /// The project file format a toolpath using this shape needs: tapered ball noses, form and dovetail bits are format
+    /// 15 (a format-14 build can't read them).
+    public var requiredFormatVersion: Int {
+        switch self {
+        case .taperedBallNose, .form, .dovetail: 15
+        default: 1
+        }
+    }
 }
 
 public enum FluteDirection: String, Codable, Sendable, CaseIterable, Identifiable {
@@ -85,12 +106,14 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
     /// Compression bits: length of the upcut section at the tip. The first pass must go deeper than this or the bit
     /// cuts like an upcut and frays the top face. nil means "about one diameter".
     public var upcutLength: Double?
+    /// Form bits: the shape of the cutting edge. nil for every other shape (and not written to files then).
+    public var form: FormProfile?
 
     public init(id: UUID = UUID(), number: Int, name: String, shape: ToolShape,
                 fluteDirection: FluteDirection = .upcut, fluteCount: Int = 2,
                 diameter: Double, shankDiameter: Double? = nil, fluteLength: Double, stickout: Double? = nil,
                 cornerRadius: Double = 0, includedAngle: Double = 90, tipDiameter: Double = 0,
-                cutting: CuttingData, notes: String = "", upcutLength: Double? = nil) {
+                cutting: CuttingData, notes: String = "", upcutLength: Double? = nil, form: FormProfile? = nil) {
         self.id = id
         self.number = number
         self.name = name
@@ -107,6 +130,7 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
         self.cutting = cutting
         self.notes = notes
         self.upcutLength = upcutLength
+        self.form = form
     }
 
     public var radius: Double { diameter / 2 }
@@ -120,8 +144,13 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
         return max(0, (radius - tipDiameter / 2) / halfAngleTangent)
     }
 
+    /// The diameter stepover fractions are taken of: a tapered ball nose's tip (as Vectric does), else the diameter.
+    public var stepoverBasis: Double {
+        shape == .taperedBallNose && tipDiameter > 1e-6 ? min(tipDiameter, diameter) : diameter
+    }
+
     /// Lateral stepover in mm.
-    public var stepover: Double { max(0.01, diameter * cutting.stepoverFraction) }
+    public var stepover: Double { max(0.01, stepoverBasis * cutting.stepoverFraction) }
 
     /// Height of the tool's cutting surface above its lowest point at radial distance `r` from the axis,
     /// or nil if `r` is outside the tool. This is the profile the simulator stamps into the stock.
@@ -147,12 +176,24 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
         case .drill:
             // Conical point, then full diameter.
             return r / halfAngleTangent
+        case .taperedBallNose:
+            return TaperedBall(self).height(atRadius: r)
+        case .dovetail:
+            // Widest at the tip: from below it's a flat bottom.
+            return 0
+        case .form:
+            return ToolProfile.lowerEnvelope(cuttingEdge, atRadius: r)
         }
     }
 
     /// Cutting radius at a height `h` above the tool tip (inverse of `profileHeight`).
     public func radius(atHeight h: Double) -> Double {
         let R = radius
+        switch shape {
+        case .taperedBallNose: return TaperedBall(self).radius(atHeight: h)
+        case .form, .dovetail: return ToolProfile.radius(cuttingEdge, atHeight: h)
+        default: break
+        }
         if h <= 0 { return shape.isTapered ? tipDiameter / 2 : (shape == .ballNose || shape == .drill ? 0 : (shape == .bullNose ? R - cornerRadius : R)) }
         switch shape {
         case .flatEndMill, .surfacing:
@@ -168,6 +209,8 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
             return min(R, tipDiameter / 2 + h * halfAngleTangent)
         case .drill:
             return min(R, h * halfAngleTangent)
+        case .taperedBallNose, .form, .dovetail:
+            return R // handled above
         }
     }
 
@@ -196,6 +239,8 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
             pts = [Vec2(0, 0), Vec2(tipDiameter / 2, 0), Vec2(R, taperHeight)]
         case .drill:
             pts = [Vec2(0, 0), Vec2(R, R / halfAngleTangent)]
+        case .taperedBallNose, .form, .dovetail:
+            return ToolProfile.silhouette(self, segments: segments)
         }
         let cutTop = max(fluteLength, pts.last?.y ?? 0)
         pts.append(Vec2(R, cutTop))
@@ -234,6 +279,17 @@ public struct Tool: Hashable, Codable, Sendable, Identifiable {
         if shape.usesCornerRadius && !near(cornerRadius, other.cornerRadius) { return false }
         if shape.usesAngle && !near(includedAngle, other.includedAngle, 0.01) { return false }
         if shape.isTapered && !near(tipDiameter, other.tipDiameter) { return false }
+        switch shape {
+        case .taperedBallNose:
+            if !near(tipDiameter, other.tipDiameter) || !near(includedAngle, other.includedAngle, 0.01) { return false }
+        case .dovetail:
+            if !near(includedAngle, other.includedAngle, 0.01) || !near(fluteLength, other.fluteLength) { return false }
+        case .form:
+            let a = cuttingEdge, b = other.cuttingEdge
+            if a.count != b.count || zip(a, b).contains(where: { !near($0.x, $1.x) || !near($0.y, $1.y) }) { return false }
+        default:
+            break
+        }
         return true
     }
 }

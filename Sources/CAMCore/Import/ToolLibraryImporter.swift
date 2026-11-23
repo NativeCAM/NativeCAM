@@ -52,8 +52,10 @@ public enum ToolImportError: Error, LocalizedError {
 /// Vendors publish their bits in these formats (Amana Tool, for example, ships both). Geometry, flute count and the
 /// library's feeds and speeds come across; anything the file doesn't say (Vectric files carry no cutting or shank
 /// length) is read from the tool's name where it follows the usual "D x cut length x shank" pattern, otherwise
-/// estimated, and every estimate is written into the tool's notes. Tools NativeCAM can't cut with (tapered ball noses,
-/// form, thread, dovetail and roundover bits, lasers) are listed as skipped instead of being approximated.
+/// estimated, and every estimate is written into the tool's notes. Tapered ball noses, roundover (radius) and dovetail
+/// bits come across as those shapes; Vectric form tools whose names say what they are (roundover, cove, ogee, dovetail)
+/// do too, with their profile read from the name and noted as such. Tools NativeCAM can't cut with (thread mills,
+/// slot and lollipop cutters, other form tools, lasers) are listed as skipped instead of being approximated.
 public enum ToolLibraryImporter {
     public static let fileExtensions = ["tools", "vtdb", "json"]
 
@@ -141,7 +143,14 @@ public enum ToolLibraryImporter {
                 shape = re >= dc / 2 - 1e-6 ? .ballNose : (re > 1e-6 ? .bullNose : .flatEndMill)
                 corner = re
             } else if re > 1e-3 {
-                return .skip(SkippedTool(name: name, reason: "tapered ball nose (not supported yet)"))
+                // Only a ball tip: a tapered bull nose (a flat between its corners) would be modelled slimmer than the
+                // bit, and cut into steep walls.
+                guard re >= dc / 2 - max(0.005, 0.02 * dc) else {
+                    return .skip(SkippedTool(name: name, reason: "tapered bull nose (corner radius smaller than the tip)"))
+                }
+                shape = .taperedBallNose
+                angle = 2 * taper
+                tipDiameter = 2 * re
             } else {
                 shape = .engraving
                 angle = 2 * taper
@@ -155,6 +164,14 @@ public enum ToolLibraryImporter {
         case "drill", "spot drill":
             shape = .drill
             angle = sig > 0 ? sig : 118
+        case "radius mill":
+            guard re > 1e-6 else { return .skip(SkippedTool(name: name, reason: "roundover bit with no radius")) }
+            shape = .form
+        case "dovetail mill":
+            guard taper > 1e-6 else { return .skip(SkippedTool(name: name, reason: "dovetail bit with no angle")) }
+            shape = .dovetail
+            // Wood dovetails lean 7–14° from upright; an angle past 45° is measured from the bottom face instead.
+            angle = 2 * (taper > 45 ? 90 - taper : taper)
         default:
             return .skip(SkippedTool(name: name, reason: unsupportedReason(type)))
         }
@@ -172,22 +189,49 @@ public enum ToolLibraryImporter {
                         fluteLength: len("LCF") ?? 0, cornerRadius: corner, includedAngle: angle, tipDiameter: tipDiameter,
                         cutting: CuttingData(spindleRPM: 0, feedRate: 0, plungeRate: 0, stepdown: 0, stepoverFraction: 0))
         if let lb = len("LB"), lb >= tool.fluteLength { tool.stickout = lb }
+        switch shape {
+        case .taperedBallNose:
+            notes.append("Tapered ball nose: \(fmtMM(re)) mm tip radius, \(fmtMM(taper))° per side (Fusion's taper angle).")
+            // Fusion's diameter is the tip's; the bit widens up its flutes to the shank.
+            if len("SFDM").map({ $0 <= 0 }) ?? true {
+                tool.shankDiameter = hints.shank ?? max(0.25.inch, dc)
+                if hints.shank == nil { notes.append("⚠ Shank diameter estimated as \(fmtMM(tool.shankDiameter)) mm (the library doesn't give it): check it.") }
+            }
+            tool.diameter = tool.shankDiameter
+        case .form:
+            let pilot = len("tip-diameter").flatMap { $0 > 0 ? $0 : nil } ?? max(0, dc - 2 * re)
+            tool.form = FormProfile(kind: .roundover, radius: re, pilotDiameter: pilot)
+            if tool.fluteLength < re { tool.fluteLength = re }
+            notes.append("⚠ Roundover: \(fmtMM(re)) mm radius, \(fmtMM(pilot)) mm pilot"
+                + (len("tip-diameter") == nil ? " (the diameter less twice the radius)" : "") + ". Check the profile against the bit.")
+        case .dovetail:
+            notes.append("⚠ Dovetail: \(fmtMM(angle / 2))° per side, read from Fusion's taper angle\(taper > 45 ? " (measured from the bottom face)" : ""). "
+                + "Check it against the bit.")
+        default:
+            break
+        }
         var cutting = tool.cutting
         if let p = preset {
             cutting.spindleRPM = number(p["n"]) ?? 0
             cutting.feedRate = (number(p["v_f"]) ?? 0) * scale
             cutting.plungeRate = (number(p["v_f_plunge"]) ?? 0) * scale
             if p["use-stepdown"] as? Bool == true, let s = number(p["stepdown"]) { cutting.stepdown = s * scale }
-            if p["use-stepover"] as? Bool == true, let s = number(p["stepover"]) { cutting.stepoverFraction = s * scale / dc }
+            if p["use-stepover"] as? Bool == true, let s = number(p["stepover"]) {
+                cutting.stepoverFraction = s * scale / (shape == .taperedBallNose ? max(tipDiameter, 1e-6) : dc)
+            }
             if cutting.feedRate > 0, let pname = p["name"] as? String, !pname.isEmpty {
                 notes.append("Feeds and speeds from its “\(pname)” preset.")
             }
         }
         tool.cutting = cutting
         finish(&tool, notes: &notes, hints: hints)
+        tool.fitDiameterToShape()
         tool.notes = notes.joined(separator: "\n")
+        if let problem = tool.geometryProblem { return .skip(SkippedTool(name: name, reason: problem)) }
         return .tool(tool)
     }
+
+    static func fmtMM(_ v: Double) -> String { v.formatted(.number.precision(.fractionLength(0...3))) }
 
     // MARK: Vectric
 
@@ -303,11 +347,20 @@ public enum ToolLibraryImporter {
                 shape = .drill
                 angle = (60...180).contains(angleIn) ? angleIn : 118
             case .taperedBallNose:
-                skipped.append(SkippedTool(name: name, reason: "tapered ball nose (not supported yet)")); continue
+                // Vectric's angle for a tapered ball nose is its side angle (per side).
+                shape = .taperedBallNose
+                angle = 2 * angleIn
+                tipDiameter = 2 * tipR
             case .diamondDrag:
                 skipped.append(SkippedTool(name: name, reason: "diamond drag engraver")); continue
             case .formTool:
-                skipped.append(SkippedTool(name: name, reason: "form tool (custom profile)")); continue
+                // The profile itself isn't in the database in a form NativeCAM reads: only bits whose names say what
+                // they are come across, shaped from the name.
+                guard let guess = FormNameHints.parse(name, inches: scale > 1) else {
+                    skipped.append(SkippedTool(name: name, reason: "form tool (custom profile)")); continue
+                }
+                shape = guess.shape
+                angle = guess.angle.map { 2 * $0 } ?? 90
             case .threadMill:
                 skipped.append(SkippedTool(name: name, reason: "thread mill")); continue
             case .laser:
@@ -315,6 +368,13 @@ public enum ToolLibraryImporter {
             }
             guard d > 0 else { skipped.append(SkippedTool(name: name, reason: "no cutting diameter")); continue }
             let hints = ToolNameHints.parse(name, inches: scale > 1)
+            let formGuess = type == .formTool ? FormNameHints.parse(name, inches: scale > 1) : nil
+            if shape == .taperedBallNose, tipR <= 0 {
+                skipped.append(SkippedTool(name: name, reason: "tapered ball nose with no tip radius")); continue
+            }
+            if shape == .dovetail, formGuess?.angle == nil {
+                skipped.append(SkippedTool(name: name, reason: "dovetail with no angle in its name")); continue
+            }
             let cut = cuts[gid]
             var tool = Tool(id: UUID(uuidString: gid) ?? stableID(gid + name), number: cut?.number ?? 0, name: name, shape: shape,
                             fluteDirection: hints.direction ?? defaultDirection(shape),
@@ -322,6 +382,28 @@ public enum ToolLibraryImporter {
                             fluteLength: (r[9].number ?? 0) * scale, cornerRadius: corner, includedAngle: angle, tipDiameter: tipDiameter,
                             cutting: CuttingData(spindleRPM: 0, feedRate: 0, plungeRate: 0, stepdown: 0, stepoverFraction: 0))
             var notes = ["Imported from a Vectric tool database."]
+            switch shape {
+            case .taperedBallNose:
+                // Vectric's diameter is the top of the taper (or, in some vendors' files, the tip's): the shank, unless
+                // the name gives one.
+                if tool.shankDiameter <= 0 || tool.shankDiameter == d, hints.shank == nil, d <= 2 * tipR + 0.01 {
+                    tool.shankDiameter = 0.25.inch
+                    notes.append("⚠ Shank diameter estimated as 1/4\" (the library gives only the tip): check it.")
+                }
+                notes.append("Tapered ball nose: \(fmtMM(tipR)) mm tip radius, \(fmtMM(angleIn))° per side (Vectric's angle).")
+            case .form, .dovetail:
+                if let g = formGuess {
+                    if let kind = g.kind {
+                        let r = g.radius ?? 0
+                        let pilot = max(0, d - 2 * (kind == .ogee ? 2 * r : r))
+                        tool.form = FormProfile(kind: kind, radius: r, upperRadius: r, pilotDiameter: pilot)
+                        if tool.fluteLength <= 0 { tool.fluteLength = tool.form!.profileHeight }
+                    }
+                    notes.append("⚠ " + g.note + " Check the profile against the bit before cutting.")
+                }
+            default:
+                break
+            }
             if let c = cut, (c.feed ?? 0) > 0 {
                 let rate = rateScale(c.rateUnits)
                 let lengthScale = c.lengthUnits == 1 ? 25.4 : 1
@@ -329,10 +411,12 @@ public enum ToolLibraryImporter {
                 tool.cutting.feedRate = (c.feed ?? 0) * rate
                 tool.cutting.plungeRate = (c.plunge ?? 0) * rate
                 tool.cutting.stepdown = (c.stepdown ?? 0) * lengthScale
-                tool.cutting.stepoverFraction = (c.stepover ?? 0) * lengthScale / d
+                tool.cutting.stepoverFraction = (c.stepover ?? 0) * lengthScale / (shape == .taperedBallNose ? max(tipDiameter, 1e-6) : d)
                 notes.append("Feeds and speeds from its \(c.material.map { "“\($0)”" } ?? "default") settings.")
             }
             finish(&tool, notes: &notes, hints: hints)
+            tool.fitDiameterToShape()
+            if let problem = tool.geometryProblem { skipped.append(SkippedTool(name: name, reason: problem)); continue }
             if !vendorNotes.isEmpty { notes.append(vendorNotes.replacingOccurrences(of: "\r\n", with: "\n")) }
             tool.notes = notes.joined(separator: "\n")
             let p = place[gid] ?? (Int.max, "")
@@ -397,13 +481,16 @@ public enum ToolLibraryImporter {
             switch tool.shape {
             case .vBit, .engraving: c.stepdown = 0.125.inch
             case .ballNose: c.stepdown = 0.25 * d
+            case .taperedBallNose: c.stepdown = max(0.5, tool.tipDiameter)
             case .drill: c.stepdown = d
+            case .form: c.stepdown = max(1, tool.form?.profileHeight ?? 0.5 * d)
+            case .dovetail: c.stepdown = max(1, tool.fluteLength)
             default: c.stepdown = 0.5 * d
             }
             estimated.append("stepdown")
         }
         if c.stepoverFraction <= 0 || c.stepoverFraction > 1 {
-            c.stepoverFraction = tool.shape == .ballNose ? 0.1 : 0.4
+            c.stepoverFraction = tool.shape == .ballNose || tool.shape == .taperedBallNose ? 0.1 : 0.4
             estimated.append("stepover")
         }
         tool.cutting = c
@@ -426,13 +513,11 @@ public enum ToolLibraryImporter {
     }
 
     static func defaultDirection(_ shape: ToolShape) -> FluteDirection {
-        shape == .vBit || shape == .engraving || shape == .drill ? .straight : .upcut
+        shape == .vBit || shape == .engraving || shape == .drill || shape == .form || shape == .dovetail ? .straight : .upcut
     }
 
     static func unsupportedReason(_ type: String) -> String {
         switch type {
-        case "radius mill": "roundover / radius bit (profile cutter)"
-        case "dovetail mill": "dovetail bit"
         case "slot mill": "slot cutter"
         case "form mill": "form tool (custom profile)"
         case "lollipop mill": "lollipop cutter"
@@ -509,6 +594,59 @@ enum ToolNameHints {
         let f = s.split(separator: "/")
         if f.count == 2, let a = Double(f[0]), let b = Double(f[1]), b != 0 { return a / b }
         return Double(s)
+    }
+}
+
+/// What a form tool is from its name ("1/4\" RADIUS ROUNDOVER", "COVE 3/8 R", "14° DOVETAIL"): Vectric's tool database
+/// keeps a form tool's profile in a form NativeCAM doesn't read.
+enum FormNameHints {
+    struct Guess {
+        /// The form preset, or nil for a dovetail.
+        var kind: FormProfile.Kind?
+        var radius: Double?
+        /// A dovetail's angle per side, degrees.
+        var angle: Double?
+        var note: String
+        var shape: ToolShape { kind == nil ? .dovetail : .form }
+    }
+
+    private static let num = #"(\d+-\d+/\d+|\d+/\d+|\d*\.\d+|\d+)\s*(MM|"|IN(?:CH)?\b)?"#
+    private static let radiusAfter = try! NSRegularExpression(pattern: num + #"\s*(?:R\b|RAD\b|RADIUS)"#, options: .caseInsensitive)
+    private static let radiusBefore = try! NSRegularExpression(pattern: #"(?:\bR|RADIUS)\s*"# + num, options: .caseInsensitive)
+    private static let degrees = try! NSRegularExpression(pattern: #"(\d+(?:\.\d+)?)\s*(?:°|DEG)"#, options: .caseInsensitive)
+
+    static func parse(_ name: String, inches: Bool) -> Guess? {
+        let u = name.uppercased()
+        let ns = name as NSString
+        let all = NSRange(location: 0, length: ns.length)
+        func value(_ m: NSTextCheckingResult) -> Double? {
+            guard let v = ToolNameHints.parseNumber(ns.substring(with: m.range(at: 1))) else { return nil }
+            let unitRange = m.range(at: 2)
+            let unit = unitRange.location == NSNotFound ? "" : ns.substring(with: unitRange).uppercased()
+            if unit == "MM" { return v }
+            if unit == "\"" || unit.hasPrefix("IN") { return v * 25.4 }
+            return inches ? v * 25.4 : v
+        }
+        if u.contains("DOVETAIL") || u.contains("DOVE TAIL") {
+            let a = degrees.firstMatch(in: name, range: all).flatMap { Double(ns.substring(with: $0.range(at: 1))) }
+            return Guess(kind: nil, angle: a.flatMap { (1...45).contains($0) ? $0 : nil },
+                         note: "Dovetail read from the name\(a.map { ": \(ToolLibraryImporter.fmtMM($0))° per side" } ?? "").")
+        }
+        let kind: FormProfile.Kind
+        if u.contains("ROUNDOVER") || u.contains("ROUND OVER") || u.contains("ROUND-OVER") || u.contains("CORNER ROUND") {
+            kind = .roundover
+        } else if u.contains("OGEE") {
+            kind = .ogee
+        } else if u.contains("COVE") {
+            kind = .cove
+        } else {
+            return nil
+        }
+        guard let r = (radiusAfter.firstMatch(in: name, range: all) ?? radiusBefore.firstMatch(in: name, range: all)).flatMap(value),
+              r > 0.1, r < 60 else { return nil }
+        let what = kind == .ogee ? "Ogee read from the name: two \(ToolLibraryImporter.fmtMM(r)) mm radii"
+            : "\(kind.label) read from the name: \(ToolLibraryImporter.fmtMM(r)) mm radius"
+        return Guess(kind: kind, radius: r, note: what + ", pilot the diameter less the profile's width.")
     }
 }
 

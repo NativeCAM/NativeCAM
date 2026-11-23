@@ -129,6 +129,10 @@ enum Model3DGenerator {
                             tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
+        if tool.shape == .taperedBallNose {
+            warnings.append("3D roughing is meant for an end mill: '\(tool.name)' is a tapered ball nose, which clears slowly with "
+                + "its small tip and leaves ridges between its passes. Rough with an end mill and finish with the tapered ball nose.")
+        }
         let g = s.surface
         let target = targets(s, allowance: params.allowance)
         let deepest = target.filter { $0.isFinite }.min().map(Double.init) ?? 0
@@ -179,7 +183,7 @@ enum Model3DGenerator {
         let tool = op.tool
         var warnings: [String] = []
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
-        let stepover = max(0.02, tool.diameter * params.stepoverFraction)
+        let stepover = max(0.02, tool.stepoverBasis * params.stepoverFraction)
         let cell = max(0.08, min(0.5, min(stepover / 2, tool.radius / 6)))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
                             reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {

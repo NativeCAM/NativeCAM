@@ -57,12 +57,21 @@ public enum ChipLoad {
         return (lo * LengthUnit.mmPerInch)...(hi * LengthUnit.mmPerInch)
     }
 
-    /// Whether the chart applies: solid end mills and ball/bull noses, not V-bits, engravers, drills or surfacing cutters.
+    /// Whether the chart applies: solid end mills, ball/bull noses and tapered ball noses, form and dovetail bits (at
+    /// the diameter they cut with, `Tool.cuttingDiameter(atDepth:)`), not V-bits, engravers, drills or surfacing cutters.
     public static func applies(to tool: Tool) -> Bool {
         switch tool.shape {
-        case .flatEndMill, .ballNose, .bullNose: true
+        case .flatEndMill, .ballNose, .bullNose, .taperedBallNose, .form, .dovetail: true
         default: false
         }
+    }
+
+    /// The diameter to read the chart at for `tool` cutting `depth` deep: the widest it cuts with there for a tapered
+    /// ball nose, form or dovetail bit (`Tool.cuttingDiameter(atDepth:)`), else its diameter. With no depth, a tapered
+    /// ball nose is read at its full diameter and form and dovetail bits at theirs.
+    public static func chartDiameter(_ tool: Tool, depth: Double?) -> Double {
+        guard let depth, tool.shape.requiredFormatVersion > 1 else { return tool.diameter }
+        return tool.cuttingDiameter(atDepth: depth)
     }
 
     /// Spindle speed and feed that put the chip load a quarter of the way into the recommended range, keeping the
@@ -71,9 +80,10 @@ public enum ChipLoad {
     /// `feedLimit` is a cap of the toolpath's own (adaptive clearing's loops, `AdaptiveSettings.loopFeedLimit`), held
     /// to the same way. Never below the spindle's slowest speed: there, the feed stays at the cap and the chip may
     /// come out thinner than the chart.
+    /// `diameter` is the chart's diameter (`chartDiameter`); nil reads it at the tool's.
     public static func recommend(for tool: Tool, material: MaterialKind, machine: MachineProfile,
-                                 thinning: Double = 1, feedLimit: Double? = nil) -> (rpm: Double, feed: Double) {
-        let r = range(material, diameter: tool.diameter)
+                                 thinning: Double = 1, feedLimit: Double? = nil, diameter: Double? = nil) -> (rpm: Double, feed: Double) {
+        let r = range(material, diameter: diameter ?? tool.diameter)
         let target = r.lowerBound + (r.upperBound - r.lowerBound) * 0.25
         let z = Double(max(1, tool.fluteCount))
         let k = min(1, max(0.05, thinning))

@@ -252,6 +252,7 @@ public enum SetupSheet {
         for (i, t) in order.enumerated() {
             var type = t.shape.label
             if t.shape.usesAngle { type += " \(Int(t.includedAngle.rounded()))°" }
+            type += t.shapeDetail(len)
             h += "<tr><td>\(i + 1)</td><td>T\(t.number) \(esc(t.name))</td><td>\(esc(type))</td><td class=\"num\">\(len(t.diameter))</td>"
                 + "<td class=\"num\">\(len(t.fluteLength))</td><td class=\"num\">\(len(t.stickout))</td></tr>\n"
         }

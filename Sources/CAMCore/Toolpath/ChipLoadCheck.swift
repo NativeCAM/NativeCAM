@@ -11,7 +11,10 @@ extension CAMEngine {
         let tool = tp.tool
         guard ChipLoad.applies(to: tool), tp.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
         let material = project.stock.material
-        let r = ChipLoad.range(material, diameter: tool.diameter)
+        // A bit whose width changes with depth is read at the widest it cuts with (the toolpath's deepest cut).
+        let depth = tp.cuttingExtents.map { max(0, -$0.min.z) }
+        let chartDiameter = ChipLoad.chartDiameter(tool, depth: depth)
+        let r = ChipLoad.range(material, diameter: chartDiameter)
         let z = Double(tool.fluteCount)
         let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         let set = tool.cutting.feedRate
@@ -23,7 +26,8 @@ extension CAMEngine {
         if tp.radialLoad != nil, case let .pocket(p)? = operation?.kind, p.strategy == .adaptive {
             loops = p.adaptiveSettings.loopFeedLimit(tool: tool, machine: project.machine)
         }
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops)
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops,
+                                     diameter: chartDiameter)
         let held = loops.map { rec.feed >= $0 - 1e-6 && $0 < project.machine.maxFeedRate } ?? false
         let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM"
             + (held ? ", as fast as its loops can run with this machine's acceleration." : ".")
