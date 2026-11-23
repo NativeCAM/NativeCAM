@@ -1,0 +1,315 @@
+{
+  "displayUnits" : "mm",
+  "formatVersion" : 14,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : false,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Bits",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "B1750000-0000-4000-8000-000000000101",
+      "kind" : {
+        "fluting" : {
+          "_0" : {
+            "depth" : 2,
+            "ramp" : "both",
+            "rampLength" : 25.4,
+            "rampShape" : "linear",
+            "startDepth" : 0
+          }
+        }
+      },
+      "name" : "Flute",
+      "shapeIDs" : [
+        "B1750000-0000-4000-8000-000000000002"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2000,
+          "plungeRate" : 500,
+          "spindleRPM" : 18000,
+          "stepdown" : 3,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 3.126242515135281,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "B1750000-0000-4000-8000-000000000013",
+        "includedAngle" : 3.58,
+        "name" : "Tapered ball",
+        "notes" : "",
+        "number" : 13,
+        "shankDiameter" : 6.35,
+        "shape" : "taperedBallNose",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 1.5875
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "B1750000-0000-4000-8000-000000000102",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 10,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Dovetail pin",
+      "shapeIDs" : [
+        "B1750000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2000,
+          "plungeRate" : 500,
+          "spindleRPM" : 18000,
+          "stepdown" : 3,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 12.7,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 12.7,
+        "id" : "B1750000-0000-4000-8000-000000000012",
+        "includedAngle" : 28,
+        "name" : "Dovetail",
+        "notes" : "",
+        "number" : 12,
+        "shankDiameter" : 6.35,
+        "shape" : "dovetail",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "B1750000-0000-4000-8000-000000000103",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 6.35,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Round over",
+      "shapeIDs" : [
+        "B1750000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2000,
+          "plungeRate" : 500,
+          "spindleRPM" : 18000,
+          "stepdown" : 3,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 25.4,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 8.35,
+        "form" : {
+          "kind" : "roundover",
+          "pilotDiameter" : 12.7,
+          "points" : [
+
+          ],
+          "radius" : 6.35,
+          "upperRadius" : 3.175
+        },
+        "id" : "B1750000-0000-4000-8000-000000000011",
+        "includedAngle" : 90,
+        "name" : "Roundover bit",
+        "notes" : "",
+        "number" : 11,
+        "shankDiameter" : 6.35,
+        "shape" : "form",
+        "stickout" : 21.049999999999997,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : false,
+      "id" : "B1750000-0000-4000-8000-000000000104",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 7,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Ogee",
+      "shapeIDs" : [
+        "B1750000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2000,
+          "plungeRate" : 500,
+          "spindleRPM" : 18000,
+          "stepdown" : 3,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 20,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 9,
+        "form" : {
+          "kind" : "ogee",
+          "pilotDiameter" : 6,
+          "points" : [
+
+          ],
+          "radius" : 4,
+          "upperRadius" : 3
+        },
+        "id" : "B1750000-0000-4000-8000-000000000014",
+        "includedAngle" : 90,
+        "name" : "Ogee bit",
+        "notes" : "",
+        "number" : 14,
+        "shankDiameter" : 6.35,
+        "shape" : "form",
+        "stickout" : 21.7,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "B1750000-0000-4000-8000-000000000001",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 40,
+          "width" : 40
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square",
+      "position" : {
+        "x" : 30,
+        "y" : 30
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "B1750000-0000-4000-8000-000000000002",
+      "kind" : {
+        "paths" : {
+          "_0" : [
+            {
+              "isClosed" : false,
+              "points" : [
+                {
+                  "x" : 15,
+                  "y" : 80
+                },
+                {
+                  "x" : 85,
+                  "y" : 80
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer" : "Default",
+      "name" : "Flute",
+      "position" : {
+        "x" : 0,
+        "y" : 0
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 100,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 25,
+    "width" : 100,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}
