@@ -69,6 +69,9 @@ public struct JobResult: Sendable {
     public var reorder: OperationScheduler.Result?
     /// On a tiled job, each tile's toolpaths; `toolpaths` is then all of them, tile after tile, in job coordinates.
     public var tiling: TiledJob?
+    /// On a job nested onto several sheets, each sheet's own job; `toolpaths` is then all of them, sheet after sheet,
+    /// each in its sheet's coordinates (`Toolpath.sheet`).
+    public var sheets: [SheetJob]?
 
     public var hasErrors: Bool { issues.contains { $0.severity == .error } }
 
@@ -84,9 +87,93 @@ public struct JobResult: Sendable {
     }
 }
 
+/// One sheet of a job nested onto several: the sheet as a job of its own (`Project.sheetProject`) and what it cuts.
+public struct SheetJob: Sendable {
+    /// From 0, in the order they're cut.
+    public var index: Int
+    public var project: Project
+    public var job: JobResult
+}
+
 /// Turns a project into ordered toolpaths and checks them against the material and machine.
 public enum CAMEngine {
     public static func generate(_ project: Project, operationIDs: Set<UUID>? = nil) -> JobResult {
+        if project.sheetCount > 1 { return generateSheets(project, operationIDs: operationIDs) }
+        var job = generateSheet(project, operationIDs: operationIDs)
+        if operationIDs == nil {
+            let (issues, reorder) = schedulingIssues(project)
+            job.issues += issues
+            job.reorder = reorder
+        }
+        return job
+    }
+
+    /// A job nested onto several sheets: each sheet generated as a job of its own. Checks that every sheet has are
+    /// listed once; the others say which sheet. The run order is checked once, for the whole job.
+    static func generateSheets(_ project: Project, operationIDs: Set<UUID>?) -> JobResult {
+        let n = project.sheetCount
+        var sheets: [SheetJob] = []
+        var toolpaths: [Toolpath] = []
+        for k in 0..<n {
+            let p = project.sheetProject(k)
+            let job = generateSheet(p, operationIDs: operationIDs)
+            sheets.append(SheetJob(index: k, project: p, job: job))
+            for tp in job.toolpaths { toolpaths.append(sheetToolpath(tp, sheet: k)) }
+        }
+        var onSheets: [String: Int] = [:]
+        for s in sheets { for id in Set(s.job.issues.map(\.id)) { onSheets[id, default: 0] += 1 } }
+        var issues: [JobIssue] = []
+        var listed = Set<String>()
+        for s in sheets {
+            for issue in s.job.issues {
+                if onSheets[issue.id] == n {
+                    if listed.insert(issue.id).inserted { issues.append(issue) }
+                } else {
+                    var i = issue
+                    i.message = "Sheet \(s.index + 1): " + issue.message
+                    issues.append(i)
+                }
+            }
+        }
+        let files = sheets.reduce(0) { $0 + (JobExport.files($1.project, job: $1.job)?.files.count ?? 1) }
+        let perTool = files > n ? ", one per tool on each sheet," : ", one per sheet,"
+        issues.append(JobIssue(.info, "Nested onto \(n) sheets, cut one after another. Export saves \(files) files\(perTool) "
+            + "and a setup sheet with a page for each sheet."))
+        var estimate: CycleTimeEstimate?
+        let estimates = sheets.compactMap(\.job.estimate)
+        if estimates.count == n {
+            estimate = CycleTimeEstimate(total: estimates.reduce(0) { $0 + $1.total },
+                                         feedSeconds: estimates.reduce(0) { $0 + $1.feedSeconds },
+                                         rapidSeconds: estimates.reduce(0) { $0 + $1.rapidSeconds },
+                                         overheadSeconds: estimates.reduce(0) { $0 + $1.overheadSeconds },
+                                         toolpathSeconds: estimates.flatMap(\.toolpathSeconds),
+                                         motionSeconds: estimates.flatMap(\.motionSeconds),
+                                         constantVelocity: estimates.reduce(0) { $0 + $1.constantVelocity },
+                                         leadInSeconds: estimates.flatMap(\.leadInSeconds),
+                                         endSeconds: estimates.reduce(0) { $0 + $1.endSeconds })
+        }
+        var job = JobResult(toolpaths: toolpaths, issues: issues, estimate: estimate, sheets: sheets)
+        if operationIDs == nil {
+            let (more, reorder) = schedulingIssues(project)
+            job.issues += more
+            job.reorder = reorder
+        }
+        return job
+    }
+
+    /// A sheet's toolpath as the whole job lists it: marked with its sheet, and on every sheet after the first with an
+    /// ID of its own (made from its ID and the sheet), so the job's toolpaths are all different.
+    public static func sheetToolpath(_ tp: Toolpath, sheet k: Int) -> Toolpath {
+        var t = tp
+        t.sheet = k
+        guard k > 0 else { return t }
+        t.operationID = tp.sourceOperationID
+        t.id = RotaryIndex.toolpathID(operation: tp.id, role: 1000, position: k)
+        return t
+    }
+
+    /// One sheet's toolpaths and checks (the whole job, on a job of one sheet), without the run-order check.
+    static func generateSheet(_ project: Project, operationIDs: Set<UUID>?) -> JobResult {
         let ctx = GenerationContext(stock: project.stock, machine: project.machine,
                                     flattenTolerance: 0.01,
                                     arcTolerance: min(0.005, project.machine.arcFitTolerance / 2),
@@ -278,9 +365,14 @@ public enum CAMEngine {
             }
         }
         let estimate = CycleTimeEstimator.estimate(toolpaths, project: project)
-        // Point out (never apply) a run order that fixes dependencies or needs fewer tool changes.
+        return JobResult(toolpaths: toolpaths, issues: issues, estimate: estimate, tiling: tiled)
+    }
+
+    /// Points out (never applies) a run order that fixes dependencies or needs fewer tool changes.
+    static func schedulingIssues(_ project: Project) -> (issues: [JobIssue], reorder: OperationScheduler.Result?) {
+        var issues: [JobIssue] = []
         var reorder: OperationScheduler.Result?
-        if operationIDs == nil {
+        do {
             let r = OperationScheduler.optimize(project)
             let byID = Dictionary(project.operations.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             for late in r.outOfOrder {
@@ -306,7 +398,7 @@ public enum CAMEngine {
                     + "(about \(time) of \(what)). Use Toolpaths ▸ Optimize Run Order."))
             }
         }
-        return JobResult(toolpaths: toolpaths, issues: issues, estimate: estimate, reorder: reorder, tiling: tiled)
+        return (issues, reorder)
     }
 
     /// Tiling that's on but can't apply: a rotary job, or material that fits in one tile.

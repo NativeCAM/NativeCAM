@@ -15,8 +15,10 @@ public struct Project: Hashable, Sendable {
     /// file, bigger than the machine's travel. Settings for tiling that's off (or leaves the job in one tile) don't raise it.
     /// Format 10 adds 3D finishing strategies (waterline, steep and shallow, pencil) and cross-hatching, which a format-9
     /// build would ignore and cut as one raster. Format 12 adds 3D rotary roughing, which older builds can't read.
-    /// Format 13 adds adaptive pocket clearing, which a format-12 build can't read.
-    public static let currentFormatVersion = 13
+    /// Format 13 adds adaptive pocket clearing, which a format-12 build can't read. Format 14 adds jobs nested onto
+    /// several sheets: a format-13 build would ignore which sheet each part is on and cut them all on top of each other
+    /// on the first. A job of one sheet doesn't raise it.
+    public static let currentFormatVersion = 14
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
@@ -24,7 +26,8 @@ public struct Project: Hashable, Sendable {
         let parts = operations.map(\.requiredFormatVersion) + shapes.map(\.kind.requiredFormatVersion)
         // Only tiling that splits the job: one tile is the same file a format-8 build writes.
         let tiled = tiling?.enabled == true && TileLayout(self) != nil ? 9 : 1
-        return parts.reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion, byHand, tiled), max)
+        let sheets = sheetCount > 1 ? 14 : 1
+        return parts.reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion, byHand, tiled, sheets), max)
     }
 
     /// Keeps every spiral climbing exactly once around the blank per pitch: on a wrapped job, a spiral's turn is the
@@ -71,6 +74,8 @@ public struct Project: Hashable, Sendable {
     public var notes: String
     /// Cutting the job in tiles bigger than the machine's travel; nil (off) in every older file.
     public var tiling: TilingSettings?
+    /// The sheets after the first on a job nested onto several (each shape says which it's on); empty = one sheet.
+    public var additionalSheets: [MaterialSheet] = []
 
     public init(name: String = "Untitled", displayUnits: LengthUnit = .inch, stock: Stock = Stock(),
                 machine: MachineProfile = .avidPRO6060, shapes: [DesignShape] = [], operations: [CAMOperation] = [],
@@ -144,7 +149,7 @@ public struct Project: Hashable, Sendable {
 
 extension Project: Codable {
     private enum CodingKeys: String, CodingKey {
-        case formatVersion, name, displayUnits, stock, machine, shapes, operations, notes, tiling
+        case formatVersion, name, displayUnits, stock, machine, shapes, operations, notes, tiling, additionalSheets
     }
 
     public init(from decoder: Decoder) throws {
@@ -162,6 +167,7 @@ extension Project: Codable {
         operations = try c.decode([CAMOperation].self, forKey: .operations)
         notes = try c.decode(String.self, forKey: .notes)
         tiling = try c.decodeIfPresent(TilingSettings.self, forKey: .tiling)
+        additionalSheets = try c.decodeIfPresent([MaterialSheet].self, forKey: .additionalSheets) ?? []
         fitDepthsToMaterial()
     }
 
@@ -176,5 +182,6 @@ extension Project: Codable {
         try c.encode(operations, forKey: .operations)
         try c.encode(notes, forKey: .notes)
         try c.encodeIfPresent(tiling, forKey: .tiling)
+        if !additionalSheets.isEmpty { try c.encode(additionalSheets, forKey: .additionalSheets) }
     }
 }

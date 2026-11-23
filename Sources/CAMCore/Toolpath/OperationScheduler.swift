@@ -40,16 +40,20 @@ public enum OperationScheduler {
         let enabled = ops.indices.filter { ops[$0].enabled }
         let m = enabled.count
         let thickness = project.stock.thickness
-        // Per-shape boxes grown by the tool radius (the area the operation can touch).
-        let boxes: [[Rect2]] = enabled.map { idx in
-            let op = ops[idx]
-            return project.shapes(for: op).map(\.bounds).filter { !$0.isEmpty }.map { $0.insetBy(-op.tool.radius) }
+        // Per-shape boxes grown by the tool radius (the area the operation can touch), on the shape's sheet: boxes on
+        // different sheets of a nested job never meet.
+        func areas(_ op: CAMOperation, grow: Double) -> [Area] {
+            project.shapes(for: op).compactMap { shape in
+                let b = shape.bounds
+                return b.isEmpty ? nil : Area(sheet: project.sheetIndex(of: shape), rect: b.insetBy(-grow))
+            }
         }
+        let boxes: [[Area]] = enabled.map { areas(ops[$0], grow: ops[$0].tool.radius) }
         // The part an operation works on, for whether a cut-out frees it: its area, but a chamfer, flute or prism
         // shapes the part drawn, however wide its V-bit (a chamfer on a part's outline comes before its cut-out).
-        let parts: [[Rect2]] = enabled.indices.map { k in
+        let parts: [[Area]] = enabled.indices.map { k in
             let op = ops[enabled[k]]
-            return op.kind.followsVectors ? project.shapes(for: op).map(\.bounds).filter { !$0.isEmpty } : boxes[k]
+            return op.kind.followsVectors ? areas(op, grow: 0) : boxes[k]
         }
         // On rotary stock a profile to the full thickness only reaches the axis, and the blank stays in the chuck.
         let flat = project.stock.rotary == nil
@@ -57,13 +61,13 @@ public enum OperationScheduler {
             if flat, case let .profile(p) = op.kind { return p.depth.cutDepth >= thickness - 0.01 }
             return false
         }
-        func inside(_ inner: [Rect2], _ outer: [Rect2]) -> Bool {
+        func inside(_ inner: [Area], _ outer: [Area]) -> Bool {
             !inner.isEmpty && inner.allSatisfy { r in
-                outer.contains { $0.contains(r.min, tolerance: 1e-6) && $0.contains(r.max, tolerance: 1e-6) }
+                outer.contains { $0.sheet == r.sheet && $0.rect.contains(r.rect.min, tolerance: 1e-6) && $0.rect.contains(r.rect.max, tolerance: 1e-6) }
             }
         }
-        func overlaps(_ a: [Rect2], _ b: [Rect2]) -> Bool {
-            a.contains { r in b.contains { $0.intersects(r) } }
+        func overlaps(_ a: [Area], _ b: [Area]) -> Bool {
+            a.contains { r in b.contains { $0.sheet == r.sheet && $0.rect.intersects(r.rect) } }
         }
         /// A 3D roughing (flat or rotary) that has to come before a finish of the same model.
         func roughs(_ a: CAMOperation, before b: CAMOperation) -> Bool {
@@ -119,6 +123,12 @@ public enum OperationScheduler {
         }
         return Result(order: order, toolChangesBefore: changesBefore,
                       toolChangesAfter: better ? changesAfter : changesBefore, outOfOrder: late)
+    }
+
+    /// A box on one sheet of the job.
+    struct Area {
+        var sheet: Int
+        var rect: Rect2
     }
 
     /// The tool numbers an operation cuts with: its clearance tool's (if any), then its own.
