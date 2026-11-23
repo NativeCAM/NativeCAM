@@ -132,6 +132,10 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// Adaptive clearing: the share of the bit's diameter its usual cut takes from the side (the optimal load), so the
     /// chip-load check allows for the thinner chip (`ChipLoad.radialThinning`). nil = a full-width chip.
     public var radialLoad: Double?
+    /// Rest machining: the areas left for this toolpath's bit, for shading on the canvas (where a 3D rest pass's centre
+    /// goes; what a pocket resting from earlier toolpaths has left to clear). Empty when nothing is left; nil for every
+    /// other toolpath. Posts and checks don't read it.
+    public var restAreas: [Polyline]?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

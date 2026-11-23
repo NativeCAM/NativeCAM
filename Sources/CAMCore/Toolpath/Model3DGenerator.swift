@@ -26,6 +26,25 @@ enum Model3DGenerator {
     /// radius, because the band its flank touches was cleared by roughing (whose automatic margin is wider).
     static func setup(shapes: [DesignShape], boundary: ModelBoundary, margin: Double, reach: Double = 0, tool: Tool, stock: Stock,
                       preferredCell: Double, warnings: inout [String]) -> Setup? {
+        guard let (models, regions, mode) = boundaryRegions(shapes: shapes, boundary: boundary, margin: margin, stock: stock,
+                                                            warnings: &warnings) else { return nil }
+        let pad = tool.radius + preferredCell * 2
+        let area = regions.map(\.bounds).reduce(Rect2.empty) { $0.union($1) }.insetBy(-pad)
+        let cell = ModelRaster.cellSize(for: area, preferred: preferredCell)
+        let surface = ModelRaster.surface(of: models, over: area, cellSize: cell)
+        let maskRegions = reach > 0 && mode == .vectors ? regions.flatMap { $0.offset(by: reach) } : regions
+        let inside = mode == .model ? [Bool](repeating: false, count: surface.heights.count) : regionMask(maskRegions, surface)
+        let base = models.compactMap { $0.modelSpec?.bottomZ }.min() ?? 0
+        if base < -stock.thickness - 1e-6 {
+            warnings.append("The model is deeper than the material; the bottom of the model will be cut off.")
+        }
+        return Setup(models: models, boundary: regions, mode: mode, surface: surface, inside: inside, baseZ: base, stock: stock)
+    }
+
+    /// The models among `shapes` and where the tool centre may go over them (`Setup.boundary`), with the boundary
+    /// actually used; nil (and a warning) when there's no model or it has no outline from above.
+    static func boundaryRegions(shapes: [DesignShape], boundary: ModelBoundary, margin: Double, stock: Stock,
+                                warnings: inout [String]) -> (models: [DesignShape], regions: [Region], mode: ModelBoundary)? {
         let models = shapes.filter { $0.modelSpec != nil }
         if models.isEmpty {
             warnings.append("3D toolpaths need a 3D model; none of the selected shapes is one.")
@@ -59,17 +78,25 @@ enum Model3DGenerator {
             warnings.append("The model has no outline from above; check its up axis.")
             return nil
         }
-        let pad = tool.radius + preferredCell * 2
-        let area = regions.map(\.bounds).reduce(Rect2.empty) { $0.union($1) }.insetBy(-pad)
-        let cell = ModelRaster.cellSize(for: area, preferred: preferredCell)
-        let surface = ModelRaster.surface(of: models, over: area, cellSize: cell)
-        let maskRegions = reach > 0 && mode == .vectors ? regions.flatMap { $0.offset(by: reach) } : regions
-        let inside = mode == .model ? [Bool](repeating: false, count: surface.heights.count) : regionMask(maskRegions, surface)
-        let base = models.compactMap { $0.modelSpec?.bottomZ }.min() ?? 0
-        if base < -stock.thickness - 1e-6 {
-            warnings.append("The model is deeper than the material; the bottom of the model will be cut off.")
+        return (models, regions, mode)
+    }
+
+    /// The models' triangles in design coordinates, 9 doubles each, for `TriangleDropCutter`.
+    static func triangles(of models: [DesignShape]) -> [Double] {
+        var triangles: [Double] = []
+        for m in models {
+            m.forEachModelTriangle { a, b, c in
+                func add(_ v: SIMD3<Double>) {
+                    triangles.append(v.x)
+                    triangles.append(v.y)
+                    triangles.append(v.z)
+                }
+                add(a)
+                add(b)
+                add(c)
+            }
         }
-        return Setup(models: models, boundary: regions, mode: mode, surface: surface, inside: inside, baseZ: base, stock: stock)
+        return triangles
     }
 
     /// Scanline fill of regions (even-odd over their outer and hole loops) onto the grid's cell centres.
@@ -180,6 +207,7 @@ enum Model3DGenerator {
     // MARK: 3D finishing
 
     static func finish(op: CAMOperation, params: Finish3DParams, shapes: [DesignShape], context: GenerationContext) -> Toolpath {
+        if params.strategy == .rest { return restFinish(op: op, params: params, shapes: shapes, context: context) }
         let tool = op.tool
         var warnings: [String] = []
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
@@ -197,20 +225,7 @@ enum Model3DGenerator {
         for i in surface.indices where surface[i] == .infinity { surface[i] = 0 }
         // The cutter drops exactly onto the triangles (every bit shape but a V with no angle); the grid then only
         // carries the material around the model.
-        var triangles: [Double] = []
-        for m in s.models {
-            m.forEachModelTriangle { a, b, c in
-                func add(_ v: SIMD3<Double>) {
-                    triangles.append(v.x)
-                    triangles.append(v.y)
-                    triangles.append(v.z)
-                }
-                add(a)
-                add(b)
-                add(c)
-            }
-        }
-        let exact = TriangleDropCutter(tool: tool, allowance: params.allowance, triangles: triangles)
+        let exact = TriangleDropCutter(tool: tool, allowance: params.allowance, triangles: triangles(of: s.models))
         if exact != nil {
             for i in surface.indices where s.surface.covered[i] { surface[i] = -.infinity }
         }
@@ -246,11 +261,13 @@ enum Model3DGenerator {
             if !shallow.isEmpty { _ = raster(over: shallow, f, &b) }
             if b.motions.isEmpty { warnings.append("No finishing passes fit inside the boundary.") }
         case .pencil:
-            guard tool.shape == .ballNose else {
+            guard tool.shape == .ballNose || tool.shape == .taperedBallNose else {
                 warnings.append("Pencil cleanup needs a ball-nose bit; '\(tool.name)' isn't one.")
                 return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
             }
             pencil(f.buildMap(), f, &b, warnings: &warnings)
+        case .rest:
+            break // `restFinish`
         }
         b.retract()
         return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)

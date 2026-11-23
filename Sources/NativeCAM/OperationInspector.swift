@@ -835,6 +835,8 @@ func finishingNote(_ strategy: Finish3DStrategy) -> String {
         "Waterline loops on slopes steeper than the steep angle and raster rows on the rest, overlapping a little, so the scallop stays about the same on both."
     case .pencil:
         "One pass along each concave crease, where the bit touches two faces at once. Run it with a smaller ball nose after the main finish."
+    case .rest:
+        "Finishes only where the larger bits of the toolpaths it follows couldn't reach: crevices, serifs and tight valleys. Use a smaller ball or tapered ball nose after the main finish."
     }
 }
 

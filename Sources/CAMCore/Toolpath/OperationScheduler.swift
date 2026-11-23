@@ -6,7 +6,8 @@ import Foundation
 /// air-time saving, so the fewest changes win and the user's order breaks ties. An operation stays after:
 /// - everything inside the outline it cuts through (parts are cut free last, never finished while held by tabs; a
 ///   chamfer, flute or prism on the outline itself counts as inside it),
-/// - 3D roughing of the same model (when it's the finish; 3D rotary roughing before 3D rotary finishing), and
+/// - 3D roughing of the same model (when it's the finish; 3D rotary roughing before 3D rotary finishing),
+/// - the toolpaths a rest toolpath rests on (`RestMachining.dependencies`), and
 /// - any earlier operation whose area overlaps its own (the user's order may carry intent there).
 /// Disabled operations aren't machined, so they keep their place next to the operation they followed.
 ///
@@ -73,6 +74,8 @@ public enum OperationScheduler {
             default: return false
             }
         }
+        // What each rest toolpath rests on (`RestMachining.dependencies`).
+        let restsOn: [Set<UUID>] = enabled.map { Set(RestMachining.dependencies(of: ops[$0], in: project)) }
         // before[j]: bit mask of the operations that must come before j (indices into `enabled`).
         // Hard rules first (machining dependencies), then the user's order wherever areas overlap.
         var before = [UInt64](repeating: 0, count: m)
@@ -85,6 +88,9 @@ public enum OperationScheduler {
                 if cutsThrough(b), inside(parts[i], boxes[j]), !aFreesB {
                     hard = true
                 } else if roughs(a, before: b) {
+                    hard = true
+                } else if restsOn[j].contains(a.id) {
+                    // A rest toolpath after what it rests on.
                     hard = true
                 } else if !a.kind.needsShapes, b.kind.needsShapes {
                     // Rounding turns the blank down before anything is cut on it.

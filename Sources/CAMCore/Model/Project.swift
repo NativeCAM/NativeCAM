@@ -17,8 +17,8 @@ public struct Project: Hashable, Sendable {
     /// build would ignore and cut as one raster. Format 12 adds 3D rotary roughing, which older builds can't read.
     /// Format 13 adds adaptive pocket clearing, which a format-12 build can't read. Format 14 adds whole-board V-carve
     /// inlay plugs, which a format-13 build can't read. Format 15 adds tapered ball nose, form and dovetail bits, which a
-    /// format-14 build can't read.
-    public static let currentFormatVersion = 15
+    /// format-14 build can't read. Format 17 adds 3D rest finishing, which an older build can't read.
+    public static let currentFormatVersion = 17
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
