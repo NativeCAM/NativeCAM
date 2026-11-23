@@ -39,24 +39,31 @@ public struct ToolLibrary: Codable, Sendable, Hashable {
 
     /// A typical bit of `shape` to start a new tool from: the starter library's, or for a shape it has none of, a
     /// common size (a 1/32" tip radius, 1.79° per side tapered ball nose; a 1/4" roundover with a 1/2" pilot; a 1/2",
-    /// 14° dovetail), all on 1/4" shanks.
+    /// 14° dovetail), all on 1/4" shanks. As for the starter bits, their feeds and speeds put the chip load inside the
+    /// chart for plywood (at the diameter they cut with at a typical depth), getting the thicker chip from a slower
+    /// spindle with the feed within 250 in/min. Starting points: cut-test them.
     public static func template(for shape: ToolShape) -> Tool {
         if let t = starter.tools.first(where: { $0.shape == shape }) { return t }
         var c = CuttingData(spindleRPM: 16000, feedRate: 100.inch, plungeRate: 30.inch, stepdown: 0.125.inch, stepoverFraction: 0.4)
         var t: Tool
         switch shape {
         case .taperedBallNose:
-            c.spindleRPM = 18000
-            c.feedRate = 120.inch
+            c.feedRate = 150.inch
             c.stepdown = 0.0625.inch
             c.stepoverFraction = 0.1
             t = Tool(number: 0, name: "Tapered Ball Nose", shape: .taperedBallNose, fluteCount: 3, diameter: 0.25.inch,
                      shankDiameter: 0.25.inch, fluteLength: 1.inch, includedAngle: 3.58, tipDiameter: 0.0625.inch, cutting: c)
         case .form:
+            c.spindleRPM = 8000
+            c.feedRate = 250.inch
+            c.plungeRate = 40.inch
             c.stepdown = 0.25.inch
             t = Tool(number: 0, name: "Roundover", shape: .form, fluteDirection: .straight, diameter: 1.inch, shankDiameter: 0.25.inch,
                      fluteLength: 0.375.inch, cutting: c, form: FormProfile(kind: .roundover, radius: 0.25.inch, pilotDiameter: 0.5.inch))
         case .dovetail:
+            c.spindleRPM = 8500
+            c.feedRate = 250.inch
+            c.plungeRate = 40.inch
             c.stepdown = 0.5.inch
             t = Tool(number: 0, name: "Dovetail", shape: .dovetail, fluteDirection: .straight, diameter: 0.5.inch, shankDiameter: 0.25.inch,
                      fluteLength: 0.5.inch, includedAngle: 28, cutting: c)

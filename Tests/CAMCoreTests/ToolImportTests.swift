@@ -61,16 +61,22 @@ struct ToolImportTests {
 
         // Tapered ball nose: Fusion's diameter is its tip, its taper angle per side; it widens up the flutes.
         let tb = try #require(r.tools.first { $0.tool.name.hasPrefix("1005") }).tool
-        #expect(tb.shape == .taperedBallNose && abs(tb.tipDiameter - 1.524) < 1e-9 && abs(tb.includedAngle - 10.8) < 1e-9)
-        #expect(tb.geometryProblem == nil && tb.diameter > tb.tipDiameter && tb.diameter <= 6.35 + 1e-9)
+        #expect(tb.shape == .taperedBallNose)
+        #expect(abs(tb.tipDiameter - 1.524) < 1e-9 && abs(tb.includedAngle - 10.8) < 1e-9)
+        #expect(tb.geometryProblem == nil)
+        #expect(tb.diameter > tb.tipDiameter && tb.diameter <= 6.35 + 1e-9)
         #expect(abs(tb.stepoverBasis - tb.tipDiameter) < 1e-12)
         // Roundover: the pilot is the diameter less twice the radius, and the note says it was worked out.
         let round = try #require(r.tools.first { $0.tool.name.hasPrefix("1006") }).tool
-        #expect(round.shape == .form && round.form?.kind == .roundover && abs((round.form?.radius ?? 0) - 4.7625) < 1e-9)
-        #expect(round.form?.pilotDiameter == 0 && abs(round.diameter - 9.525) < 1e-9 && round.notes.contains("⚠"))
+        let roundForm = try #require(round.form)
+        #expect(round.shape == .form && roundForm.kind == .roundover)
+        #expect(abs(roundForm.radius - 4.7625) < 1e-9 && roundForm.pilotDiameter == 0)
+        #expect(abs(round.diameter - 9.525) < 1e-9 && round.notes.contains("⚠"))
         let tail = try #require(r.tools.first { $0.tool.name.hasPrefix("1007") }).tool
         #expect(tail.shape == .dovetail && abs(tail.includedAngle - 28) < 1e-9 && abs(tail.diameter - 12.7) < 1e-9)
-        #expect(abs(tail.dovetailSmallDiameter - (12.7 - 2 * 12.7 * tan(14 * Double.pi / 180))) < 1e-9 && tail.hasUndercut)
+        let neck = 12.7 - 2 * 12.7 * tan(14 * Double.pi / 180)
+        #expect(abs(tail.dovetailSmallDiameter - neck) < 1e-9)
+        #expect(tail.hasUndercut)
     }
 
     @Test func fusionJSONAndNativeCAMLibrariesLoad() throws {
@@ -180,11 +186,16 @@ struct ToolImportTests {
         #expect(ChipLoad.applies(to: bull) && bull.notes.contains("plywood chip-load chart"))
 
         let tb = r.tools[5].tool
-        #expect(tb.shape == .taperedBallNose && abs(tb.includedAngle - 12.4) < 1e-9 && abs(tb.tipDiameter - 2 * 0.0156 * 25.4) < 1e-9)
-        #expect(abs(tb.shankDiameter - 3.175) < 1e-9 && tb.geometryProblem == nil && tb.notes.contains("per side"))
+        let tip = 2 * 0.0156 * 25.4
+        #expect(tb.shape == .taperedBallNose && abs(tb.includedAngle - 12.4) < 1e-9)
+        #expect(abs(tb.tipDiameter - tip) < 1e-9)
+        #expect(abs(tb.shankDiameter - 3.175) < 1e-9 && tb.geometryProblem == nil)
+        #expect(tb.notes.contains("per side"))
         let round = r.tools[6].tool
-        #expect(round.shape == .form && round.form?.kind == .roundover && abs((round.form?.radius ?? 0) - 6.35) < 1e-9)
-        #expect(abs((round.form?.pilotDiameter ?? 0) - (28.575 - 12.7)) < 1e-9 && abs(round.diameter - 28.575) < 1e-9)
+        let roundForm = try #require(round.form)
+        #expect(round.shape == .form && roundForm.kind == .roundover)
+        #expect(abs(roundForm.radius - 6.35) < 1e-9)
+        #expect(abs(roundForm.pilotDiameter - 15.875) < 1e-9 && abs(round.diameter - 28.575) < 1e-9)
         #expect(round.notes.contains("⚠ Roundover read from the name"))
         let tail = r.tools[7].tool
         #expect(tail.shape == .dovetail && abs(tail.includedAngle - 28) < 1e-9 && abs(tail.fluteLength - 12.7) < 1e-9)

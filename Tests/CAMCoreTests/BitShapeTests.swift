@@ -60,7 +60,10 @@ struct BitShapeTests {
         #expect(abs(steep.diameter - 6.35) < 1e-9)
         // The drawing runs from the tip up the cone to the shank and up the shank.
         let sil = t.silhouette()
-        #expect(sil.first == Vec2(0, 0) && sil.last?.x == t.shankDiameter / 2 && sil.last?.y == t.stickout)
+        let last = try #require(sil.last)
+        #expect(sil.first == Vec2(0, 0))
+        #expect(last.x == t.shankDiameter / 2)
+        #expect(last.y == t.stickout)
         for (p, q) in zip(sil, sil.dropFirst()) { #expect(q.y >= p.y - 1e-9) }
     }
 
@@ -71,7 +74,9 @@ struct BitShapeTests {
         let round = Self.form(.roundover, radius: r1, pilot: 2 * p)
         let cove = Self.form(.cove, radius: r1, pilot: 2 * p)
         let ogee = Self.form(.ogee, radius: r1, upper: r2, pilot: 2 * p)
-        #expect(abs(round.diameter - 2 * (p + r1)) < 1e-9 && abs(ogee.diameter - 2 * (p + r1 + r2)) < 1e-9)
+        let roundWidth = 2 * (p + r1), ogeeWidth = 2 * (p + r1 + r2)
+        #expect(abs(round.diameter - roundWidth) < 1e-9)
+        #expect(abs(ogee.diameter - ogeeWidth) < 1e-9)
         for t in [round, cove, ogee] { #expect(t.geometryProblem == nil && !t.hasUndercut, "\(t.name)") }
         // Every point of each circle is within the chord tolerance of the edge, and every edge point is on a circle.
         func off(_ q: Vec2, _ edge: [Vec2]) -> Double {
@@ -122,8 +127,9 @@ struct BitShapeTests {
 
     @Test func sameBitComparesShapeDimensions() {
         let a = Self.taperedBall(), b = Self.taperedBall(perSide: 3)
-        #expect(a.isSameBit(as: a) && !a.isSameBit(as: Tool(number: 1, name: "x", shape: .taperedBallNose, diameter: a.diameter,
-                                                                fluteLength: a.fluteLength, cutting: Self.cutting)))
+        let plain = Tool(number: 1, name: "x", shape: .taperedBallNose, diameter: a.diameter, fluteLength: a.fluteLength, cutting: Self.cutting)
+        #expect(a.isSameBit(as: a))
+        #expect(!a.isSameBit(as: plain))
         var c = b
         c.id = UUID()
         #expect(!a.isSameBit(as: c) && !a.sameGeometry(as: b))
@@ -446,7 +452,8 @@ struct BitShapeTests {
         let tp = try #require(CAMEngine.generate(p).toolpaths.first)
         let ext = try #require(tp.cuttingExtents)
         // The square spans 10–50; the pilot's radius (6.35) out from it.
-        #expect(abs(ext.min.x - (10 - 6.35)) < 0.02 && abs(ext.max.x - (50 + 6.35)) < 0.02)
+        #expect(abs(ext.min.x - 3.65) < 0.02)
+        #expect(abs(ext.max.x - 56.35) < 0.02)
         #expect(abs(ext.min.z + 6.35) < 1e-9)
         var levels = Set<Double>()
         tp.forEachMotion { _, m in if m.kind != .rapid { levels.insert((m.end.z * 1000).rounded() / 1000) } }
@@ -548,6 +555,29 @@ struct BitShapeTests {
         let dt = Self.dovetail()
         #expect(ChipLoad.chartDiameter(dt, depth: 4) == dt.diameter)
         #expect(ChipLoad.applies(to: t) && ChipLoad.applies(to: dt))
+    }
+
+    /// New tools start from a typical bit of each shape, with dimensions that make a bit and a chip load inside the chart
+    /// for plywood at a typical depth.
+    @Test func newToolsStartFromATypicalBit() {
+        for (shape, depth) in [(ToolShape.taperedBallNose, 2.0), (.form, 6.35), (.dovetail, 12.7)] {
+            let t = ToolLibrary.template(for: shape)
+            #expect(t.shape == shape && t.geometryProblem == nil, "\(shape)")
+            let r = ChipLoad.range(.plywood, diameter: ChipLoad.chartDiameter(t, depth: depth))
+            let (lo, hi) = (r.lowerBound * 0.8, r.upperBound * 1.25)
+            #expect(t.chipLoad >= lo, "\(shape): \(t.chipLoad) vs \(r)")
+            #expect(t.chipLoad <= hi, "\(shape): \(t.chipLoad) vs \(r)")
+            #expect(t.cutting.feedRate <= 250.inch + 1e-9 && t.cutting.spindleRPM >= 6000)
+        }
+        #expect(ToolLibrary.template(for: .ballNose) == ToolLibrary.starter.tool(number: 7)!)
+        // A Fusion tapered mill whose corner is smaller than its tip is a tapered bull nose, not imported as a ball.
+        let bull: [String: Any] = ["type": "tapered mill", "unit": "millimeters", "description": "Tapered bull",
+                                   "geometry": ["DC": 3, "RE": 0.5, "TA": 3, "LCF": 20, "SFDM": 6]]
+        guard case let .skip(s) = ToolLibraryImporter.fusionTool(bull) else {
+            Issue.record("a tapered bull nose was imported")
+            return
+        }
+        #expect(s.reason.contains("tapered bull nose"))
     }
 
     // MARK: File format

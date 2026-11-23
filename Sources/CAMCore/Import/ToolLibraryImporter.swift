@@ -143,6 +143,11 @@ public enum ToolLibraryImporter {
                 shape = re >= dc / 2 - 1e-6 ? .ballNose : (re > 1e-6 ? .bullNose : .flatEndMill)
                 corner = re
             } else if re > 1e-3 {
+                // Only a ball tip: a tapered bull nose (a flat between its corners) would be modelled slimmer than the
+                // bit, and cut into steep walls.
+                guard re >= dc / 2 - max(0.005, 0.02 * dc) else {
+                    return .skip(SkippedTool(name: name, reason: "tapered bull nose (corner radius smaller than the tip)"))
+                }
                 shape = .taperedBallNose
                 angle = 2 * taper
                 tipDiameter = 2 * re
