@@ -37,6 +37,37 @@ public struct ToolLibrary: Codable, Sendable, Hashable {
         return larger.min { abs($0.diameter - $1.diameter) > 1e-6 ? $0.diameter > $1.diameter : before($0, $1) }
     }
 
+    /// A typical bit of `shape` to start a new tool from: the starter library's, or for a shape it has none of, a
+    /// common size (a 1/32" tip radius, 1.79° per side tapered ball nose; a 1/4" roundover with a 1/2" pilot; a 1/2",
+    /// 14° dovetail), all on 1/4" shanks.
+    public static func template(for shape: ToolShape) -> Tool {
+        if let t = starter.tools.first(where: { $0.shape == shape }) { return t }
+        var c = CuttingData(spindleRPM: 16000, feedRate: 100.inch, plungeRate: 30.inch, stepdown: 0.125.inch, stepoverFraction: 0.4)
+        var t: Tool
+        switch shape {
+        case .taperedBallNose:
+            c.spindleRPM = 18000
+            c.feedRate = 120.inch
+            c.stepdown = 0.0625.inch
+            c.stepoverFraction = 0.1
+            t = Tool(number: 0, name: "Tapered Ball Nose", shape: .taperedBallNose, fluteCount: 3, diameter: 0.25.inch,
+                     shankDiameter: 0.25.inch, fluteLength: 1.inch, includedAngle: 3.58, tipDiameter: 0.0625.inch, cutting: c)
+        case .form:
+            c.stepdown = 0.25.inch
+            t = Tool(number: 0, name: "Roundover", shape: .form, fluteDirection: .straight, diameter: 1.inch, shankDiameter: 0.25.inch,
+                     fluteLength: 0.375.inch, cutting: c, form: FormProfile(kind: .roundover, radius: 0.25.inch, pilotDiameter: 0.5.inch))
+        case .dovetail:
+            c.stepdown = 0.5.inch
+            t = Tool(number: 0, name: "Dovetail", shape: .dovetail, fluteDirection: .straight, diameter: 0.5.inch, shankDiameter: 0.25.inch,
+                     fluteLength: 0.5.inch, includedAngle: 28, cutting: c)
+        default:
+            t = starter.tools[0]
+            t.shape = shape
+        }
+        t.fitDiameterToShape()
+        return t
+    }
+
     /// The materials the starter end mills' and ball nose's feeds and speeds suit: their chip load is inside the chart
     /// (`ChipLoad`) for each of these.
     public static let starterMaterials: [MaterialKind] = [.plywood, .hardwood]

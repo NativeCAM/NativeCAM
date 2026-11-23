@@ -8,13 +8,36 @@ enum ProfileGenerator {
     static func generate(op: CAMOperation, params: ProfileParams, shapes: [DesignShape], context: GenerationContext) -> Toolpath {
         let tool = op.tool
         var warnings: [String] = []
+        // A bit that's wider low down than higher up (a dovetail) can't step down, ramp, lift over a tab or lift out of
+        // the cut where it is without cutting into the wall above: it cuts once at full depth, entered and left square
+        // to the wall from far enough off it.
+        let undercut = tool.hasUndercut
+        let bitName = tool.name.isEmpty ? "T\(tool.number)" : "'\(tool.name)'"
+        var params = params
+        if undercut {
+            if params.entry.kind == .ramp {
+                warnings.append("\(bitName) is wider at its tip than above it, so it can't ramp in: it plunges in the waste instead.")
+                params.entry.kind = .plunge
+            }
+            if params.tabs.enabled {
+                warnings.append("\(bitName) is wider at its tip than above it, so it can't lift over tabs without cutting into the "
+                    + "wall: tabs were left off. Hold the part another way.")
+                params.tabs.enabled = false
+            }
+        }
         let polys = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }
         let closed = polys.filter { $0.isClosed && $0.count >= 3 }
         let open = polys.filter { !$0.isClosed && $0.count >= 2 }
 
-        // Effective radius: for tapered bits the cone radius where it meets the surface at final depth.
+        // Effective radius: for tapered bits the cone radius where it meets the surface at final depth. A form or
+        // dovetail bit rides the line with its tip (a form bit's pilot), so its profile is cut into the edge above it.
         let cutDepth = params.depth.cutDepth
-        let r = tool.shape.isTapered ? tool.radius(atHeight: cutDepth) : tool.radius
+        let r: Double
+        switch tool.shape {
+        case .taperedBallNose: r = tool.radius(atHeight: cutDepth)
+        case .form, .dovetail: r = tool.radius(atHeight: 0)
+        default: r = tool.shape.isTapered ? tool.radius(atHeight: cutDepth) : tool.radius
+        }
         let offset = r + params.allowance
 
         struct Contour { var loop: Polyline; var closed: Bool; var nesting: Int; var reliefs: [CornerRelief.Relief] = [] }
@@ -116,7 +139,32 @@ enum ProfileGenerator {
         }
         var paramsAtDepth = params
         paramsAtDepth.depth = depth
-        let levels = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
+        var levels = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
+        // How far an undercut bit must be off the wall before it can lift out (a little spare for the arc fitting).
+        let clearance = undercut ? tool.undercut(toDepth: depth.cutDepth) + 0.5 : 0
+        if undercut, let last = levels.last {
+            if levels.count > 1 {
+                warnings.append("\(bitName) is wider at its tip than above it, so it cuts in one pass at full depth: stepping down "
+                    + "would cut into the wall above each pass. Clear the waste with an end mill first.")
+            }
+            levels = [last]
+            if params.side == .on {
+                // Only an open line whose ends are off the material can be entered and left.
+                let stockRect = context.stock.bounds
+                func off(_ p: Vec2) -> Bool {
+                    let dx = max(stockRect.min.x - p.x, 0, p.x - stockRect.max.x), dy = max(stockRect.min.y - p.y, 0, p.y - stockRect.max.y)
+                    return (dx * dx + dy * dy).squareRoot() >= tool.radius - 1e-6
+                }
+                let kept = contours.filter { !$0.closed && off($0.loop.points[0]) && off($0.loop.points[$0.loop.count - 1]) }
+                if kept.count < contours.count {
+                    let n = contours.count - kept.count
+                    warnings.append("\(bitName) is wider at its tip than above it, so on the line it can only cut a slot that starts and "
+                        + "ends off the material (at least \(context.length(tool.radius)) past its edge): \(n == 1 ? "1 vector was" : "\(n) vectors were") "
+                        + "skipped.")
+                }
+                contours = kept
+            }
+        }
         guard !levels.isEmpty, !contours.isEmpty else {
             if levels.isEmpty { warnings.append("Cut depth must be greater than the start depth.") }
             return ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
@@ -151,7 +199,12 @@ enum ProfileGenerator {
         }
 
         let firstXY = ordered.first.map { $0.loop.points[0] }
-        let leads = params.side == .on ? nil : params.leads
+        var leads = params.side == .on ? nil : params.leads
+        if undercut, params.side != .on {
+            // Straight off the wall, at least the undercut long, and back out the same way.
+            leads = LeadSettings(kind: .line, length: max(clearance, params.leads?.size ?? 0), angle: 90, leadOut: true,
+                                 overlap: params.leads?.overlap ?? 0)
+        }
         if params.leads != nil && params.side == .on {
             warnings.append("Leads need an inside or outside cut; they were skipped.")
         }
@@ -160,11 +213,22 @@ enum ProfileGenerator {
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: leads == nil ? firstXY : nil)
         var probe = firstXY
         cursor = firstXY ?? .zero
-        let clearance = ToolCentreClearance(regions: offsetRegions, inside: params.side == .inside, stock: context.stock,
-                                            toolRadius: tool.radius, keepOuts: context.keepOuts, others: others,
-                                            materialTop: context.materialTop, topLimit: -depth.startDepth)
+        let centreClearance = ToolCentreClearance(regions: offsetRegions, inside: params.side == .inside, stock: context.stock,
+                                                  toolRadius: tool.radius, keepOuts: context.keepOuts, others: others,
+                                                  materialTop: context.materialTop, topLimit: -depth.startDepth)
         let rampLength: Double? = params.entry.kind == .ramp && params.entry.rampLength > 0 ? params.entry.rampLength : nil
         var unfitted = 0
+        // Undercut bits: loops with no room to lead off the wall, and loops that plunge into uncut material.
+        var stranded = 0
+        var plungesIntoMaterial = 0
+        let wallLoops = contours.filter(\.closed).map(\.loop)
+        func clearOfWalls(_ p: Vec2) -> Bool {
+            wallLoops.allSatisfy { $0.closestPoint(to: p).point.distance(to: p) >= clearance - 0.5 - 1e-6 }
+        }
+        func intoMaterial(_ p: Vec2, z: Double) -> Bool {
+            guard tool.shape.cutsEdgesOnly, let top = context.materialTop else { return false }
+            return top(p, tool.radius * 0.5) > z + 0.05
+        }
         for contour in ordered {
             let near = probe ?? b.position.xy
             probe = nil
@@ -172,22 +236,43 @@ enum ProfileGenerator {
                 if let leads {
                     let relieved = CornerRelief.insert(contour.reliefs, into: contour.loop)
                     if let lead = LeadPlanner.fit(contour.loop, relieved: relieved, near: near, settings: leads, wasteOnLeft: wasteOnLeft,
-                                                  clearance: clearance, rampLength: rampLength,
+                                                  clearance: centreClearance, rampLength: rampLength,
                                                   tabs: { TabPlan(length: $0.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]) },
                                                   linkLimit: max(3 * tool.diameter, 10), chordTolerance: context.arcTolerance) {
+                        // The lead planner shortens a lead that doesn't fit; an undercut bit needs the whole length.
+                        if undercut, !(clearOfWalls(lead.start) && clearOfWalls(lead.leadOut[lead.leadOut.count - 1])) {
+                            stranded += 1
+                            continue
+                        }
+                        if intoMaterial(lead.start, z: levels[0]) { plungesIntoMaterial += 1 }
                         cutClosedWithLeads(lead, levels: levels, params: paramsAtDepth, tool: tool, builder: &b, warnings: &warnings)
                         b.retract()
+                        continue
+                    }
+                    if undercut {
+                        stranded += 1
                         continue
                     }
                     unfitted += 1
                 }
                 // Reliefs go in after the start is chosen, so the entry never lands on a relief tip.
                 let loop = CornerRelief.insert(contour.reliefs, into: contour.loop.startingNearest(near))
+                if intoMaterial(loop.points[0], z: levels[0]) { plungesIntoMaterial += 1 }
                 cutClosed(loop, levels: levels, params: paramsAtDepth, tool: tool, builder: &b, warnings: &warnings)
             } else {
                 cutOpen(contour.loop, levels: levels, builder: &b)
             }
             b.retract()
+        }
+        if stranded > 0 {
+            warnings.append("\(bitName) is wider at its tip than above it, so it must lead \(context.length(clearance)) straight off the "
+                + "wall before lifting out, and \(stranded == 1 ? "1 loop has" : "\(stranded) loops have") no room for that: "
+                + "\(stranded == 1 ? "it was" : "they were") skipped. Clear more room round \(stranded == 1 ? "it" : "them") first.")
+        }
+        if plungesIntoMaterial > 0 {
+            warnings.append("\(bitName) plunges into uncut material at the start of \(plungesIntoMaterial == 1 ? "1 loop" : "\(plungesIntoMaterial) loops"). "
+                + "Form and dovetail bits cut poorly on a plunge (a pilot or bearing doesn't cut at all): clear the waste with an "
+                + "end mill first, or start off the material.")
         }
         if unfitted > 0 {
             warnings.append(unfitted == 1 ? "Leads didn't fit on 1 loop; it's entered without one."

@@ -7,13 +7,14 @@ import simd
 /// triangle. Unlike a height grid this has no sampling error, so steep walls can't be gouged between samples. Ball
 /// noses and flat end mills have their own tests (`ballTip`, `flatTip`; a flat end mill only when it leaves no
 /// allowance); V-bits, engraving bits, drills, bull noses, tapered ball noses and flat end mills leaving an allowance
-/// are dropped as a `CutterProfile`, grown by the allowance.
+/// are dropped as a `CutterProfile`, grown by the allowance. Form and dovetail bits, whose profile needn't be convex,
+/// are dropped as a `RingCutter` (their lower envelope), raised by the allowance.
 ///
 /// Speed: triangles are binned in XY, each bin sorted by the highest the triangle could lift the tool, so a query
 /// stops once no triangle left in a bin could beat the best so far. A caller sampling along a line passes the last
 /// sample's winner (`z(at:hint:)`), which is tested first. Normals are worked out once, not per query.
 struct TriangleDropCutter: Sendable {
-    enum Kind: Sendable, Equatable { case ball, flat, profile }
+    enum Kind: Sendable, Equatable { case ball, flat, profile, rings }
 
     let kind: Kind
     let radius: Double
@@ -21,6 +22,8 @@ struct TriangleDropCutter: Sendable {
     let allowance: Double
     /// The cutter for `.profile`, grown by the allowance (so it leaves the allowance square to the surface).
     let profile: CutterProfile?
+    /// The cutter for `.rings` (not grown: the allowance only raises it).
+    let rings: RingCutter?
     /// Farthest from the tool's axis a triangle can be and still touch it.
     let reach: Double
     /// Triangle vertices, 9 doubles per triangle.
@@ -55,6 +58,9 @@ struct TriangleDropCutter: Sendable {
             } else {
                 self.init(kind: .flat, radius: tool.radius, allowance: allowance, profile: nil, triangles: triangles)
             }
+        case .form, .dovetail:
+            guard let rings = RingCutter(tool: tool) else { return nil }
+            self.init(kind: .rings, radius: rings.radius, allowance: allowance, profile: nil, rings: rings, triangles: triangles)
         default:
             guard let shape = CutterProfile(tool: tool) else { return nil }
             self.init(profile: shape, allowance: allowance, triangles: triangles)
@@ -67,13 +73,15 @@ struct TriangleDropCutter: Sendable {
                   triangles: triangles)
     }
 
-    private init?(kind: Kind, radius: Double, allowance: Double, profile: CutterProfile?, triangles: [Double]) {
+    private init?(kind: Kind, radius: Double, allowance: Double, profile: CutterProfile?, rings: RingCutter? = nil,
+                  triangles: [Double]) {
         self.kind = kind
         self.radius = radius
         self.allowance = allowance
         self.profile = profile
+        self.rings = rings
         // Ball and flat keep the reach and bins they always had, so they find exactly the same triangles.
-        reach = profile?.radius ?? radius + allowance
+        reach = profile?.radius ?? rings?.radius ?? radius + allowance
         let lift = profile.map { -$0.minHeight } ?? allowance
         let count = triangles.count / 9
         tri = Array(triangles.prefix(count * 9))
@@ -215,6 +223,8 @@ struct TriangleDropCutter: Sendable {
             return Self.flatTip(a, b, c, p, radius: radius, allowance: allowance, slope: g)
         case .profile:
             return profile!.tip(a, b, c, p, normal: SIMD3(nx[t], ny[t], nz[t]), above: best)
+        case .rings:
+            return rings!.tip(a, b, c, p, normal: SIMD3(nx[t], ny[t], nz[t]), above: best - allowance) + allowance
         }
     }
 
@@ -440,6 +450,12 @@ struct CutterProfile: Sendable, Equatable {
             let t = tool.halfAngleTangent
             guard t > 1e-6, t.isFinite else { return nil }
             self = .vBit(radius: R, tip: tool.shape == .drill ? 0 : tool.tipDiameter / 2, halfAngle: atan(t))
+        case .taperedBallNose:
+            let half = (tool.includedAngle / 2).radians
+            guard tool.geometryProblem == nil, half > 1e-6, half < .pi / 2 else { return nil }
+            self = .taperedBall(radius: R, ball: tool.tipDiameter / 2, halfAngle: half)
+        case .form, .dovetail:
+            return nil // not convex in general: see `RingCutter`
         }
     }
 
@@ -610,5 +626,131 @@ struct CutterProfile: Sendable, Equatable {
         if flip { u = -u }
         let z = v1.z + (v2.z - v1.z) * max(0, min(1, (s0 + u) / L))
         return z - height(min(R, (d * d + u * u).squareRoot()))
+    }
+}
+
+/// The lower envelope of any cutter of revolution (`ToolProfile.envelope`): what reaches down to the material at each
+/// distance from its axis, as straight rings (flats and cones) out from the axis, each starting where the last ends and
+/// none sloping down. A form bit's profile needn't be convex (a roundover's is concave), so unlike `CutterProfile` the
+/// tip Z a triangle asks for can peak more than once; it is worked out ring by ring.
+///
+/// Within one ring the height is h0 + k (ρ − r0) at distance ρ from the axis, with k ≥ 0, so on the triangle's plane
+/// q.z − h(|q − p|) is concave and, round any circle about the axis, highest uphill. Its maximum over the part of the
+/// triangle the ring covers is then at one of:
+/// - **facet**: the uphill point on the ring's inner or outer circle, when inside the triangle;
+/// - **edge**: the peak of a concave function along each edge within the ring (at most two pieces per edge), or where
+///   an edge crosses one of the ring's circles;
+/// - **vertex**: a corner within the ring.
+struct RingCutter: Sendable, Equatable {
+    struct Ring: Sendable, Equatable {
+        var r0: Double, r1: Double, h0: Double, k: Double
+        @inline(__always) func height(_ r: Double) -> Double { h0 + k * (r - r0) }
+    }
+
+    let rings: [Ring]
+    var radius: Double { rings.last?.r1 ?? 0 }
+
+    /// From the envelope's points (radii never going down).
+    init?(envelope pts: [Vec2]) {
+        var out: [Ring] = []
+        for (a, b) in zip(pts, pts.dropFirst()) where b.x > a.x + 1e-12 {
+            out.append(Ring(r0: a.x, r1: b.x, h0: a.y, k: max(0, (b.y - a.y) / (b.x - a.x))))
+        }
+        guard !out.isEmpty else { return nil }
+        rings = out
+    }
+
+    /// A form or dovetail bit's lower envelope, out to its radius.
+    init?(tool: Tool) {
+        guard tool.shape.cutsEdgesOnly, tool.radius > 0 else { return nil }
+        var pts: [Vec2] = []
+        for q in ToolProfile.envelope(tool.cuttingEdge) {
+            if q.x >= tool.radius {
+                if let last = pts.last, last.x < tool.radius {
+                    pts.append(Vec2(tool.radius, last.y + (q.y - last.y) * (tool.radius - last.x) / max(q.x - last.x, 1e-12)))
+                }
+                break
+            }
+            pts.append(q)
+        }
+        if let last = pts.last, last.x < tool.radius - 1e-9 { pts.append(Vec2(tool.radius, last.y)) }
+        self.init(envelope: pts)
+    }
+
+    /// Height above the tip at distance r from the axis.
+    func height(_ r: Double) -> Double {
+        for ring in rings where r <= ring.r1 { return ring.height(max(r, ring.r0)) }
+        return rings.last.map { $0.height($0.r1) } ?? 0
+    }
+
+    /// Tip Z of this cutter dropped at `p` onto the triangle a, b, c with upward unit normal n, or -infinity when it
+    /// misses. Like `CutterProfile.tip`, a ring that can't beat `floor` may be skipped.
+    func tip(_ a: SIMD3<Double>, _ b: SIMD3<Double>, _ c: SIMD3<Double>, _ p: Vec2, normal n: SIMD3<Double>,
+             above floor: Double = -.infinity) -> Double {
+        let R = radius
+        var best = -Double.infinity
+        for v in [a, b, c] {
+            let dx = v.x - p.x, dy = v.y - p.y
+            let d2 = dx * dx + dy * dy
+            if d2 <= R * R { best = max(best, v.z - height(d2.squareRoot())) }
+        }
+        let top = max(a.z, b.z, c.z)
+        // The plane's slope and uphill direction.
+        var gx = 0.0, gy = 0.0, s = 0.0, ux = 1.0, uy = 0.0
+        let planar = n.z > 1e-9
+        if planar {
+            gx = -n.x / n.z
+            gy = -n.y / n.z
+            s = (gx * gx + gy * gy).squareRoot()
+            if s > 1e-12 { ux = gx / s; uy = gy / s }
+        }
+        for ring in rings {
+            let bar = max(best, floor)
+            if top - ring.h0 <= bar { continue } // no point of the triangle can beat it on this ring
+            if planar {
+                for rho in [ring.r0, ring.r1] {
+                    let q = SIMD3(p.x + rho * ux, p.y + rho * uy, 0)
+                    if TriangleDropCutter.insideXY(q, a, b, c) {
+                        best = max(best, a.z + gx * (q.x - a.x) + gy * (q.y - a.y) - ring.height(rho))
+                    }
+                }
+            }
+            best = max(best, edge(a, b, p, ring), edge(b, c, p, ring), edge(c, a, p, ring))
+        }
+        return best
+    }
+
+    /// The most the edge from v1 to v2 asks the tip to rise at `p` within one ring, or -infinity when it misses it.
+    @inline(__always) private func edge(_ v1: SIMD3<Double>, _ v2: SIMD3<Double>, _ p: Vec2, _ ring: Ring) -> Double {
+        let ex = v2.x - v1.x, ey = v2.y - v1.y
+        let L2 = ex * ex + ey * ey
+        guard L2 > 1e-18 else { return -.infinity }
+        let L = L2.squareRoot()
+        let wx = p.x - v1.x, wy = p.y - v1.y
+        let s0 = (wx * ex + wy * ey) / L
+        let d = abs(wx * ey - wy * ex) / L
+        guard d <= ring.r1 else { return -.infinity }
+        let uOut = max(0, ring.r1 * ring.r1 - d * d).squareRoot()
+        let uIn = max(0, ring.r0 * ring.r0 - d * d).squareRoot()
+        let m = (v2.z - v1.z) / L
+        // The peak on the whole line: where the edge's slope matches the cone's along it.
+        let peak: Double
+        if ring.k <= abs(m) {
+            peak = m >= 0 ? .infinity : -.infinity
+        } else {
+            let t = m / ring.k
+            peak = d * t / max(1e-300, (1 - t * t)).squareRoot()
+        }
+        var best = -Double.infinity
+        let lo = -s0, hi = L - s0
+        for (u0, u1) in [(uIn, uOut), (-uOut, -uIn)] {
+            let a0 = max(u0, lo), a1 = min(u1, hi)
+            guard a0 <= a1 else { continue }
+            let u = min(max(peak, a0), a1)
+            let z = v1.z + (v2.z - v1.z) * max(0, min(1, (s0 + u) / L))
+            let rho = min(ring.r1, max(ring.r0, (d * d + u * u).squareRoot()))
+            best = max(best, z - ring.height(rho))
+        }
+        return best
     }
 }

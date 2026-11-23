@@ -314,6 +314,8 @@ struct RotaryDropCutter: Sendable {
                     case .ball: z = TriangleDropCutter.ballTip(a, b, cc, p, radius: radius, allowance: allowance)
                     case .flat: z = TriangleDropCutter.flatTip(a, b, cc, p, radius: radius, allowance: allowance)
                     case .profile: z = profile!.tip(a, b, cc, p, normal: TriangleDropCutter.upNormal(a, b, cc), above: best)
+                    // Never made here: a form or dovetail bit is followed as a flat end mill of its diameter.
+                    case .rings: z = TriangleDropCutter.flatTip(a, b, cc, p, radius: radius, allowance: allowance)
                     }
                     if z > best {
                         best = z

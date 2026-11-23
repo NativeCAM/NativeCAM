@@ -179,7 +179,7 @@ enum Model3DGenerator {
         let tool = op.tool
         var warnings: [String] = []
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
-        let stepover = max(0.02, tool.diameter * params.stepoverFraction)
+        let stepover = max(0.02, tool.stepoverBasis * params.stepoverFraction)
         let cell = max(0.08, min(0.5, min(stepover / 2, tool.radius / 6)))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
                             reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {

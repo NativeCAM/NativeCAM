@@ -35,7 +35,7 @@ enum RoundingGenerator {
             return tp
         }
         let pass = max(0.05, p.passDepth ?? tool.cutting.stepdown)
-        let step = max(0.01, (p.stepoverFraction ?? tool.cutting.stepoverFraction) * tool.diameter)
+        let step = max(0.01, (p.stepoverFraction ?? tool.cutting.stepoverFraction) * tool.stepoverBasis)
         let layers = max(1, Int(((outer - finish) / pass - 1e-9).rounded(.up)))
         let radii = (1...layers).map { outer - Double($0) * (outer - finish) / Double(layers) }
         let feed = tool.cutting.feedRate

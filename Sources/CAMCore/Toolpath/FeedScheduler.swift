@@ -90,7 +90,7 @@ public enum FeedScheduler {
     public static func suits(_ tool: Tool) -> Bool {
         switch tool.shape {
         case .flatEndMill, .bullNose, .surfacing: true
-        case .ballNose, .vBit, .engraving, .drill: false
+        case .ballNose, .vBit, .engraving, .drill, .taperedBallNose, .form, .dovetail: false
         }
     }
 
