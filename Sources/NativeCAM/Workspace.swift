@@ -23,6 +23,8 @@ final class Workspace {
 
     // Selection and view
     var selection: Set<SidebarItem> = [.setup]
+    /// On a job nested onto several sheets, the sheet the canvas and the simulation show (from 0).
+    private(set) var sheet = 0
     /// Add Toolpath ▸ Inlay…, waiting in its sheet (any of the add-toolpath menus can ask for it).
     var inlayRequest: InlayRequest?
     var viewPreset: ViewPreset? = .iso
@@ -70,6 +72,52 @@ final class Workspace {
 
     var isSimulating: Bool { session != nil }
 
+    // MARK: Sheets
+
+    /// The project as the canvas shows it: on a job of several sheets, the sheet shown, its material and its shapes
+    /// (and the clamps, which are on every sheet). The operations stay the whole job's.
+    func shown(_ project: Project) -> Project {
+        guard project.sheetCount > 1 else { return project }
+        var p = project
+        let k = min(sheet, project.sheetCount - 1)
+        p.stock = project.stock(forSheet: k)
+        p.shapes = project.shapes(onSheet: k)
+        return p
+    }
+
+    /// Whether a shape is on the sheet shown.
+    func isShown(_ shape: DesignShape, in project: Project) -> Bool {
+        shape.isKeepOut || project.sheetIndex(of: shape) == min(sheet, project.sheetCount - 1)
+    }
+
+    /// The job as the canvas and the simulation show it: the sheet shown's, on a job of several sheets.
+    var shownJob: JobResult? {
+        guard let job, let sheets = job.sheets, !sheets.isEmpty else { return job }
+        return sheets[min(sheet, sheets.count - 1)].job
+    }
+
+    /// A new shape goes on the sheet shown.
+    func placedOnSheet(_ shape: DesignShape, of project: Project) -> DesignShape {
+        var s = shape
+        let k = min(sheet, project.sheetCount - 1)
+        s.sheet = k > 0 ? k : nil
+        return s
+    }
+
+    /// Shows another sheet; a running simulation starts again on it.
+    func show(sheet k: Int, project: Project) {
+        let k = max(0, min(k, project.sheetCount - 1))
+        guard k != sheet else { return }
+        let sizeChanged = !project.sheetSize(k).isApprox(project.sheetSize(sheet), tolerance: 1e-6)
+        sheet = k
+        if session != nil && externalProgramName == nil {
+            startSimulation(project)
+        } else {
+            rebuildLines(project)
+        }
+        if sizeChanged { fitRequest += 1 }
+    }
+
     var selectedShapeIDs: [UUID] {
         selection.compactMap { if case let .shape(id) = $0 { id } else { nil } }
     }
@@ -90,11 +138,13 @@ final class Workspace {
         generationTask = Task { [weak self] in
             if debounce { try? await Task.sleep(for: .milliseconds(250)) }
             guard !Task.isCancelled else { return }
+            let view = self?.shown(project) ?? project
             let (result, preview, radial) = await Task.detached(priority: .userInitiated) {
-                (CAMEngine.generate(project), Workspace.previewSurface(project), RotaryModelPreview.surface(project))
+                (CAMEngine.generate(project), Workspace.previewSurface(view), RotaryModelPreview.surface(project))
             }.value
             guard !Task.isCancelled, let self, token == self.generationCounter else { return }
             self.job = result
+            if self.sheet >= project.sheetCount { self.sheet = project.sheetCount - 1 }
             self.publishPreview(preview, project: project)
             self.publishRotaryPreview(radial, project: project)
             self.isGenerating = false
@@ -145,7 +195,8 @@ final class Workspace {
     // MARK: Simulation
 
     func startSimulation(_ project: Project) {
-        guard let job else { return }
+        let project = shown(project)
+        guard let job = shownJob else { return }
         externalProgramName = nil
         beginSession(SimulationSession(toolpaths: job.toolpaths, stock: project.stock,
                                        rapidRate: project.machine.rapidRateForEstimates, cellSize: nil,
@@ -154,6 +205,7 @@ final class Workspace {
     }
 
     func simulateProgram(_ toolpaths: [Toolpath], name: String, project: Project) {
+        let project = shown(project)
         externalProgramName = name
         beginSession(SimulationSession(toolpaths: toolpaths, stock: project.stock,
                                        rapidRate: project.machine.rapidRateForEstimates, cellSize: nil,
@@ -295,6 +347,7 @@ final class Workspace {
     // MARK: Scene
 
     func viewportScene(_ project: Project) -> ViewportScene {
+        let project = shown(project)
         var scene = ViewportScene()
         scene.stockSize = SIMD3(Float(project.stock.width), Float(project.stock.height), Float(project.stock.thickness))
         scene.machineTravel = SIMD2(Float(project.machine.travel.x), Float(project.machine.travel.y))
@@ -347,7 +400,7 @@ final class Workspace {
     /// text is the exception, since clicking inside a letter is the natural way to grab it.
     func hitTest(_ p: Vec2, tolerance: Double, project: Project) -> UUID? {
         var bestInside: (id: UUID, area: Double)?
-        for shape in project.shapes.reversed() {
+        for shape in shown(project).shapes.reversed() {
             let polys = outlines(shape)
             let b = polys.bounds
             guard b.insetBy(-tolerance).contains(p) else { continue }
@@ -371,7 +424,7 @@ final class Workspace {
         default: return nil
         }
         // A rest-machined pocket's clearing comes first and has no reliefs: they're on the operation's own toolpath.
-        guard let tp = job?.toolpaths.first(where: { $0.sourceOperationID == id && $0.reliefCorners != nil }),
+        guard let tp = shownJob?.toolpaths.first(where: { $0.sourceOperationID == id && $0.reliefCorners != nil }),
               let corners = tp.reliefCorners, !corners.isEmpty else {
             return nil
         }
@@ -495,6 +548,7 @@ final class Workspace {
     }
 
     func rebuildVectorLines(_ project: Project) {
+        let project = shown(project)
         var v: [LineVertex] = []
         let selected = Set(selectedShapeIDs)
         let opShapes: Set<UUID> = {
@@ -609,7 +663,7 @@ final class Workspace {
         var v: [LineVertex] = []
         var turned: [(angle: Double, lines: [LineVertex])] = []
         let dimmed = isSimulating
-        let toolpaths = session?.timeline.toolpaths ?? job?.toolpaths ?? []
+        let toolpaths = session?.timeline.toolpaths ?? shownJob?.toolpaths ?? []
         if showToolpaths && (!isSimulating || showToolpathsWhileSimulating) {
             let opIndex = Dictionary(uniqueKeysWithValues: project.operations.enumerated().map { ($1.id, $0) })
             for (i, tp) in toolpaths.enumerated() {

@@ -126,6 +126,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// On a tiled job, the tile (from 0, in run order) whose file this toolpath is cut in; its motions stay in job
     /// coordinates (see `TiledJob`). nil when the job isn't tiled.
     public var tile: Int?
+    /// On a job nested onto several sheets, the sheet (from 0) whose file this toolpath is cut in; its motions are in
+    /// that sheet's coordinates (see `SheetJob`). nil on a job of one sheet.
+    public var sheet: Int?
     /// With "Adjust feeds for load", what the scheduler did to the feeds (see `FeedScheduler`); nil when the
     /// toolpath keeps its programmed feed throughout.
     public var loadFeeds: LoadFeeds?

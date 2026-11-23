@@ -6,6 +6,7 @@ import Foundation
 //   nativecam-cli demo <out.nativecam>                       write the demo sign project
 //   nativecam-cli demo3d <out.nativecam>                     write the 3D relief demo project
 //   nativecam-cli demonest <out.nativecam>                   write the shelf-parts demo project (for Nest Parts)
+//   nativecam-cli demosheets <out.nativecam>                 write the shelf, frames and coasters demo (more sheets, part in part)
 //   nativecam-cli new <out.nativecam>                        write an empty project (default PRO6060 setup)
 //   nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]
 //                                                      generate toolpaths + G-code, check the file against the
@@ -39,8 +40,12 @@ import Foundation
 //                                                      Writes "<project> + <template>.nativecam" beside the project
 //                                                      unless -o names the file or --in-place overwrites the project
 //   nativecam-cli nest <project.nativecam> [-o out.nativecam | --in-place] [--spacing x] [--margin x] [--turns none|90|N]
-//                     [--grain] [--seconds s] [--seed n] [--evaluations n] [--svg preview.svg]
+//                     [--grain] [--seconds s] [--seed n] [--evaluations n] [--sheets n] [--sheet-size WxH] [--no-holes]
+//                     [--svg preview.svg]
 //                                                      nest every part on the sheet as Toolpaths ▸ Nest Parts does
+//                                                      (--sheets: parts that don't fit go on up to n sheets, sized
+//                                                      --sheet-size after the first; --no-holes keeps parts out of
+//                                                      other parts' holes)
 //                                                      (lengths in the project's units; spacing and margin default to
 //                                                      the cut-out bit plus 1/8 in or 3 mm); prints the utilization and
 //                                                      what didn't fit. Writes "<project> nested.nativecam" beside the
@@ -94,10 +99,10 @@ guard let command = args.first else {
 }
 
 switch command {
-case "demo", "demo3d", "demonest", "new":
+case "demo", "demo3d", "demonest", "demosheets", "new":
     guard args.count >= 2 else { fail("usage: nativecam-cli \(command) <out.nativecam>") }
     let project = command == "demo3d" ? Project.demoRelief() : command == "demonest" ? Project.demoNesting()
-        : command == "new" ? Project() : Project.demoSign()
+        : command == "demosheets" ? Project.demoNestingSheets() : command == "new" ? Project() : Project.demoSign()
     do {
         var url = URL(fileURLWithPath: args[1])
         try project.encoded().write(to: url)
@@ -369,7 +374,8 @@ case "sim":
 
 case "nest":
     let usage = "usage: nativecam-cli nest <project.nativecam> [-o out.nativecam | --in-place] [--spacing x] [--margin x]"
-        + " [--turns none|90|N] [--grain] [--seconds s] [--seed n] [--evaluations n] [--svg preview.svg]"
+        + " [--turns none|90|N] [--grain] [--seconds s] [--seed n] [--evaluations n] [--sheets n] [--sheet-size WxH] [--no-holes]"
+        + " [--svg preview.svg]"
     guard args.count >= 2 else { fail(usage) }
     if option("-o", in: args) != nil && args.contains("--in-place") { fail("Pass -o or --in-place, not both.\n" + usage) }
     let project = loadProject(args[1])
@@ -397,13 +403,31 @@ case "nest":
     if let t = option("--seconds", in: args) { settings.timeLimit = Double(t) ?? settings.timeLimit }
     if let t = option("--seed", in: args) { settings.seed = UInt64(t) ?? settings.seed }
     if let t = option("--evaluations", in: args) { settings.maxEvaluations = Int(t) }
+    if let t = option("--sheets", in: args) {
+        guard let n = Int(t), n >= 1 else { fail("--sheets takes a number of sheets, 1 or more") }
+        settings.maxSheets = n
+    }
+    if let t = option("--sheet-size", in: args) {
+        let parts = t.lowercased().split(separator: "x").compactMap { Double($0) }
+        guard parts.count == 2, parts.allSatisfy({ $0 > 0 }) else { fail("--sheet-size takes a width and height, e.g. 48x96, in \(u.symbol)") }
+        settings.nextSheetSize = Vec2(u.toMM(parts[0]), u.toMM(parts[1]))
+    }
+    if args.contains("--no-holes") { settings.partInPart = false }
     let result = job.nest(settings)
     let applied = job.apply(result, to: project, settings: settings)
     print("Nested \(result.placedCount) of \(counted(job.parts.count, "part")) in \(String(format: "%.1f", result.elapsed)) s "
           + "(\(counted(result.evaluations, "layout")) tried), spacing \(u.format(settings.spacing)) \(u.symbol), "
           + "edge margin \(u.format(settings.edgeMargin)) \(u.symbol)")
-    print(String(format: "Parts fill %.0f%% of the %@ %@ of the sheet they use (%.0f%% of the whole sheet)", result.utilization * 100,
-                 u.format(result.usedLength), u.symbol, result.sheetUtilization * 100))
+    if result.sheetCount > 1 {
+        print("On \(result.sheetCount) sheets: " + result.sheets.enumerated().map { "sheet \($0 + 1) \(counted($1.partCount, "part"))" }.joined(separator: ", "))
+    }
+    if !result.inHoles.isEmpty {
+        print("In other parts' holes: " + result.inHoles.map { "\(job.parts[$0].name) in \(result.insideOf[$0].map { job.parts[$0].name } ?? "")" }
+            .joined(separator: ", "))
+    }
+    print(String(format: "Parts fill %.0f%% of the %@ %@ of the %@ they use (%.0f%% of the whole of %@)", result.utilization * 100,
+                 u.format(result.usedLength), u.symbol, result.sheetCount > 1 ? "last sheet" : "sheet", result.sheetUtilization * 100,
+                 result.sheetCount > 1 ? "every sheet" : "the sheet"))
     for part in job.parts where part.reach > settings.spacing + 1e-6 {
         print("  \(part.name): “\(part.reachToolpath ?? "")” cuts \(u.format(part.reach)) \(u.symbol) outside it, so it keeps that far from the others")
     }
@@ -415,18 +439,37 @@ case "nest":
     for name in applied.movedAside { print("  Didn't fit, moved beside the sheet: \(name)") }
     for note in job.notes { print("  \(note)") }
     if let svg = option("--svg", in: args) {
-        let sheet = job.sheet
-        let pad = 10.0
-        func points(_ p: Polyline) -> String {
-            p.points.map { String(format: "%.2f,%.2f", $0.x, sheet.max.y - $0.y) }.joined(separator: " ")
+        // The sheets side by side, left to right.
+        let sheets = result.sheets.map(\.sheet)
+        let pad = 10.0, gap = 0.05 * (sheets.map(\.width).max() ?? job.sheet.width)
+        let top = sheets.map(\.height).max() ?? job.sheet.height
+        let offsets = sheets.indices.map { k in sheets[..<k].reduce(0) { $0 + $1.width + gap } }
+        func points(_ p: Polyline, _ k: Int) -> String {
+            p.points.map { String(format: "%.2f,%.2f", $0.x + offsets[k], top - $0.y) }.joined(separator: " ")
         }
-        let width = sheet.width + 2 * pad
-        var out = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"\(-pad) \(-pad) \(width) \(sheet.height + 2 * pad)\">\n"
-        out += "<rect x=\"0\" y=\"0\" width=\"\(sheet.width)\" height=\"\(sheet.height)\" fill=\"#f3ead8\" stroke=\"#8a7a5a\"/>\n"
-        for o in job.obstacles { for p in o.outlines { out += "<polygon points=\"\(points(p))\" fill=\"#bbb\" stroke=\"#777\"/>\n" } }
+        let width = (offsets.last ?? 0) + (sheets.last?.width ?? job.sheet.width) + 2 * pad
+        var out = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"\(-pad) \(-pad) \(width) \(top + 2 * pad)\">\n"
+        for (k, sheet) in sheets.enumerated() {
+            out += "<rect x=\"\(offsets[k])\" y=\"\(top - sheet.height)\" width=\"\(sheet.width)\" height=\"\(sheet.height)\" fill=\"#f3ead8\" stroke=\"#8a7a5a\"/>\n"
+            for o in job.obstacles where o.isOn(sheet: k) {
+                for p in o.outlines { out += "<polygon points=\"\(points(p, k))\" fill=\"#bbb\" stroke=\"#777\"/>\n" }
+            }
+        }
         for (i, part) in job.parts.enumerated() {
-            guard let place = result.placements[i] else { continue }
-            for p in part.outlines { out += "<polygon points=\"\(points(place.apply(p)))\" fill=\"#7fb0e0\" stroke=\"#2a5d8f\"/>\n" }
+            guard let place = result.placements[i], place.sheet < sheets.count else { continue }
+            for p in part.outlines {
+                out += "<polygon points=\"\(points(place.apply(p), place.sheet))\" fill=\"#7fb0e0\" stroke=\"#2a5d8f\"/>\n"
+            }
+            for h in part.holes {
+                out += "<polygon points=\"\(points(place.apply(h.outline), place.sheet))\" fill=\"#f3ead8\" stroke=\"#2a5d8f\"/>\n"
+            }
+        }
+        // Parts in holes go over the parts they sit in.
+        for i in result.inHoles {
+            guard let place = result.placements[i], place.sheet < sheets.count else { continue }
+            for p in job.parts[i].outlines {
+                out += "<polygon points=\"\(points(place.apply(p), place.sheet))\" fill=\"#4f8fd0\" stroke=\"#2a5d8f\"/>\n"
+            }
         }
         out += "</svg>\n"
         do { try out.write(toFile: svg, atomically: true, encoding: .utf8) } catch { fail("Can't write \(svg): \(error.localizedDescription)") }

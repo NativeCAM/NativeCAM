@@ -70,7 +70,13 @@ struct ContentView: View {
             workspace.rebuildVectorLines(new) // outlines follow edits instantly; toolpaths catch up in the background
             workspace.regenerate(new)
         }
-        .onChange(of: workspace.selection) { _, _ in workspace.rebuildLines(project) }
+        .onChange(of: workspace.selection) { _, _ in
+            // A shape picked in the sidebar on another sheet shows that sheet.
+            if let id = workspace.selectedShapeIDs.first, let shape = project.shape(id: id), !workspace.isShown(shape, in: project) {
+                workspace.show(sheet: project.sheetIndex(of: shape), project: project)
+            }
+            workspace.rebuildLines(project)
+        }
         .onChange(of: workspace.showVectors) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showToolpaths) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showRapids) { _, _ in workspace.rebuildLines(project) }
@@ -291,11 +297,12 @@ struct ContentView: View {
             return
         }
         document.project = applied.project
+        workspace.show(sheet: min(workspace.sheet, applied.sheetCount - 1), project: applied.project)
         if !applied.movedAside.isEmpty {
             alert = AlertInfo(title: "Some parts didn't fit",
                               message: "Moved beside the sheet, where nested parts would otherwise cut into them: "
                                 + applied.movedAside.joined(separator: ", ")
-                                + ". Their toolpaths are off the material now: cut them from another sheet, or turn the toolpaths off.")
+                                + ". Their toolpaths are off the material now: nest again with more sheets allowed, or turn the toolpaths off.")
         }
     }
 
@@ -321,7 +328,7 @@ struct ContentView: View {
                 if ModelImporter.supportedExtensions.contains(ext) {
                     let result = try ModelImporter.importFile(at: url)
                     warnings.append(contentsOf: result.warnings.map { "\(url.lastPathComponent): \($0)" })
-                    let shape = ShapeFactory.model(result, name: name, stock: project.stock)
+                    let shape = workspace.placedOnSheet(ShapeFactory.model(result, name: name, stock: workspace.shown(project).stock), of: project)
                     document.project.shapes.append(shape)
                     // On a rotary blank it lies along the axis, scaled to fit.
                     document.project.placeModelsOnBlank()
@@ -329,7 +336,7 @@ struct ContentView: View {
                 } else {
                     let result = try VectorImporter.importFile(at: url, tolerance: 0.01)
                     warnings.append(contentsOf: result.warnings.map { "\(url.lastPathComponent): \($0)" })
-                    let shapes = result.shapes(name: name, stock: project.stock)
+                    let shapes = result.shapes(name: name, stock: workspace.shown(project).stock).map { workspace.placedOnSheet($0, of: project) }
                     if shapes.isEmpty { warnings.append("\(url.lastPathComponent): no usable vectors found.") }
                     document.project.shapes.append(contentsOf: shapes)
                     added.append(contentsOf: shapes.map(\.id))
@@ -513,6 +520,9 @@ struct ContentView: View {
         if let tiled = job.tiling {
             panel.message = "Saves \(output.files.count) files, one \(output.files.count > tiled.layout.count ? "per tool in each tile" : "per tile"), "
                 + "named after this one, and a setup sheet with a page for each tile."
+        } else if let sheets = job.sheets {
+            panel.message = "Saves \(output.files.count) files, one \(output.files.count > sheets.count ? "per tool on each sheet" : "per sheet"), "
+                + "named after this one, and a setup sheet with a page for each sheet."
         } else if output.files.count > 1 {
             panel.message = "\(post.name) can't stop for a tool change, so each tool gets its own file "
                 + "(\(output.files.count) files, named after this one). Re-zero Z before running each."
@@ -533,8 +543,9 @@ struct ContentView: View {
                 for (file, name) in zip(output.files, names) {
                     try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: folder.appendingPathComponent(name))
                 }
-                // A tiled job's setup sheet says where to move the material and the dowels before each file.
-                if job.tiling != nil {
+                // A tiled job's setup sheet says where to move the material and the dowels before each file; a nested
+                // job's, which sheet each file cuts.
+                if job.tiling != nil || job.sheets != nil {
                     let sheet = SetupSheet.html(project: project, job: job, gcodeFile: stem + "." + post.fileExtension, checks: allChecks)
                     try Data(sheet.utf8).write(to: folder.appendingPathComponent(stem + " setup sheet.html"))
                 }

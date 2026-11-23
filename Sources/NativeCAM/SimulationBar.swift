@@ -48,6 +48,10 @@ struct SimulationBar: View {
                     .fixedSize()
                     .help("The simulation cuts the tiles one after another with the material in place; jump to any tile")
                 }
+                if project.sheetCount > 1 && workspace.externalProgramName == nil {
+                    SheetStepper(workspace: workspace, project: project)
+                        .help("The simulation cuts one sheet at a time; step through the sheets")
+                }
                 if let tool = workspace.simTool {
                     Text(tool.toolpathName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -75,6 +79,10 @@ struct SimulationBar: View {
                     Text("Calculating…").foregroundStyle(.secondary)
                 }
                 Spacer()
+                if project.sheetCount > 1 {
+                    SheetStepper(workspace: workspace, project: project)
+                        .help("This job is nested onto \(project.sheetCount) sheets, cut one after another; show another")
+                }
                 Button { workspace.startSimulation(project) } label: { Label("Simulate", systemImage: "play.circle.fill") }
                     .disabled(workspace.job?.toolpaths.isEmpty ?? true)
             }
@@ -83,5 +91,41 @@ struct SimulationBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+}
+
+/// On a job nested onto several sheets: which sheet the canvas and the simulation show, with buttons to step through.
+struct SheetStepper: View {
+    @Bindable var workspace: Workspace
+    let project: Project
+
+    var body: some View {
+        let count = project.sheetCount, k = min(workspace.sheet, count - 1)
+        HStack(spacing: 4) {
+            Button { workspace.show(sheet: k - 1, project: project) } label: { Image(systemName: "chevron.left") }
+                .disabled(k == 0)
+                .accessibilityLabel("Previous sheet")
+            Menu {
+                ForEach(0..<count, id: \.self) { i in
+                    let size = project.sheetSize(i)
+                    Button("Sheet \(i + 1), \(dimension(size.x)) × \(dimension(size.y)) \(project.displayUnits.symbol)") {
+                        workspace.show(sheet: i, project: project)
+                    }
+                }
+            } label: {
+                Label("Sheet \(k + 1) of \(count)", systemImage: "square.stack")
+                    .monospacedDigit()
+            }
+            .fixedSize()
+            Button { workspace.show(sheet: k + 1, project: project) } label: { Image(systemName: "chevron.right") }
+                .disabled(k >= count - 1)
+                .accessibilityLabel("Next sheet")
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private func dimension(_ mm: Double) -> String {
+        let u = project.displayUnits
+        return u.fromMM(mm).formatted(.number.precision(.fractionLength(0...(u == .inch ? 3 : 1))).grouping(.never))
     }
 }

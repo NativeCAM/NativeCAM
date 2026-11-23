@@ -20,8 +20,15 @@ import Foundation
 ///   layout always kept), seeded with the largest-first order and the best turn for each part, until a time limit,
 ///   an evaluation count or a stop.
 ///
+/// - **More sheets.** Each layout fills the sheets one after another, as Deepnest does: the parts in order on the first
+///   sheet, those that didn't fit on the next, and so on up to the sheet limit. Fewer sheets win, then the shortest
+///   last sheet.
+/// - **Part in part.** A part's holes (`Part.holes`, through-cut openings) are taken out of its no-fit polygons where
+///   another part fits inside one with its gap all round: the positions where the moving part lies inside the hole
+///   shrunk by the gap, which is the hole eroded by the part (the complement of the sum of the moving part and a frame
+///   round the hole).
+///
 /// No code is ported from SVGnest, Deepnest or libnest2d: this is a Swift implementation of the published method.
-/// Parts are nested by their outer outlines only (a part never goes inside another's hole), on one sheet.
 public enum Nesting {
     /// The turns a part may take, about its own centre.
     public enum Rotation: Hashable, Codable, Sendable {
@@ -65,9 +72,16 @@ public enum Nesting {
         public var maxEvaluations: Int?
         /// Layouts in each generation of the search.
         public var populationSize: Int
+        /// Parts may sit in other parts' holes (`Part.holes`) where they fit with their gap all round.
+        public var partInPart: Bool
+        /// Most sheets the parts may use: those that don't fit on one go on the next. 1 = one sheet.
+        public var maxSheets: Int
+        /// Size of every sheet after the first (width, height), mm; nil = the same as the first.
+        public var nextSheetSize: Vec2?
 
         public init(spacing: Double, edgeMargin: Double, rotation: Rotation = .quarterTurns, keepGrain: Bool = false,
-                    timeLimit: Double = 5, seed: UInt64 = 1, maxEvaluations: Int? = nil, populationSize: Int = 10) {
+                    timeLimit: Double = 5, seed: UInt64 = 1, maxEvaluations: Int? = nil, populationSize: Int = 10,
+                    partInPart: Bool = true, maxSheets: Int = 1, nextSheetSize: Vec2? = nil) {
             self.spacing = spacing
             self.edgeMargin = edgeMargin
             self.rotation = rotation
@@ -76,9 +90,21 @@ public enum Nesting {
             self.seed = seed
             self.maxEvaluations = maxEvaluations
             self.populationSize = populationSize
+            self.partInPart = partInPart
+            self.maxSheets = maxSheets
+            self.nextSheetSize = nextSheetSize
         }
 
         public var angles: [Double] { rotation.angles(keepGrain: keepGrain) }
+
+        /// Sheets the layout may use, at least one.
+        public var sheetLimit: Int { max(1, maxSheets) }
+
+        /// Sheet `index` (from 0): the first as given, every later one `nextSheetSize` from the same corner.
+        public func sheet(_ index: Int, first: Rect2) -> Rect2 {
+            guard index > 0, let size = nextSheetSize else { return first }
+            return Rect2(min: first.min, max: first.min + size)
+        }
     }
 
     /// One part to nest: closed outer outlines (design coordinates, where it is now) that move as one.
@@ -86,14 +112,47 @@ public enum Nesting {
         public var outlines: [Polyline]
         /// How far its toolpaths cut outside its outline, mm (cutter edge): no other part or obstacle may come closer.
         public var reach: Double
+        /// Openings cut right through it that other parts may sit in (inside its outlines).
+        public var holes: [Hole]
+        /// Parts of the same group are cut by the same toolpaths, in the same order: a hole says which groups may go in it.
+        public var group: Int
 
-        public init(outlines: [Polyline], reach: Double = 0) {
+        public init(outlines: [Polyline], reach: Double = 0, holes: [Hole] = [], group: Int = 0) {
             self.outlines = outlines.filter { $0.isClosed && $0.count >= 3 }.map { $0.oriented(counterClockwise: true) }
             self.reach = reach
+            self.holes = holes.filter { $0.outline.isClosed && $0.outline.count >= 3 && $0.outline.area > 1e-6 }
+            self.group = group
         }
 
+        /// Its outer outlines' area, mm².
         public var area: Double { Clipper.union(outlines).reduce(0) { $0 + $1.signedArea } }
+        /// What's left of it once its holes are cut, mm²: the area it takes up on the sheet.
+        public var materialArea: Double { max(0, area - holes.reduce(0) { $0 + $1.outline.area }) }
         public var bounds: Rect2 { outlines.bounds }
+    }
+
+    /// An opening right through a part, where another part may go (part in part).
+    public struct Hole: Sendable {
+        /// Its edge, design coordinates.
+        public var outline: Polyline
+        /// How far the part's own toolpaths cut into it from its edge, mm (to the cutter's edge): a part inside keeps at
+        /// least that far from the edge.
+        public var reach: Double
+        /// The groups (`Part.group`) of parts that may go in it, because all their toolpaths run before the hole is cut
+        /// free; nil = any part.
+        public var accepts: Set<Int>?
+        /// Where the first toolpath that cuts it free is in the run order, and whether that's a profile (which cuts
+        /// the loops inside the hole before the hole): what `accepts` is worked out from (`NestJob`).
+        public var freedAt: Int?
+        public var freedByProfile = false
+
+        public init(outline: Polyline, reach: Double, accepts: Set<Int>? = nil) {
+            self.outline = outline.isClosed ? outline.oriented(counterClockwise: true) : outline
+            self.reach = reach
+            self.accepts = accepts
+        }
+
+        public func accepts(group: Int) -> Bool { accepts?.contains(group) ?? true }
     }
 
     /// Something fixed on the sheet that parts keep clear of: a clamp, a keep-out, a part that stays where it is.
@@ -101,24 +160,32 @@ public enum Nesting {
         public var outlines: [Polyline]
         /// How far its own toolpaths cut outside it, mm (0 for a clamp).
         public var reach: Double
+        /// The sheet it's on (from 0); nil = every sheet (a clamp holds each sheet the same way).
+        public var sheet: Int?
 
-        public init(outlines: [Polyline], reach: Double = 0) {
+        public init(outlines: [Polyline], reach: Double = 0, sheet: Int? = nil) {
             self.outlines = outlines.filter { $0.isClosed && $0.count >= 3 }.map { $0.oriented(counterClockwise: true) }
             self.reach = reach
+            self.sheet = sheet
         }
+
+        public func isOn(sheet k: Int) -> Bool { sheet == nil || sheet == k }
     }
 
     /// Where a part goes: turned `rotation` degrees counter-clockwise about `pivot` (the centre of its outlines'
-    /// bounding box where it is now), then moved so the pivot lands on `position`.
+    /// bounding box where it is now), then moved so the pivot lands on `position`, on sheet `sheet` (from 0; every
+    /// sheet has its own coordinates, from its lower-left corner).
     public struct Placement: Hashable, Sendable {
         public var pivot: Vec2
         public var rotation: Double
         public var position: Vec2
+        public var sheet: Int
 
-        public init(pivot: Vec2, rotation: Double, position: Vec2) {
+        public init(pivot: Vec2, rotation: Double, position: Vec2, sheet: Int = 0) {
             self.pivot = pivot
             self.rotation = rotation
             self.position = position
+            self.sheet = sheet
         }
 
         public var transform: Transform2D {
@@ -129,33 +196,62 @@ public enum Nesting {
         public func apply(_ outline: Polyline) -> Polyline { outline.transformed(transform) }
     }
 
-    public struct Result: Sendable {
-        /// One entry per part, in the order given: where it goes, or nil when it didn't fit.
-        public var placements: [Placement?]
-        /// The sheet's region parts go in: the sheet less the edge margin.
+    /// How a layout uses one sheet.
+    public struct SheetUse: Sendable, Hashable {
+        /// The sheet, and its region parts go in: the sheet less the edge margin.
+        public var sheet: Rect2
         public var usable: Rect2
         /// True when parts are packed toward the sheet's left edge (a sheet wider than tall), false for the bottom.
         public var alongX: Bool
-        /// The parts' total area, and the area of those placed (outer outlines), mm².
-        public var totalArea: Double
+        /// Parts on it, and their area (less their holes), mm².
+        public var partCount: Int
         public var placedArea: Double
-        /// How far along the sheet the parts reach from its start edge (left or bottom), mm.
+        /// How far along the sheet the parts reach from its start edge (left or bottom), and the sheet's length that
+        /// way, mm.
         public var usedLength: Double
-        /// The sheet's length along the packing direction, mm.
         public var sheetLength: Double
         /// Placed area over the strip of the sheet the parts use (from its start edge to the farthest part, the
-        /// sheet's full width across), 0–1.
+        /// sheet's full width across), and over the whole sheet, 0–1.
         public var utilization: Double
-        /// Placed area over the whole sheet, 0–1.
+        public var sheetUtilization: Double
+    }
+
+    public struct Result: Sendable {
+        /// One entry per part, in the order given: where it goes, or nil when it didn't fit.
+        public var placements: [Placement?]
+        /// Each sheet the layout uses, in order (at least one).
+        public var sheets: [SheetUse]
+        /// For each part, the part whose hole it sits in (nil when it isn't in one).
+        public var insideOf: [Int?]
+        /// The last sheet's region parts go in: the sheet less the edge margin.
+        public var usable: Rect2
+        /// True when parts are packed toward the last sheet's left edge (a sheet wider than tall), false for the bottom.
+        public var alongX: Bool
+        /// The parts' total area, and the area of those placed (outer outlines less holes), mm².
+        public var totalArea: Double
+        public var placedArea: Double
+        /// How far along the last sheet the parts reach from its start edge (left or bottom), mm: what's left after it
+        /// is the offcut.
+        public var usedLength: Double
+        /// The last sheet's length along the packing direction, mm.
+        public var sheetLength: Double
+        /// The last sheet's placed area over the strip of it the parts use (from its start edge to the farthest part,
+        /// the sheet's full width across), 0–1.
+        public var utilization: Double
+        /// Placed area over the whole of every sheet used, 0–1.
         public var sheetUtilization: Double
         /// Layouts tried, and seconds spent.
         public var evaluations: Int
         public var elapsed: Double
-        /// Lower is better: unplaced parts first, then how far along the sheet the layout reaches.
+        /// Lower is better: unplaced parts first, then fewer sheets, then how far along the last sheet the layout
+        /// reaches.
         public var fitness: Double
 
         public var placedCount: Int { placements.count(where: { $0 != nil }) }
         public var unplaced: [Int] { placements.indices.filter { placements[$0] == nil } }
+        public var sheetCount: Int { sheets.count }
+        /// Parts sitting in another part's hole.
+        public var inHoles: [Int] { insideOf.indices.filter { insideOf[$0] != nil } }
     }
 
     /// Nests `parts` on `sheet`, clear of `obstacles`. `progress` gets the best layout so far as the search improves it
@@ -172,20 +268,67 @@ public enum Nesting {
         max(settings.spacing, reachA, reachB, 0)
     }
 
-    /// Checks a layout with the parts' exact outlines: each pair at least their gap apart, every part the edge margin
-    /// inside the sheet, and clear of every obstacle. Returns what's wrong (empty when nothing is). `tolerance` (mm)
-    /// allows for rounding.
+    /// The least gap a part needs from the edge of a hole it sits in: the spacing, or more where its own toolpaths or
+    /// the hole's reach further.
+    public static func holeGap(_ settings: Settings, _ partReach: Double, _ hole: Hole) -> Double {
+        max(settings.spacing, partReach, hole.reach, 0)
+    }
+
+    /// For each placed part, the part whose hole it sits in (the smallest hole holding a point inside it), or nil.
+    public static func insideOf(_ parts: [Part], placements: [Placement?]) -> [Int?] {
+        var out = [Int?](repeating: nil, count: parts.count)
+        let probes: [Vec2?] = parts.indices.map { i in
+            guard let p = placements[i], let first = parts[i].outlines.first else { return nil }
+            return (first.interiorPoint() ?? first.points.first).map(p.apply)
+        }
+        for i in parts.indices {
+            guard let probe = probes[i], let sheet = placements[i]?.sheet else { continue }
+            var best: (index: Int, area: Double)?
+            for j in parts.indices where j != i && !parts[j].holes.isEmpty {
+                guard let q = placements[j], q.sheet == sheet else { continue }
+                for hole in parts[j].holes {
+                    let h = q.apply(hole.outline)
+                    guard h.bounds.contains(probe), h.contains(probe) else { continue }
+                    if best == nil || hole.outline.area < best!.area { best = (j, hole.outline.area) }
+                }
+            }
+            out[i] = best?.index
+        }
+        return out
+    }
+
+    /// Whether part `i` sits, through holes inside holes, in part `outer`.
+    static func within(_ i: Int, _ outer: Int, _ inside: [Int?]) -> Bool {
+        var k = inside[i], steps = 0
+        while let j = k, steps < inside.count {
+            if j == outer { return true }
+            k = inside[j]
+            steps += 1
+        }
+        return false
+    }
+
+    /// Checks a layout with the parts' exact outlines: each pair at least their gap apart (or a part well inside a
+    /// hole of another, when part in part is on and the hole takes it), every part on a sheet within the limit and the
+    /// edge margin inside it, and clear of every obstacle on its sheet. Returns what's wrong (empty when nothing is).
+    /// `tolerance` (mm) allows for rounding.
     public static func violations(_ parts: [Part], placements: [Placement?], sheet: Rect2, obstacles: [Obstacle] = [],
                                   settings: Settings, tolerance: Double = 0.01) -> [String] {
         var problems: [String] = []
-        let placed: [(index: Int, outlines: [Polyline], bounds: Rect2)] = parts.indices.compactMap { i in
+        let placed: [(index: Int, sheet: Int, outlines: [Polyline], bounds: Rect2)] = parts.indices.compactMap { i in
             guard let p = placements[i] else { return nil }
             let o = parts[i].outlines.map(p.apply)
-            return (i, o, o.bounds)
+            return (i, p.sheet, o, o.bounds)
         }
-        let usable = sheet.insetBy(settings.edgeMargin)
-        for p in placed where !(usable.insetBy(-tolerance).contains(p.bounds.min) && usable.insetBy(-tolerance).contains(p.bounds.max)) {
-            problems.append("Part \(p.index + 1) is closer than the edge margin to the sheet's edge.")
+        for p in placed {
+            guard p.sheet >= 0, p.sheet < settings.sheetLimit else {
+                problems.append("Part \(p.index + 1) is on sheet \(p.sheet + 1), past the limit of \(settings.sheetLimit).")
+                continue
+            }
+            let usable = settings.sheet(p.sheet, first: sheet).insetBy(settings.edgeMargin).insetBy(-tolerance)
+            if !(usable.contains(p.bounds.min) && usable.contains(p.bounds.max)) {
+                problems.append("Part \(p.index + 1) is closer than the edge margin to the sheet's edge.")
+            }
         }
         func tooClose(_ a: [Polyline], _ boundsA: Rect2, _ b: [Polyline], _ boundsB: Rect2, gap: Double) -> Bool {
             let need = gap - tolerance
@@ -194,14 +337,38 @@ public enum Nesting {
             let overlap = Clipper.intersection(grown, b)
             return overlap.reduce(0) { $0 + abs($1.signedArea) } > 1e-6
         }
+        let inside = settings.partInPart ? insideOf(parts, placements: placements) : [Int?](repeating: nil, count: parts.count)
+        /// Part `inner` in a hole of part `outer`: inside the hole with its gap all round, and a part the hole takes.
+        func holeProblem(_ inner: Int, in outer: Int) -> String? {
+            guard let pi = placements[inner], let po = placements[outer] else { return nil }
+            let outlines = parts[inner].outlines.map(pi.apply)
+            guard let probe = outlines.first.flatMap({ $0.interiorPoint() ?? $0.points.first }),
+                  let hole = parts[outer].holes.filter({ po.apply($0.outline).contains(probe) }).min(by: { $0.outline.area < $1.outline.area })
+            else { return nil }
+            if !hole.accepts(group: parts[inner].group) {
+                return "Part \(inner + 1) sits in a hole of part \(outer + 1) that's cut free before part \(inner + 1) is."
+            }
+            let need = holeGap(settings, parts[inner].reach, hole) - tolerance
+            let grown = need > 0 ? Clipper.offset(outlines, delta: need, arcTolerance: 0.002) : outlines
+            let outside = Clipper.difference(grown, minus: [po.apply(hole.outline)]).reduce(0) { $0 + abs($1.signedArea) }
+            return outside > 1e-6 ? "Part \(inner + 1) is closer than its gap to the edge of part \(outer + 1)'s hole." : nil
+        }
         for x in placed.indices {
-            for y in placed.indices where y > x {
+            for y in placed.indices where y > x && placed[x].sheet == placed[y].sheet {
                 let a = placed[x], b = placed[y]
+                if inside[b.index] == a.index || inside[a.index] == b.index {
+                    let (inner, outer) = inside[b.index] == a.index ? (b.index, a.index) : (a.index, b.index)
+                    if let problem = holeProblem(inner, in: outer) { problems.append(problem) }
+                    continue
+                }
+                // In a hole of a part that's itself in the other's hole: the checks along the way cover it.
+                if within(b.index, a.index, inside) || within(a.index, b.index, inside) { continue }
+                // Both in the same hole, or not in holes at all: an ordinary pair.
                 if tooClose(a.outlines, a.bounds, b.outlines, b.bounds, gap: gap(settings, parts[a.index].reach, parts[b.index].reach)) {
                     problems.append("Parts \(a.index + 1) and \(b.index + 1) are closer than their gap.")
                 }
             }
-            for (k, o) in obstacles.enumerated() {
+            for (k, o) in obstacles.enumerated() where o.isOn(sheet: placed[x].sheet) {
                 let a = placed[x]
                 if tooClose(a.outlines, a.bounds, o.outlines, o.outlines.bounds, gap: gap(settings, parts[a.index].reach, o.reach)) {
                     problems.append("Part \(a.index + 1) is closer than its gap to obstacle \(k + 1).")
@@ -231,13 +398,15 @@ extension Nesting {
         var part: Int
         var angle: Int
         var position: IntPoint
+        var sheet: Int
     }
 
     struct Layout: Sendable {
         var spots: [Spot]
         var fitness: Double
         var placedArea: Double
-        var extent: Rect2
+        /// What the parts cover on each sheet filled, in order (empty where none went).
+        var extents: [Rect2]
     }
 
     struct Individual: Sendable {
@@ -272,26 +441,39 @@ extension Nesting {
         }
     }
 
+    /// A hole as the engine keeps it: its edge about the part's pivot (at the part's turn 0), its reach and the groups
+    /// it takes.
+    struct LocalHole: Sendable {
+        var loop: Polyline
+        var reach: Double
+        var accepts: Set<Int>?
+    }
+
     final class Engine: @unchecked Sendable {
         let settings: Settings
         let sheet: Rect2
-        let usable: Rect2
-        let alongX: Bool
+        /// Every sheet the parts may go on, its usable region and which way it packs.
+        let sheets: [Rect2]
+        let usables: [Rect2]
+        let alongXs: [Bool]
         let angleCount: Int
         let parts: [Part]
-        /// Per part: the centre it turns about, its area and its geometry (shared by identical parts).
+        /// Per part: the centre it turns about, its area (less its holes) and its geometry (shared by identical parts).
         let pivots: [Vec2]
         let areas: [Double]
         let keys: [Int]
         /// Per geometry: reach, exact bounds at each turn, and the simplified outline at each turn as loops and as
-        /// convex pieces (local, about the pivot).
+        /// convex pieces (local, about the pivot); the holes other parts may go in and the group it belongs to.
         let reach: [Double]
         let bounds: [[Rect2]]
         let loops: [[[[Vec2]]]]
         let pieces: [[[[Vec2]]]]
+        let holes: [[LocalHole]]
+        let groups: [Int]
         let obstacleLoops: [[[Vec2]]]
         let obstaclePieces: [[[Vec2]]]
         let obstacleReach: [Double]
+        let obstacleSheets: [Int?]
         let totalArea: Double
         let cache = Cache()
 
@@ -299,25 +481,37 @@ extension Nesting {
             self.settings = settings
             self.sheet = sheet
             self.parts = parts
-            usable = sheet.insetBy(settings.edgeMargin)
-            alongX = usable.width >= usable.height
+            sheets = (0..<settings.sheetLimit).map { settings.sheet($0, first: sheet) }
+            usables = sheets.map { $0.insetBy(settings.edgeMargin) }
+            alongXs = usables.map { $0.width >= $0.height }
             let angles = settings.angles
             angleCount = angles.count
             var pivots: [Vec2] = [], areas: [Double] = [], keys: [Int] = []
             var reach: [Double] = [], bounds: [[Rect2]] = [], loops: [[[[Vec2]]]] = [], pieces: [[[[Vec2]]]] = []
+            var holes: [[LocalHole]] = [], groups: [Int] = []
             var seen: [[Int64]: Int] = [:]
             for part in parts {
                 // On Clipper's grid, so copies of a part (their outlines snapped to it) have identical local outlines.
                 let c = part.bounds.isEmpty ? Vec2.zero : part.bounds.center
                 let pivot = Vec2((c.x * Clipper.scale).rounded() / Clipper.scale, (c.y * Clipper.scale).rounded() / Clipper.scale)
                 let local = part.outlines.map { $0.transformed(.translation(-pivot)) }
+                let usableHoles = settings.partInPart ? part.holes : []
+                let localHoles = usableHoles.map { LocalHole(loop: $0.outline.transformed(.translation(-pivot)), reach: $0.reach, accepts: $0.accepts) }
                 pivots.append(pivot)
-                areas.append(part.area)
+                areas.append(settings.partInPart ? part.materialArea : part.area)
                 // Identical outlines (copies of one part) share their no-fit polygons.
                 var signature: [Int64] = [Int64((part.reach * 1000).rounded())]
                 for loop in local {
                     signature.append(Int64(loop.count))
                     for p in loop.points { signature += [Int64((p.x * 1e4).rounded()), Int64((p.y * 1e4).rounded())] }
+                }
+                if settings.partInPart {
+                    signature += [-1, Int64(part.group)]
+                    for hole in localHoles {
+                        signature += [-2, Int64((hole.reach * 1000).rounded()), Int64(hole.loop.count)]
+                        signature += (hole.accepts.map { $0.sorted().map(Int64.init) } ?? [-3])
+                        for p in hole.loop.points { signature += [Int64((p.x * 1e4).rounded()), Int64((p.y * 1e4).rounded())] }
+                    }
                 }
                 if let k = seen[signature] {
                     keys.append(k)
@@ -327,6 +521,8 @@ extension Nesting {
                 seen[signature] = k
                 keys.append(k)
                 reach.append(part.reach)
+                holes.append(localHoles)
+                groups.append(part.group)
                 let outline = Engine.conservative(local)
                 let baseLoops = outline.map { $0.oriented(counterClockwise: true).deduplicated().points }
                 let basePieces = Engine.pieces(outline)
@@ -341,10 +537,13 @@ extension Nesting {
             self.bounds = bounds
             self.loops = loops
             self.pieces = pieces
+            self.holes = holes
+            self.groups = groups
             let obstacleOutlines = obstacles.map { Engine.conservative($0.outlines) }
             obstacleLoops = obstacleOutlines.map { $0.map { $0.oriented(counterClockwise: true).deduplicated().points } }
             obstaclePieces = obstacleOutlines.map { Engine.pieces($0) }
             obstacleReach = obstacles.map(\.reach)
+            obstacleSheets = obstacles.map(\.sheet)
             totalArea = areas.reduce(0, +)
         }
 
@@ -370,6 +569,22 @@ extension Nesting {
                 if count <= vertexBudget || tolerance >= maxSimplify {
                     let outside = Clipper.difference(exact, minus: outer).reduce(0) { $0 + abs($1.signedArea) }
                     return outer.isEmpty || outside > 1e-6 ? exact : outer
+                }
+                tolerance = min(maxSimplify, tolerance * 2)
+            }
+        }
+
+        /// A polygon set inside the hole `loop` and at least `inset` in from its edge everywhere: simplified, then
+        /// shrunk by the inset and the simplification's tolerance (with round joins, slack for whose chords is in
+        /// `inset`). Simplified harder until it fits the vertex budget.
+        static func conservativeHole(_ loop: Polyline, inset: Double) -> [Polyline] {
+            var tolerance = simplifyTolerance
+            while true {
+                let reduced = loop.count > 4 ? loop.simplified(tolerance: tolerance) : loop
+                if reduced.count <= vertexBudget || tolerance >= maxSimplify {
+                    let shrunk = Clipper.offset([reduced.count >= 3 ? reduced : loop], delta: -(inset + tolerance + 1e-4),
+                                                join: .round, arcTolerance: arcTolerance)
+                    return Clipper.union(shrunk).filter { $0.signedArea > 0 }
                 }
                 tolerance = min(maxSimplify, tolerance * 2)
             }
@@ -421,12 +636,55 @@ extension Nesting {
         /// The gap a pair of geometries (or a geometry and an obstacle) needs, with the slack for round corners.
         func pairGap(_ a: Double, _ b: Double) -> Double { Nesting.gap(settings, a, b) + Nesting.arcTolerance }
 
-        /// No-fit polygon of geometry `moving` at turn `angle` round geometry `fixed` at turn 0, grown by their gap.
+        /// No-fit polygon of geometry `moving` at turn `angle` round geometry `fixed` at turn 0, grown by their gap,
+        /// less where `moving` fits in one of `fixed`'s holes.
         func nfp(fixed: Int, moving: Int, angle: Int) -> [IntPath] {
             cache.value(PairKey(fixed: fixed, moving: moving, angle: angle, obstacle: false)) {
-                Engine.grownSum((loops[fixed][0], pieces[fixed][0]), (loops[moving][angle], pieces[moving][angle]),
-                                gap: pairGap(reach[fixed], reach[moving]))
+                let outer = Engine.grownSum((loops[fixed][0], pieces[fixed][0]), (loops[moving][angle], pieces[moving][angle]),
+                                            gap: pairGap(reach[fixed], reach[moving]))
+                let free = holes[fixed].filter { $0.accepts?.contains(groups[moving]) ?? true }
+                    .flatMap { holeRoom($0, moving: moving, angle: angle) }
+                guard !free.isEmpty else { return outer }
+                var paths = Clipper.booleanInt(.difference, fill: .nonZero, subjects: outer, openSubjects: [], clips: free).closed
+                if Clipper.intArea(paths) < 0 { paths = paths.map { $0.reversed() } }
+                return paths
             }
+        }
+
+        /// Where geometry `moving` at turn `angle` may put its pivot inside `hole` (local to the fixed part at turn 0)
+        /// with its gap from the hole's edge all round: the hole, shrunk by the gap, eroded by the part. That's
+        /// everywhere a frame round the shrunk hole, summed with the part turned half a turn, doesn't reach.
+        func holeRoom(_ hole: LocalHole, moving: Int, angle: Int) -> [IntPath] {
+            let b = bounds[moving][angle]
+            // Quick rejections: a part bigger than the hole either way, or with more area.
+            let hb = hole.loop.bounds
+            guard b.width < hb.width, b.height < hb.height, areaOf(moving) < hole.loop.area else { return [] }
+            let gap = Nesting.holeGap(settings, reach[moving], Hole(outline: hole.loop, reach: hole.reach)) + Nesting.arcTolerance
+            let room = Engine.conservativeHole(hole.loop, inset: gap)
+            guard !room.isEmpty else { return [] }
+            // The part's (conservative) outline at this turn, and its box: the pivot has to keep the box in the room's.
+            let partLoops = loops[moving][angle]
+            let pb = partLoops.flatMap { $0 }.reduce(Rect2.empty) { $0.union($1) }
+            let rb = room.bounds
+            let lo = rb.min - pb.min, hi = rb.max - pb.max
+            guard hi.x > lo.x, hi.y > lo.y else { return [] }
+            // A frame big enough that a part with its pivot in [lo, hi] and not wholly in the room crosses it.
+            let pad = pb.size + Vec2(1, 1)
+            let outer = Rect2(min: rb.min - pad, max: rb.max + pad)
+            let frame = [Engine.rectangle(outer)] + room.map { $0.oriented(counterClockwise: false) }
+            guard let framePieces = Clipper.convexPieces(frame), !framePieces.isEmpty else { return [] }
+            let reflected = partLoops.map { $0.map { -$0 } }
+            let reach = Clipper.minkowskiSum(loops: reflected, convexPieces: framePieces)
+            let free = Clipper.difference([Engine.rectangle(Rect2(min: lo, max: hi))], minus: reach)
+                .filter { $0.signedArea > 1e-9 }
+            return free.map(Clipper.toInt)
+        }
+
+        /// The (material) area of a geometry: that of the first part using it.
+        func areaOf(_ key: Int) -> Double { areas[keys.firstIndex(of: key) ?? 0] }
+
+        static func rectangle(_ r: Rect2) -> Polyline {
+            Polyline([r.min, Vec2(r.max.x, r.min.y), r.max, Vec2(r.min.x, r.max.y)], closed: true)
         }
 
         func obstacleNFP(_ o: Int, moving: Int, angle: Int) -> [IntPath] {
@@ -468,10 +726,11 @@ extension Nesting {
             }
         }
 
-        /// Where part `i` at turn `k` may put its pivot inside the usable sheet (in Clipper units), widened by one unit
-        /// so a part exactly the sheet's size still has a place; nil when it doesn't fit.
-        func innerFit(_ i: Int, _ k: Int) -> IntPath? {
+        /// Where part `i` at turn `k` may put its pivot inside sheet `sheet`'s usable region (in Clipper units), widened
+        /// by one unit so a part exactly the sheet's size still has a place; nil when it doesn't fit.
+        func innerFit(_ i: Int, _ k: Int, sheet: Int) -> IntPath? {
             let b = bounds[keys[i]][k]
+            let usable = usables[sheet]
             let s = Clipper.scale
             let x0 = Int64(((usable.min.x - b.min.x) * s).rounded(.up)), x1 = Int64(((usable.max.x - b.max.x) * s).rounded(.down))
             let y0 = Int64(((usable.min.y - b.min.y) * s).rounded(.up)), y1 = Int64(((usable.max.y - b.max.y) * s).rounded(.down))
@@ -479,76 +738,100 @@ extension Nesting {
             return [IntPoint(x: x0 - 1, y: y0 - 1), IntPoint(x: x1 + 1, y: y0 - 1), IntPoint(x: x1 + 1, y: y1 + 1), IntPoint(x: x0 - 1, y: y1 + 1)]
         }
 
-        /// Lays parts out in `order`, each at its gene's turn (or, with `tryAllTurns`, the turn that packs best). A part
-        /// that doesn't fit at its gene's turn tries the others.
+        /// Lays parts out in `order`, each at its gene's turn (or, with `tryAllTurns`, the turn that packs best), on the
+        /// first sheet; those that don't fit go on the next sheet in the same order, and so on. A part that doesn't fit
+        /// at its gene's turn tries the others.
         func place(order: [Int], genes: [Int], tryAllTurns: Bool) -> Layout {
             var spots: [Spot] = []
-            var extent = Rect2.empty
+            var extents: [Rect2] = []
             var placedArea = 0.0
-            let s = Clipper.scale
-            for i in order {
-                let key = keys[i]
-                let first = genes[i]
-                let turns = [first] + (0..<angleCount).filter { $0 != first }
-                var best: (score: Double, tie: Double, k: Int, at: IntPoint)?
-                for k in turns {
-                    guard let fit = innerFit(i, k) else { continue }
-                    var forbidden: [IntPath] = []
-                    for spot in spots {
-                        let rel = ((k - spot.angle) % angleCount + angleCount) % angleCount
-                        let base = nfp(fixed: keys[spot.part], moving: key, angle: rel)
-                        let turn = degrees(spot.angle)
-                        for path in base {
-                            let r = Engine.rotate(path, degrees: turn)
-                            forbidden.append(r.map { IntPoint(x: $0.x + spot.position.x, y: $0.y + spot.position.y) })
-                        }
+            var remaining = order
+            for sheet in sheets.indices where !remaining.isEmpty {
+                var left: [Int] = []
+                let first = spots.count
+                var extent = Rect2.empty
+                for i in remaining {
+                    guard let spot = placeOne(i, gene: genes[i], tryAllTurns: tryAllTurns, sheet: sheet,
+                                              on: spots[first...], extent: extent) else {
+                        left.append(i)
+                        continue
                     }
-                    for o in obstaclePieces.indices { forbidden += obstacleNFP(o, moving: key, angle: k) }
-                    let free = forbidden.isEmpty ? [fit]
-                        : Clipper.booleanInt(.difference, fill: .nonZero, subjects: [fit], openSubjects: [], clips: forbidden).closed
-                    let b = bounds[key][k]
-                    for path in free {
-                        for p in path {
-                            let at = Vec2(Double(p.x) / s, Double(p.y) / s)
-                            let e = extent.union(Rect2(min: b.min + at, max: b.max + at))
-                            let (score, tie) = self.score(e, at)
-                            if best == nil || score < best!.score - 1e-9 || (abs(score - best!.score) <= 1e-9 && tie < best!.tie) {
-                                best = (score, tie, k, p)
-                            }
-                        }
-                    }
-                    if best != nil && !tryAllTurns { break }
+                    spots.append(spot)
+                    let b = bounds[keys[i]][spot.angle]
+                    let at = Vec2(Double(spot.position.x) / Clipper.scale, Double(spot.position.y) / Clipper.scale)
+                    extent = extent.union(Rect2(min: b.min + at, max: b.max + at))
+                    placedArea += areas[i]
                 }
-                guard let chosen = best else { continue }
-                spots.append(Spot(part: i, angle: chosen.k, position: chosen.at))
-                let b = bounds[key][chosen.k]
-                let at = Vec2(Double(chosen.at.x) / s, Double(chosen.at.y) / s)
-                extent = extent.union(Rect2(min: b.min + at, max: b.max + at))
-                placedArea += areas[i]
+                // A sheet after the first that takes none of what's left: the next one, the same, wouldn't either.
+                if sheet > 0 && spots.count == first { break }
+                extents.append(extent)
+                remaining = left
             }
-            return Layout(spots: spots, fitness: fitness(spots: spots, placedArea: placedArea, extent: extent),
-                          placedArea: placedArea, extent: extent)
+            return Layout(spots: spots, fitness: fitness(spots: spots, placedArea: placedArea, extents: extents),
+                          placedArea: placedArea, extents: extents)
+        }
+
+        /// Where part `i` goes on `sheet`, next to the parts already there, or nil when there's no room.
+        func placeOne(_ i: Int, gene: Int, tryAllTurns: Bool, sheet: Int, on spots: ArraySlice<Spot>, extent: Rect2) -> Spot? {
+            let key = keys[i]
+            let turns = [gene] + (0..<angleCount).filter { $0 != gene }
+            let s = Clipper.scale
+            var best: (score: Double, tie: Double, k: Int, at: IntPoint)?
+            for k in turns {
+                guard let fit = innerFit(i, k, sheet: sheet) else { continue }
+                var forbidden: [IntPath] = []
+                for spot in spots {
+                    let rel = ((k - spot.angle) % angleCount + angleCount) % angleCount
+                    let base = nfp(fixed: keys[spot.part], moving: key, angle: rel)
+                    let turn = degrees(spot.angle)
+                    for path in base {
+                        let r = Engine.rotate(path, degrees: turn)
+                        forbidden.append(r.map { IntPoint(x: $0.x + spot.position.x, y: $0.y + spot.position.y) })
+                    }
+                }
+                for o in obstaclePieces.indices where obstacleSheets[o] == nil || obstacleSheets[o] == sheet {
+                    forbidden += obstacleNFP(o, moving: key, angle: k)
+                }
+                let free = forbidden.isEmpty ? [fit]
+                    : Clipper.booleanInt(.difference, fill: .nonZero, subjects: [fit], openSubjects: [], clips: forbidden).closed
+                let b = bounds[key][k]
+                for path in free {
+                    for p in path {
+                        let at = Vec2(Double(p.x) / s, Double(p.y) / s)
+                        let e = extent.union(Rect2(min: b.min + at, max: b.max + at))
+                        let (score, tie) = self.score(e, at, sheet: sheet)
+                        if best == nil || score < best!.score - 1e-9 || (abs(score - best!.score) <= 1e-9 && tie < best!.tie) {
+                            best = (score, tie, k, p)
+                        }
+                    }
+                }
+                if best != nil && !tryAllTurns { break }
+            }
+            return best.map { Spot(part: i, angle: $0.k, position: $0.at, sheet: sheet) }
         }
 
         /// How far along the sheet a layout reaches (weighted double) and how far across: lower packs tighter toward the
         /// start edge. The tie-break prefers the lower-left place.
-        func score(_ extent: Rect2, _ at: Vec2) -> (Double, Double) {
+        func score(_ extent: Rect2, _ at: Vec2, sheet: Int) -> (Double, Double) {
+            let usable = usables[sheet], alongX = alongXs[sheet]
             let along = alongX ? extent.max.x - usable.min.x : extent.max.y - usable.min.y
             let across = alongX ? extent.max.y - usable.min.y : extent.max.x - usable.min.x
             let tie = alongX ? at.x * 1e6 + at.y : at.y * 1e6 + at.x
             return (2 * along + across, tie)
         }
 
-        func fitness(spots: [Spot], placedArea: Double, extent: Rect2) -> Double {
+        func fitness(spots: [Spot], placedArea: Double, extents: [Rect2]) -> Double {
             let unplaced = parts.count - spots.count
             let missing = totalArea > 0 ? (totalArea - placedArea) / totalArea : 0
+            guard let last = extents.lastIndex(where: { !$0.isEmpty }) else { return 3 * Double(unplaced) + 1000 * missing + 3 }
+            let extent = extents[last], usable = usables[last], alongX = alongXs[last]
             let lengthAlong = max(alongX ? usable.width : usable.height, 1e-9)
             let lengthAcross = max(alongX ? usable.height : usable.width, 1e-9)
-            guard !extent.isEmpty else { return 3 * Double(unplaced) + 1000 * missing + 3 }
             let along = (alongX ? extent.max.x - usable.min.x : extent.max.y - usable.min.y) / lengthAlong
             let across = (alongX ? extent.max.y - usable.min.y : extent.max.x - usable.min.x) / lengthAcross
-            // An unplaced part costs more than any difference in length (each term ≤ 1), so more parts always win.
-            return 3 * Double(unplaced) + 1000 * missing + 2 * along + across
+            // An unplaced part costs more than any difference in length (each term ≤ 1), so more parts always win; then
+            // each sheet more than the whole length of the last one.
+            return 3 * Double(unplaced) + 1000 * missing + 4 * Double(last) + 2 * along + across
         }
 
         func result(_ layout: Layout, evaluations: Int, elapsed: Double) -> Result {
@@ -556,17 +839,32 @@ extension Nesting {
             let s = Clipper.scale
             for spot in layout.spots {
                 placements[spot.part] = Placement(pivot: pivots[spot.part], rotation: degrees(spot.angle),
-                                                  position: Vec2(Double(spot.position.x) / s, Double(spot.position.y) / s))
+                                                  position: Vec2(Double(spot.position.x) / s, Double(spot.position.y) / s),
+                                                  sheet: spot.sheet)
             }
-            let sheetLength = alongX ? sheet.width : sheet.height
-            let across = alongX ? sheet.height : sheet.width
-            let used = layout.extent.isEmpty ? 0 : (alongX ? layout.extent.max.x - sheet.min.x : layout.extent.max.y - sheet.min.y)
-            let sheetArea = max(sheet.width * sheet.height, 1e-9)
-            return Result(placements: placements, usable: usable, alongX: alongX, totalArea: totalArea,
-                          placedArea: layout.placedArea, usedLength: used, sheetLength: sheetLength,
-                          utilization: used > 0 ? min(1, layout.placedArea / (used * across)) : 0,
-                          sheetUtilization: layout.placedArea / sheetArea, evaluations: evaluations,
-                          elapsed: elapsed, fitness: layout.fitness)
+            // Every sheet up to the last with parts on it (the first even when it has none).
+            let used = max(1, (layout.extents.lastIndex(where: { !$0.isEmpty }) ?? 0) + 1)
+            let uses: [SheetUse] = (0..<used).map { k in
+                let sheet = sheets[k], alongX = alongXs[k]
+                let extent = k < layout.extents.count ? layout.extents[k] : .empty
+                let on = layout.spots.filter { $0.sheet == k }
+                let area = on.reduce(0) { $0 + areas[$1.part] }
+                let length = alongX ? sheet.width : sheet.height
+                let across = alongX ? sheet.height : sheet.width
+                let reach = extent.isEmpty ? 0 : (alongX ? extent.max.x - sheet.min.x : extent.max.y - sheet.min.y)
+                return SheetUse(sheet: sheet, usable: usables[k], alongX: alongX, partCount: on.count, placedArea: area,
+                                usedLength: reach, sheetLength: length,
+                                utilization: reach > 0 ? min(1, area / (reach * across)) : 0,
+                                sheetUtilization: area / max(sheet.width * sheet.height, 1e-9))
+            }
+            let last = uses[uses.count - 1]
+            let totalSheet = uses.reduce(0) { $0 + $1.sheet.width * $1.sheet.height }
+            return Result(placements: placements, sheets: uses,
+                          insideOf: settings.partInPart ? Nesting.insideOf(parts, placements: placements) : [Int?](repeating: nil, count: parts.count),
+                          usable: last.usable, alongX: last.alongX, totalArea: totalArea,
+                          placedArea: layout.placedArea, usedLength: last.usedLength, sheetLength: last.sheetLength,
+                          utilization: last.utilization, sheetUtilization: layout.placedArea / max(totalSheet, 1e-9),
+                          evaluations: evaluations, elapsed: elapsed, fitness: layout.fitness)
         }
 
         // MARK: Search

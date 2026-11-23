@@ -75,6 +75,9 @@ public struct DesignShape: Identifiable, Hashable, Codable, Sendable {
     /// When set, this shape marks a clamp or fixture (height above the material top, mm): nothing may cut inside it
     /// and links crossing it go over the top. Keep-out shapes are never machined.
     public var keepOutHeight: Double?
+    /// On a job nested onto several sheets, the sheet the shape is on (from 0; see `Project.additionalSheets`); nil =
+    /// the first. Keep-outs are on every sheet.
+    public var sheet: Int?
 
     public var isKeepOut: Bool { keepOutHeight != nil }
 
