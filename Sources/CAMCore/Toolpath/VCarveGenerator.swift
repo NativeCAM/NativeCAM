@@ -297,8 +297,8 @@ enum VCarveGenerator {
     }
 
     /// The area a plug carves with its own settings (see the other `plugRegions`): with a whole-board boundary, the
-    /// board (`VCarveInlay.board(around:stock:)`) grown by `edge` with rounded corners, so the carving's floor (`edge`
-    /// in from its outline) reaches the board's edges. Also returns the design's mirrored bounds, the board, and
+    /// board (`VCarveInlay.board(around:stock:)`) grown by `edge`, so the carving's floor (`edge` in from its outline)
+    /// reaches the board's edges and corners. Also returns the design's mirrored bounds, the board, and
     /// whether a selected-vector boundary was found.
     static func plugRegions(_ inlay: VCarveInlay, shapes: [DesignShape], stock: Stock, edge: Double, tolerance: Double,
                             arcTolerance: Double) -> (regions: [Region], design: Rect2, board: Rect2?, boundaryFound: Bool) {
@@ -310,8 +310,9 @@ enum VCarveGenerator {
         if inlay.boundary == .board {
             let rect = inlay.board(around: bounds.center, stock: stock)
             board = rect
-            let loop = Polyline([rect.min, Vec2(rect.max.x, rect.min.y), rect.max, Vec2(rect.min.x, rect.max.y)], closed: true)
-            outline = edge > 1e-9 ? Clipper.offset([loop], delta: edge, arcTolerance: arcTolerance).max { $0.area < $1.area } : loop
+            // Grown with square corners: the carve then rises once into each corner, not at every step of a rounded one.
+            let g = rect.insetBy(-max(0, edge))
+            outline = Polyline([g.min, Vec2(g.max.x, g.min.y), g.max, Vec2(g.min.x, g.max.y)], closed: true)
         }
         let regions = plugRegions(layout, margin: inlay.boundaryMargin, arcTolerance: arcTolerance, board: outline)
         // Mirroring about the middle keeps the design's bounds where they are.
