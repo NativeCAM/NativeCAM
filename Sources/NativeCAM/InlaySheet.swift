@@ -20,7 +20,7 @@ struct InlaySheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var settings: InlayPairSettings
 
-    init(project: Project, selection: [UUID], tools: [Tool], settings: InlayPairSettings? = nil, height: CGFloat = 660,
+    init(project: Project, selection: [UUID], tools: [Tool], settings: InlayPairSettings? = nil, height: CGFloat = 760,
          onAdd: @escaping (InlayPairSettings) -> Void) {
         self.project = project
         self.selection = selection
