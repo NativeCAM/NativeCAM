@@ -1306,7 +1306,7 @@ struct ToolSection: View {
             PercentField(title: tool.shape == .taperedBallNose ? "Stepover (of tip)" : "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
                 ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad,
-                            loopFeedLimit: loopFeedLimit, chartDiameter: ChipLoad.chartDiameter(tool, depth: kind?.requestedDepth))
+                            loopFeedLimit: loopFeedLimit, depth: kind?.requestedDepth)
             }
         }
     }
@@ -1322,12 +1322,17 @@ struct ChipLoadRow: View {
     var radialLoad: Double? = nil
     /// An adaptive pocket's loop feed limit (mm/min): the recommended feed keeps to it, slowing the spindle instead.
     var loopFeedLimit: Double? = nil
-    /// The diameter to read the chart at (`ChipLoad.chartDiameter`); nil is the tool's.
-    var chartDiameter: Double? = nil
+    /// The toolpath's depth, which sets the chart's diameter for a bit whose width changes with depth and a form bit's
+    /// cross-section (`ChipLoad.reading`); nil reads the bit at its full diameter.
+    var depth: Double? = nil
 
     var body: some View {
-        let r = ChipLoad.range(material, diameter: chartDiameter ?? tool.diameter)
         let thin = radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
+        let rec = ChipLoad.recommendation(for: tool, material: material, machine: machine, thinning: thin, feedLimit: loopFeedLimit,
+                                          depth: depth)
+        let reading = rec.reading
+        let r = reading.range
+        let source = reading.source(units)
         let chip = tool.chipLoad * thin
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         let status: (String, Color) = chip < floor ? ("exclamationmark.triangle.fill", .orange)
@@ -1339,14 +1344,27 @@ struct ChipLoadRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Chip load")
                 Text("\(material.label): \(inch(r.lowerBound))–\(inch(r.upperBound)) in").font(.caption).foregroundStyle(.secondary)
+                Text(source.prefix(1).uppercased() + source.dropFirst()).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let radialLoad, thin < 1 {
                     Text("Thinned to \(Int((100 * thin).rounded()))% at the \(Int((100 * radialLoad).rounded()))% adaptive load")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine, thinning: thin, feedLimit: loopFeedLimit,
-                                     diameter: chartDiameter)
+        ForEach(reading.notes(units), id: \.self) { note in
+            Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        if let top = reading.maxRPM, tool.cutting.spindleRPM > top + 0.5 {
+            Label("The spindle is set faster than \(Int(top.rounded()).formatted()) RPM, the most for this bit: a bit turned past its rated speed can break.",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
+        if rec.belowSpindleMinimum {
+            Label("This spindle can't turn as slowly as this bit needs (\(Int(machine.minRPM.rounded()).formatted()) RPM at its slowest).",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
         let held = loopFeedLimit.map { rec.feed >= $0 - 1e-6 && $0 < machine.maxFeedRate } ?? false
         if held {
             Text("Held to the fastest its loops can run with this machine's acceleration, with the spindle slowed to keep the chip in range.")
@@ -1359,7 +1377,9 @@ struct ChipLoadRow: View {
                 tool.cutting.spindleRPM = rec.rpm
             }
             .controlSize(.small)
-            .help("Chip load a quarter into the chart range, feed held within the machine's cutting cap by lowering RPM")
+            .help(reading.chart == .routerBit || reading.outsideChart
+                  ? "Chip load at the thin end of the chart range, the spindle no faster than the bit's speed limit, feed held within the machine's cutting cap by lowering RPM"
+                  : "Chip load a quarter into the chart range, feed held within the machine's cutting cap by lowering RPM")
         }
     }
 }

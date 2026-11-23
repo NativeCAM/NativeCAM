@@ -1,0 +1,114 @@
+{
+  "tools" : [
+    {
+      "cornerRadius" : 0,
+      "cutting" : {
+        "feedRate" : 2540,
+        "plungeRate" : 762,
+        "spindleRPM" : 18000,
+        "stepdown" : 6.35,
+        "stepoverFraction" : 0.4
+      },
+      "diameter" : 25.4,
+      "fluteCount" : 2,
+      "fluteDirection" : "straight",
+      "fluteLength" : 9.524999999999999,
+      "form" : {
+        "kind" : "roundover",
+        "pilotDiameter" : 12.7,
+        "points" : [
+
+        ],
+        "radius" : 6.35,
+        "upperRadius" : 3.175
+      },
+      "id" : "B1750000-0000-4000-8000-000000001070",
+      "includedAngle" : 90,
+      "name" : "1\" Roundover",
+      "notes" : "",
+      "number" : 21,
+      "shankDiameter" : 6.35,
+      "shape" : "form",
+      "stickout" : 22.224999999999998,
+      "tipDiameter" : 0
+    },
+    {
+      "cornerRadius" : 0,
+      "cutting" : {
+        "feedRate" : 2540,
+        "plungeRate" : 762,
+        "spindleRPM" : 18000,
+        "stepdown" : 6.35,
+        "stepoverFraction" : 0.4
+      },
+      "diameter" : 12.7,
+      "fluteCount" : 2,
+      "fluteDirection" : "straight",
+      "fluteLength" : 12.7,
+      "id" : "B1750000-0000-4000-8000-000000001071",
+      "includedAngle" : 28,
+      "name" : "1\/2\" Dovetail",
+      "notes" : "",
+      "number" : 22,
+      "shankDiameter" : 6.35,
+      "shape" : "dovetail",
+      "stickout" : 25.4,
+      "tipDiameter" : 0
+    },
+    {
+      "cornerRadius" : 0,
+      "cutting" : {
+        "feedRate" : 2540,
+        "plungeRate" : 762,
+        "spindleRPM" : 24000,
+        "stepdown" : 6.35,
+        "stepoverFraction" : 0.4
+      },
+      "diameter" : 38.099999999999994,
+      "fluteCount" : 2,
+      "fluteDirection" : "straight",
+      "fluteLength" : 15.875,
+      "form" : {
+        "kind" : "cove",
+        "pilotDiameter" : 12.7,
+        "points" : [
+
+        ],
+        "radius" : 12.7,
+        "upperRadius" : 3.175
+      },
+      "id" : "B1750000-0000-4000-8000-000000001072",
+      "includedAngle" : 90,
+      "name" : "1-1\/2\" Cove",
+      "notes" : "",
+      "number" : 23,
+      "shankDiameter" : 12.7,
+      "shape" : "form",
+      "stickout" : 28.575,
+      "tipDiameter" : 0
+    },
+    {
+      "cornerRadius" : 0,
+      "cutting" : {
+        "feedRate" : 2540,
+        "plungeRate" : 762,
+        "spindleRPM" : 18000,
+        "stepdown" : 6.35,
+        "stepoverFraction" : 0.4
+      },
+      "diameter" : 19.049999999999997,
+      "fluteCount" : 2,
+      "fluteDirection" : "upcut",
+      "fluteLength" : 31.75,
+      "id" : "B1750000-0000-4000-8000-000000001073",
+      "includedAngle" : 90,
+      "name" : "End mill",
+      "notes" : "",
+      "number" : 24,
+      "shankDiameter" : 19.049999999999997,
+      "shape" : "flatEndMill",
+      "stickout" : 44.45,
+      "tipDiameter" : 0
+    }
+  ]
+}
