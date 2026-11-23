@@ -25,6 +25,8 @@ final class Workspace {
     var selection: Set<SidebarItem> = [.setup]
     /// On a job nested onto several sheets, the sheet the canvas and the simulation show (from 0).
     private(set) var sheet = 0
+    /// Add Toolpath ▸ Inlay…, waiting in its sheet (any of the add-toolpath menus can ask for it).
+    var inlayRequest: InlayRequest?
     var viewPreset: ViewPreset? = .iso
     var fitRequest = 0
     var showVectors = true

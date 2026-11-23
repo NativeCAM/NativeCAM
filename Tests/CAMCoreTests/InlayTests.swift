@@ -278,7 +278,7 @@ struct InlayTests {
         let male = Fixture.simulate(tps.filter { plugIDs.contains($0.id) }, stock: project.stock, cell: 0.1)
         guard case let .vcarve(params) = plug.kind, let inlay = params.inlay else { return ([], 0) }
         let shapes = project.shapes(for: plug)
-        let band = VCarveGenerator.plugRegions(shapes: shapes, margin: inlay.boundaryMargin, tolerance: 0.01, arcTolerance: 0.005)
+        let band = VCarveGenerator.plugRegions(inlay, shapes: shapes, stock: project.stock, edge: 0, tolerance: 0.01, arcTolerance: 0.005).regions
         let design = Region.build(from: shapes.flatMap { $0.polylines(tolerance: 0.01) }, fill: .evenOdd)
         let s = inlay.plugStartDepth
         let cx = 60.0 // the design's centre, on a cell boundary so mirrored cells line up exactly

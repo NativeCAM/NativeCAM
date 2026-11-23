@@ -87,7 +87,7 @@ public struct ProtectedRegions: Sendable {
         parts = project.operations.compactMap { op in
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
             guard !shapes.isEmpty else { return nil }
-            let raw = Self.band(op, shapes: shapes, flattenTolerance: flattenTolerance, arcTolerance: arcTolerance)
+            let raw = Self.band(op, shapes: shapes, stock: stock, flattenTolerance: flattenTolerance, arcTolerance: arcTolerance)
             guard !raw.isEmpty else { return nil }
             let band = Clipper.intersection(raw, [clipLoop])
             guard !band.isEmpty else { return nil }
@@ -131,7 +131,7 @@ public struct ProtectedRegions: Sendable {
     // MARK: Bands
 
     /// The band of finished material along an operation's walls, before clipping to the material.
-    static func band(_ op: CAMOperation, shapes: [DesignShape], flattenTolerance: Double, arcTolerance tol: Double) -> [Polyline] {
+    static func band(_ op: CAMOperation, shapes: [DesignShape], stock: Stock, flattenTolerance: Double, arcTolerance tol: Double) -> [Polyline] {
         let w = bandWidth
         func closedRegions() -> [Region] {
             Region.build(from: shapes.flatMap { $0.polylines(tolerance: flattenTolerance) }.filter { $0.isClosed && $0.count >= 3 },
@@ -169,8 +169,9 @@ public struct ProtectedRegions: Sendable {
         case let .vcarve(p):
             let regions: [Region]
             if let inlay = p.inlay, inlay.role == .plug {
-                let layout = VCarveGenerator.plugLayout(shapes: shapes, tolerance: flattenTolerance, useVector: inlay.boundary == .vector)
-                regions = VCarveGenerator.plugRegions(layout, margin: inlay.boundaryMargin, arcTolerance: tol)
+                // A whole board's edge is the material's: the band past it is clipped away.
+                regions = VCarveGenerator.plugRegions(inlay, shapes: shapes, stock: stock, edge: 0, tolerance: flattenTolerance,
+                                                      arcTolerance: tol).regions
             } else {
                 regions = closedRegions()
             }

@@ -9,7 +9,9 @@ struct InspectorView: View {
     var body: some View {
         Group {
             if let id = workspace.selectedOperationID, let index = project.operations.firstIndex(where: { $0.id == id }) {
-                OperationInspector(op: $project.operations[index], project: project, workspace: workspace)
+                OperationInspector(op: $project.operations[index], project: project, workspace: workspace) { other in
+                    if let i = project.operations.firstIndex(where: { $0.id == other.id }) { project.operations[i] = other }
+                }
             } else if workspace.selectedShapeIDs.count == 1, let index = project.shapes.firstIndex(where: { $0.id == workspace.selectedShapeIDs[0] }) {
                 let id = project.shapes[index].id
                 ShapeInspector(shape: $project.shapes[index], units: project.displayUnits, stock: project.stock,

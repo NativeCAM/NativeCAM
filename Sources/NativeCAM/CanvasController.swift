@@ -324,6 +324,12 @@ final class CanvasController: ViewportInteractionDelegate {
                    ("Fluting", .fluting), ("Prism", .prism)]
             for (title, kind) in kinds {
                 sub.addItem(ClosureMenuItem(title) { [weak self] in self?.addOperation(kind) })
+                if kind == .vcarve {
+                    sub.addItem(ClosureMenuItem("Inlay…") { [weak self] in
+                        guard let self else { return }
+                        self.workspace.inlayRequest = InlayRequest(selection: self.workspace.selectedShapeIDs)
+                    })
+                }
             }
             toolpaths.submenu = sub
             menu.addItem(toolpaths)

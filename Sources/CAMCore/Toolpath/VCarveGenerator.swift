@@ -15,9 +15,9 @@ import Foundation
 enum VCarveGenerator {
     /// Tallest ridge the V-bit may leave between its passes when it clears a flat bottom itself, mm. In the middle of
     /// a flat, past its last ring, a ridge can be up to twice this (plus tipRadius / tan(halfAngle)).
-    static let flatClearingRidge = 0.1
+    static let flatClearingRidge = VCarveParams.flatClearingRidge
     /// The same for an inlay pocket, whose floor has to stay below the plug's face (the glue gap).
-    static let inlayPocketRidge = 0.05
+    static let inlayPocketRidge = VCarveParams.inlayPocketRidge
 
     static func generate(op: CAMOperation, params: VCarveParams, clearanceTool: Tool?, shapes: [DesignShape],
                          context: GenerationContext) -> [Toolpath] {
@@ -26,22 +26,6 @@ enum VCarveGenerator {
         if !tool.shape.isTapered {
             warnings.append("V-carving needs a V-bit or engraving bit; '\(tool.name)' is a \(tool.shape.label).")
         }
-        let regions: [Region]
-        if let inlay = params.inlay, inlay.role == .plug {
-            let useVector = inlay.boundary == .vector
-            let layout = plugLayout(shapes: shapes, tolerance: context.flattenTolerance, useVector: useVector)
-            if useVector && layout.boundary == nil {
-                warnings.append("None of the selected vectors goes round the rest, so the plug is carved to the boundary margin "
-                    + "instead. Select a closed vector round the design with it.")
-            }
-            regions = plugRegions(layout, margin: inlay.boundaryMargin, arcTolerance: context.arcTolerance)
-            if regions.isEmpty { warnings.append("A plug needs a closed design; none was selected.") }
-        } else {
-            let loops = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }.filter { $0.isClosed }
-            regions = Region.build(from: loops, fill: .evenOdd)
-            if regions.isEmpty { warnings.append("V-carving needs closed shapes; none were selected.") }
-        }
-
         let t = tool.shape.isTapered ? tool.halfAngleTangent : 1
         let tip = tool.shape.isTapered ? tool.tipDiameter / 2 : 0
         let maxDepthByTool = tool.shape.isTapered ? min(tool.taperHeight, tool.fluteLength) : tool.fluteLength
@@ -57,6 +41,30 @@ enum VCarveGenerator {
         let depthCap = min(flatDepth ?? .infinity, reach)
         let rCap = tip + depthCap * t
         let spacing = max(0.05, params.sampleSpacing)
+
+        let regions: [Region]
+        if let inlay = params.inlay, inlay.role == .plug {
+            // A whole-board plug's carving reaches rCap past the board, so its floor runs right out to the edges.
+            let plug = plugRegions(inlay, shapes: shapes, stock: context.stock, edge: rCap.isFinite ? rCap : 0,
+                                   tolerance: context.flattenTolerance, arcTolerance: context.arcTolerance)
+            regions = plug.regions
+            if inlay.boundary == .vector && !plug.boundaryFound {
+                warnings.append("None of the selected vectors goes round the rest, so the plug is carved to the boundary margin "
+                    + "instead. Select a closed vector round the design with it.")
+            }
+            if let board = plug.board?.insetBy(-1e-6), !plug.design.isEmpty,
+               !(board.contains(plug.design.min) && board.contains(plug.design.max)) {
+                let u = context.units
+                let size = plug.board ?? board
+                warnings.append("The design runs off the plug board (\(u.format(size.width)) × \(u.format(size.height)) \(u.symbol)), "
+                    + "so the plug isn't whole. Use a larger board, or move the design onto it.")
+            }
+            if regions.isEmpty { warnings.append("A plug needs a closed design; none was selected.") }
+        } else {
+            let loops = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }.filter { $0.isClosed }
+            regions = Region.build(from: loops, fill: .evenOdd)
+            if regions.isEmpty { warnings.append("V-carving needs closed shapes; none were selected.") }
+        }
 
         // Pass levels for deep carves (depth limit per pass below the material top, counted down from the start
         // depth; the last pass is unlimited).
@@ -108,16 +116,22 @@ enum VCarveGenerator {
             let rest = clearanceTool.map { params.inlay == nil ? [] : unreached(flatRegions, by: $0, arcTolerance: context.arcTolerance) }
                 ?? flatRegions
             if !rest.isEmpty {
-                // A plug's floor only has to stay clear of the pocket board, so its ridges may reach a third of the
-                // surface clearance (two thirds in the middle of a flat); an inlay pocket's must stay under the plug.
-                let ridge: Double
-                switch params.inlay?.role {
-                case .plug: ridge = max(flatClearingRidge, flat / 3)
-                case .pocket: ridge = inlayPocketRidge
-                case nil: ridge = flatClearingRidge
+                // Raster lines only where the V-bit clears the whole flat; the corners a clearance tool leaves are slivers.
+                if clearanceTool == nil, let raster = params.flatRaster {
+                    let stepover = params.vBitRasterStepover(tool)
+                    let ridge = VCarveParams.vBitRidge(tool, spacing: stepover), limit = params.vBitRasterRidge
+                    if ridge > limit + 1e-6 {
+                        let u = context.units
+                        warnings.append("The raster's stepover of \(u.format(stepover)) \(u.symbol) leaves ridges up to "
+                            + "\(u.format(ridge)) \(u.symbol) tall between its lines, above the \(u.format(limit)) \(u.symbol) the "
+                            + "automatic stepover (\(u.format(params.vBitRasterSpacing(tool))) \(u.symbol)) keeps to.")
+                    }
+                    clearFlatRaster(rest, tool: tool, start: start, flat: flat, passDepth: params.passDepth, stepover: stepover,
+                                    angle: raster.angle, context: context, builder: &b)
+                } else {
+                    clearFlat(rest, tool: tool, start: start, flat: flat, passDepth: params.passDepth,
+                              spacing: params.vBitClearingSpacing(tool), context: context, builder: &b)
                 }
-                clearFlat(rest, tool: tool, start: start, flat: flat, passDepth: params.passDepth, ridge: ridge,
-                          context: context, builder: &b)
             }
         }
         let simplifyTol = min(0.01, context.arcTolerance * 2)
@@ -135,11 +149,11 @@ enum VCarveGenerator {
     }
 
     /// Clears `regions` (beyond the carve's flat-depth line) at the flat depth with the V-bit itself: offset rings
-    /// spaced so the cones of neighbouring rings, and of the carve's own path along the edge, leave ridges no taller
-    /// than `ridge`. The first ring is half a spacing in, so even a sliver of flat gets one.
-    static func clearFlat(_ regions: [Region], tool: Tool, start: Double, flat: Double, passDepth: Double?, ridge: Double,
+    /// `spacing` apart, close enough at `VCarveParams.vBitClearingSpacing` that the cones of neighbouring rings, and of
+    /// the carve's own path along the edge, leave ridges no taller than the limit. The first ring is half a spacing in,
+    /// so even a sliver of flat gets one.
+    static func clearFlat(_ regions: [Region], tool: Tool, start: Double, flat: Double, passDepth: Double?, spacing: Double,
                           context: GenerationContext, builder b: inout ToolpathBuilder) {
-        let spacing = max(0.02, tool.tipDiameter + 2 * ridge * tool.halfAngleTangent)
         // PocketGenerator sees a "tool" whose radius is the ring spacing and keeps its centre that far in, less the
         // negative allowance; the real bit's feeds come from the builder.
         var footprint = tool
@@ -150,6 +164,92 @@ enum VCarveGenerator {
         // Its warnings don't apply: a flat too narrow for a ring is already covered by the carve's own path.
         _ = PocketGenerator.generate(regions: regions, tool: footprint, params: pp, context: context, builder: &b)
         b.retract()
+    }
+
+    /// Clears `regions` as `clearFlat` does, in raster lines `stepover` apart at `angle` (degrees), then a pass round
+    /// each flat's edge. Like the first ring, the edge pass (and the ends of the lines) is half a stepover in, so the
+    /// cones never reach the V walls. Each flat is cleared on its own, all its depths, nearest first; its lines go in
+    /// zig-zag runs up (or down) the flat, linked at depth inside it, so a design's separate flats, or the two sides of an
+    /// island, don't each cost a retract on every line.
+    static func clearFlatRaster(_ regions: [Region], tool: Tool, start: Double, flat: Double, passDepth: Double?, stepover: Double,
+                                angle: Double, context: GenerationContext, builder b: inout ToolpathBuilder) {
+        let s = max(0.02, stepover)
+        let depth = DepthSettings(startDepth: start, cutDepth: start + flat, passDepth: passDepth ?? flat)
+        let levels = depth.passLevels(toolStepdown: passDepth ?? flat, firstPassMinimum: tool.firstPassMinimum)
+        let pp = PocketParams(strategy: .raster, direction: .climb, depth: depth, rasterAngle: angle)
+        // Where the bit's centre goes: half a stepover in from the flat's edge (a flat too narrow for that is already
+        // covered by the carve's own path).
+        var areas = regions.flatMap { $0.offset(by: -s / 2, arcTolerance: context.arcTolerance) }
+        while !areas.isEmpty {
+            let here = b.position.xy
+            let i = areas.indices.min { areas[$0].outer.closestPoint(to: here).distance < areas[$1].outer.closestPoint(to: here).distance }!
+            let area = areas.remove(at: i)
+            let safe = area.offset(by: 0.01, arcTolerance: context.arcTolerance)
+            let lines = PocketGenerator.rasterLines([area], stepover: s, angle: angle)
+            var zAbove = -start
+            for z in levels {
+                var first = true
+                rasterRuns(lines, z: z, safe: safe, first: &first, builder: &b)
+                for loop in area.loops {
+                    PocketGenerator.cutLoop(loop, z: z, zAbove: zAbove, params: pp, stepover: s, safe: safe, first: &first, builder: &b)
+                }
+                zAbove = z
+            }
+        }
+        b.retract()
+    }
+
+    /// Cuts raster `lines` at `z` in runs: from the nearest unused end, each line, then a link at depth to the nearest
+    /// end of an unused line in the next row (the row before, once the run has turned) wherever the link stays inside
+    /// `safe`. A run ends where there's none; the next starts from the nearest unused end.
+    static func rasterRuns(_ lines: [PocketGenerator.RasterLine], z: Double, safe: [Region], first: inout Bool,
+                           builder b: inout ToolpathBuilder) {
+        var byRow: [Int: [Int]] = [:]
+        for (i, l) in lines.enumerated() { byRow[l.row, default: []].append(i) }
+        var used = [Bool](repeating: false, count: lines.count)
+        var left = lines.count
+        func ends(_ i: Int) -> [(p: Vec2, reversed: Bool)] { [(lines[i].a, false), (lines[i].b, true)] }
+        while left > 0 {
+            // The nearest unused end starts a run.
+            var best: (i: Int, reversed: Bool, d: Double)?
+            for i in lines.indices where !used[i] {
+                for e in ends(i) {
+                    let d = e.p.distanceSquared(to: b.position.xy)
+                    if best == nil || d < best!.d { best = (i, e.reversed, d) }
+                }
+            }
+            guard var (i, reversed, _) = best else { break }
+            var direction = 1
+            var linked = false
+            while true {
+                let (s0, e0) = reversed ? (lines[i].b, lines[i].a) : (lines[i].a, lines[i].b)
+                if linked {
+                    b.feed(Vec3(s0, z))
+                } else if !first, abs(b.position.z - z) < 1e-6, PocketGenerator.segmentInside(b.position.xy, s0, safe) {
+                    b.feed(Vec3(s0, z))
+                } else {
+                    b.enter(at: Vec3(s0, z))
+                }
+                b.feed(Vec3(e0, z))
+                first = false
+                used[i] = true
+                left -= 1
+                // The next line: in the next row up the run, or once there's none, back the other way.
+                var next: (i: Int, reversed: Bool, d: Double)?
+                for dir in [direction, -direction] {
+                    for j in byRow[lines[i].row + dir] ?? [] where !used[j] {
+                        for e in ends(j) {
+                            let d = e.p.distanceSquared(to: e0)
+                            if next.map({ d < $0.d }) ?? true, PocketGenerator.segmentInside(e0, e.p, safe) { next = (j, e.reversed, d) }
+                        }
+                    }
+                    if next != nil { direction = dir; break }
+                }
+                guard let n = next else { break }
+                (i, reversed) = (n.i, n.reversed)
+                linked = true
+            }
+        }
     }
 
     /// The parts of `regions` a flat end mill can't reach: the corners it rounds off and places narrower than it.
@@ -196,13 +296,41 @@ enum VCarveGenerator {
         plugRegions(plugLayout(shapes: shapes, tolerance: tolerance, useVector: useVector), margin: margin, arcTolerance: arcTolerance)
     }
 
-    static func plugRegions(_ layout: (design: [Polyline], boundary: Polyline?), margin: Double, arcTolerance: Double) -> [Region] {
+    /// The area a plug carves with its own settings (see the other `plugRegions`): with a whole-board boundary, the
+    /// board (`VCarveInlay.board(around:stock:)`) grown by `edge`, so the carving's floor (`edge` in from its outline)
+    /// reaches the board's edges and corners. Also returns the design's mirrored bounds, the board, and
+    /// whether a selected-vector boundary was found.
+    static func plugRegions(_ inlay: VCarveInlay, shapes: [DesignShape], stock: Stock, edge: Double, tolerance: Double,
+                            arcTolerance: Double) -> (regions: [Region], design: Rect2, board: Rect2?, boundaryFound: Bool) {
+        let layout = plugLayout(shapes: shapes, tolerance: tolerance, useVector: inlay.boundary == .vector)
+        guard !layout.design.isEmpty else { return ([], .empty, nil, layout.boundary != nil) }
+        let bounds = layout.design.bounds
+        var board: Rect2?
+        var outline: Polyline?
+        if inlay.boundary == .board {
+            let rect = inlay.board(around: bounds.center, stock: stock)
+            board = rect
+            // Grown with square corners: the carve then rises once into each corner, not at every step of a rounded one.
+            let g = rect.insetBy(-max(0, edge))
+            outline = Polyline([g.min, Vec2(g.max.x, g.min.y), g.max, Vec2(g.min.x, g.max.y)], closed: true)
+        }
+        let regions = plugRegions(layout, margin: inlay.boundaryMargin, arcTolerance: arcTolerance, board: outline)
+        // Mirroring about the middle keeps the design's bounds where they are.
+        return (regions, bounds, board, layout.boundary != nil)
+    }
+
+    /// `board`: a boundary in place of the selected vector or the margin, already where the plug is cut (the whole
+    /// board isn't mirrored: it's the board).
+    static func plugRegions(_ layout: (design: [Polyline], boundary: Polyline?), margin: Double, arcTolerance: Double,
+                            board: Polyline? = nil) -> [Region] {
         guard !layout.design.isEmpty else { return [] }
         let center = layout.design.bounds.center
         let mirror = Transform2D.translation(-center).then(.scale(-1, 1)).then(.translation(center))
         let design = layout.design.map { $0.transformed(mirror) }
         let boundary: [Polyline]
-        if let outline = layout.boundary {
+        if let board {
+            boundary = [board]
+        } else if let outline = layout.boundary {
             boundary = [outline.transformed(mirror)]
         } else {
             let outers = Region.build(from: design, fill: .evenOdd).map(\.outer)
