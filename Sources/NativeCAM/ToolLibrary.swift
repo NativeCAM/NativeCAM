@@ -274,6 +274,30 @@ struct ToolLibraryView: View {
     }
 }
 
+/// A form or dovetail bit's speed limit for its diameter (`ChipLoad.routerSpeedLimit`), warning when the spindle is set
+/// faster. Its feeds come from the router-bit chart: the toolpath's Use Recommended reads it for the job's material.
+struct RouterBitSpeedNote: View {
+    let tool: Tool
+    let units: LengthUnit
+
+    var body: some View {
+        let reading = ChipLoad.reading(tool, material: .hardwood, depth: nil)
+        let top = reading.maxRPM ?? ChipLoad.routerSpeedLimit(diameter: tool.diameter)
+        let size = ChipLoad.size(reading.fullDiameter, units)
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Router-bit chart: at most \(Int(top.rounded()).formatted()) RPM for a bit \(size) across"
+                + (reading.outsideChart ? ", wider than every chart." : ". The bit's own rating, on its shank or packaging, comes first."))
+                .font(.caption).foregroundStyle(.secondary)
+            if tool.cutting.spindleRPM > top + 0.5 {
+                Label("The spindle is set faster than that: a bit turned past its rated speed can break.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Full geometry + cutting data editor with a live drawing of the tool.
 struct ToolEditor: View {
     @Binding var tool: Tool
@@ -315,6 +339,9 @@ struct ToolEditor: View {
                     LabeledContent("Chip load", value: "\(units.format(tool.chipLoad, decimals: 4)) \(units.symbol)/tooth")
                     LengthField(title: "Set feed from chip load", mm: Binding(get: { tool.chipLoad }, set: { tool.cutting.feedRate = tool.feedRate(forChipLoad: $0) }),
                                 units: units, help: "Type a chip load to compute the feed")
+                    if tool.shape.cutsEdgesOnly {
+                        RouterBitSpeedNote(tool: tool, units: units)
+                    }
                 }
                 Section("Notes") {
                     TextField("Notes", text: $tool.notes, axis: .vertical).lineLimit(3...6)
@@ -679,7 +706,7 @@ struct ImportToolsSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Import Tools").font(.title3.weight(.semibold))
                 Text("“\(pending.fileName)” · \(pending.result.format.rawValue)" + (sharedRoot.map { " · \($0)" } ?? "")
-                     + " · \(pending.result.tools.count) tools")
+                     + " · \(pending.result.tools.count) \(pending.result.tools.count == 1 ? "tool" : "tools")")
                     .foregroundStyle(.secondary)
                 if anyEstimated {
                     Label("Marked tools have values the library doesn't give (hover to see which); NativeCAM filled them "
@@ -740,7 +767,7 @@ struct ImportToolsSheet: View {
                     }
                     .frame(maxHeight: 120)
                 } label: {
-                    Text("\(pending.result.skipped.count) tools can't be imported (\(skippedSummary))")
+                    Text("\(pending.result.skipped.count) \(pending.result.skipped.count == 1 ? "tool" : "tools") can't be imported (\(skippedSummary))")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 20)

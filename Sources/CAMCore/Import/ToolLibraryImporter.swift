@@ -462,10 +462,11 @@ public enum ToolLibraryImporter {
         if c.feedRate <= 0 {
             tool.cutting = c
             if ChipLoad.applies(to: tool) {
-                let rec = ChipLoad.recommend(for: tool, material: .plywood, machine: MachineProfile())
+                let rec = ChipLoad.recommendation(for: tool, material: .plywood, machine: MachineProfile())
                 c.spindleRPM = rec.rpm
                 c.feedRate = rec.feed
-                estimated.append("feed rate and spindle speed (plywood chip-load chart)")
+                let chart = rec.reading.chart == .routerBit ? "router-bit chart" : "chip-load chart"
+                estimated.append("feed rate and spindle speed (plywood \(chart))")
             } else {
                 c.feedRate = tool.shape == .drill ? 30.inch : 100.inch
                 estimated.append("feed rate")
