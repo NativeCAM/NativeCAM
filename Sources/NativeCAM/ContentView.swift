@@ -92,6 +92,14 @@ struct ContentView: View {
         .sheet(item: $nesting) { request in
             NestPartsSheet(session: request.session) { applied in finishNesting(applied) }
         }
+        .sheet(item: $workspace.inlayRequest) { request in
+            InlaySheet(project: project, selection: request.selection, tools: library.tools) { settings in
+                // One document change, so a single ⌘Z takes both sides away.
+                if let pair = document.project.addInlay(settings, shapes: request.selection) {
+                    workspace.selection = [.operation(pair.pocket.id)]
+                }
+            }
+        }
         .alert(item: $alert) { info in
             Alert(title: Text(info.title), message: Text(info.message))
         }

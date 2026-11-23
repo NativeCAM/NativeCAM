@@ -433,6 +433,16 @@ public enum CAMEngine {
                     + "flat depth of \(fmt(inlay.pocketDepth)) (the plug's pocket depth).")
                 continue
             }
+            // A raster stepover the user widened leaves taller ridges on the pocket's floor than the rings would.
+            if pocketParams.vBitClearsFlats, pocketParams.flatRaster != nil, a.shape.isTapered, inlay.glueGap > 1e-9 {
+                let stepover = pocketParams.vBitRasterStepover(a)
+                let ridge = VCarveParams.vBitRidge(a, spacing: stepover)
+                if ridge > pocketParams.vBitRasterRidge + 1e-9, 2 * ridge > inlay.glueGap - 1e-9 {
+                    warn("“\(pocket.name)” clears its floor in raster lines \(fmt(stepover)) apart, which leave ridges up to "
+                        + "\(fmt(ridge)) tall: too close to the \(fmt(inlay.glueGap)) glue gap, so the plug may bottom out on them. "
+                        + "Use the pocket's automatic stepover.")
+                }
+            }
             if abs(flat - inlay.pocketDepth) > 0.005 {
                 let gap = flat - inlay.plugStartDepth
                 if gap <= 1e-6 {

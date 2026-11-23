@@ -294,10 +294,21 @@ public enum SetupSheet {
                     let start = p.startDepth > 1e-9 ? " from a start depth of \(len(p.startDepth))" : ""
                     h += "<li>\(esc(op.name)): <b>pocket</b> (female), V-carved\(start)\(flat) with the \(bit). Cut the plug with the same bit.</li>\n"
                 case .plug:
+                    let board: String
+                    if let rect = project.plugBoard(for: op) {
+                        let corner = stock.toWork(Vec3(rect.min, 0))
+                        board = inlay.boardSize == nil
+                            ? "It's carved right out to the edges of its board: cut it from a board the size of the material, set up as the "
+                                + "pocket's was, then glue"
+                            : "It's carved right out to the edges of its board: cut it from a \(len(rect.width)) × \(len(rect.height)) board "
+                                + "with its lower-left corner at X \(len(corner.x)), Y \(len(corner.y)), then glue"
+                    } else {
+                        board = "Cut it from its own board and saw it free inside the carved band, then glue"
+                    }
                     h += "<li>\(esc(op.name)): <b>plug</b> (male), mirrored, with the \(bit): pocket depth \(len(inlay.pocketDepth)), "
                         + "glue gap \(len(inlay.glueGap)), surface clearance \(len(inlay.surfaceClearance)), so carved from "
-                        + "\(len(inlay.plugStartDepth)) down to \(len(inlay.plugCutDepth)). Cut it from its own board and saw it free "
-                        + "inside the carved band, then glue it into the pocket face down and plane or sand it flush.</li>\n"
+                        + "\(len(inlay.plugStartDepth)) down to \(len(inlay.plugCutDepth)). \(board) it into the pocket face down and "
+                        + "plane or sand it flush.</li>\n"
                 }
             }
             h += "</ul>\n"

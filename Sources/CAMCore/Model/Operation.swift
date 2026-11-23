@@ -419,15 +419,22 @@ public struct VCarveParams: Hashable, Sendable {
     public var startDepth: Double
     /// One side of a V-carve inlay; nil = an ordinary V-carve.
     public var inlay: VCarveInlay?
+    /// How the V-bit clears a flat bottom itself, when there's no clearance tool: in raster lines with these settings,
+    /// or in offset rings (nil). With a clearance tool, the corners it can't reach are always cleared in rings.
+    ///
+    /// No new file format: a build that doesn't know the key clears the same floor in rings, which is slower but not
+    /// wrong.
+    public var flatRaster: VCarveRaster?
 
     public init(flatDepth: Double? = nil, passDepth: Double? = nil, sampleSpacing: Double = 0.25, clearanceTool: Tool? = nil,
-                startDepth: Double = 0, inlay: VCarveInlay? = nil) {
+                startDepth: Double = 0, inlay: VCarveInlay? = nil, flatRaster: VCarveRaster? = nil) {
         self.flatDepth = flatDepth
         self.passDepth = passDepth
         self.sampleSpacing = sampleSpacing
         self.clearanceTool = clearanceTool
         self.startDepth = startDepth
         self.inlay = inlay
+        self.flatRaster = flatRaster
     }
 
     public var isPlug: Bool { inlay?.role == .plug }
@@ -443,12 +450,79 @@ public struct VCarveParams: Hashable, Sendable {
     public var deepest: Double? { carveFlatDepth.map { carveStartDepth + $0 } }
 
     /// The project file format these settings need: a start depth or a plug is format 6, since an older build would
-    /// ignore them and carve from the surface (a plug as an ordinary V-carve of the design).
-    public var requiredFormatVersion: Int { startDepth > 1e-9 || isPlug ? 6 : 1 }
+    /// ignore them and carve from the surface (a plug as an ordinary V-carve of the design). A whole-board plug is
+    /// format 14: a format-13 build can't read the boundary.
+    public var requiredFormatVersion: Int {
+        if inlay?.boundary == .board { return 14 }
+        return startDepth > 1e-9 || isPlug ? 6 : 1
+    }
+
+    /// Whether the V-bit clears flat areas itself: there's a flat bottom and no clearance tool takes it (with one, an
+    /// inlay's V-bit still cleans up the corners the clearance tool can't reach).
+    public var vBitClearsFlats: Bool { (carveFlatDepth ?? 0) > 0 && clearanceTool == nil }
+
+    /// Tallest ridge the V-bit may leave between its passes where it clears a flat itself, mm. A plug's floor only has
+    /// to stay clear of the pocket board, so its ridges may reach a third of the surface clearance; an inlay pocket's
+    /// must stay under the plug (the glue gap). In the middle of a flat, past the last ring, a ridge can be up to twice
+    /// this.
+    public var vBitClearingRidge: Double {
+        switch inlay?.role {
+        case .plug: max(Self.flatClearingRidge, (carveFlatDepth ?? 0) / 3)
+        case .pocket: Self.inlayPocketRidge
+        case nil: Self.flatClearingRidge
+        }
+    }
+
+    /// Spacing of the V-bit's rings that keeps the ridges between them within `vBitClearingRidge`, mm.
+    public func vBitClearingSpacing(_ tool: Tool) -> Double {
+        max(0.02, tool.tipDiameter + 2 * vBitClearingRidge * tool.halfAngleTangent)
+    }
+
+    /// Tallest ridge a V-bit's raster may leave between its lines with the automatic stepover, mm: the tallest the
+    /// rings leave, in the middle of a flat past the last ring (twice `vBitClearingRidge`). The raster's ridges are all
+    /// the same height, so the two leave the same floor.
+    public var vBitRasterRidge: Double { 2 * vBitClearingRidge }
+
+    /// The raster's automatic stepover, which keeps its ridges within `vBitRasterRidge`, mm: twice the ring spacing
+    /// for a pointed bit.
+    public func vBitRasterSpacing(_ tool: Tool) -> Double {
+        max(0.02, tool.tipDiameter + 2 * vBitRasterRidge * tool.halfAngleTangent)
+    }
+
+    /// The stepover the V-bit's raster clears flats at, mm: its own, or the automatic one.
+    public func vBitRasterStepover(_ tool: Tool) -> Double {
+        flatRaster?.stepover.map { max(0.02, $0) } ?? vBitRasterSpacing(tool)
+    }
+
+    /// Height of the ridges a V-bit leaves between passes `spacing` apart at one depth, mm.
+    public static func vBitRidge(_ tool: Tool, spacing: Double) -> Double {
+        guard tool.shape.isTapered, tool.halfAngleTangent > 1e-9 else { return 0 }
+        return max(0, spacing - tool.tipDiameter) / (2 * tool.halfAngleTangent)
+    }
+
+    /// Tallest ridge the V-bit may leave between its passes when it clears a flat bottom itself, mm.
+    public static let flatClearingRidge = 0.1
+    /// The same for an inlay pocket, whose floor has to stay below the plug's face (the glue gap).
+    public static let inlayPocketRidge = 0.05
+}
+
+/// Raster flat clearing with a V-bit: straight lines a stepover apart, kept clear of the V walls as the rings are, then
+/// a pass round each flat's edge.
+public struct VCarveRaster: Hashable, Codable, Sendable {
+    /// Distance between the lines, mm; nil = the spacing that keeps the ridges between them no taller than the tallest
+    /// the rings leave (`VCarveParams.vBitRasterSpacing`).
+    public var stepover: Double?
+    /// Direction of the lines, degrees from X.
+    public var angle: Double
+
+    public init(stepover: Double? = nil, angle: Double = 0) {
+        self.stepover = stepover
+        self.angle = angle
+    }
 }
 
 extension VCarveParams: Codable {
-    private enum CodingKeys: String, CodingKey { case flatDepth, passDepth, sampleSpacing, clearanceTool, startDepth, inlay }
+    private enum CodingKeys: String, CodingKey { case flatDepth, passDepth, sampleSpacing, clearanceTool, startDepth, inlay, flatRaster }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -458,9 +532,10 @@ extension VCarveParams: Codable {
         clearanceTool = try c.decodeIfPresent(Tool.self, forKey: .clearanceTool)
         startDepth = try c.decodeIfPresent(Double.self, forKey: .startDepth) ?? 0
         inlay = try c.decodeIfPresent(VCarveInlay.self, forKey: .inlay)
+        flatRaster = try c.decodeIfPresent(VCarveRaster.self, forKey: .flatRaster)
     }
 
-    /// A start depth of 0 and no inlay are left out, so ordinary V-carves save exactly as before.
+    /// A start depth of 0, no inlay and ring clearing are left out, so ordinary V-carves save exactly as before.
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encodeIfPresent(flatDepth, forKey: .flatDepth)
@@ -469,6 +544,7 @@ extension VCarveParams: Codable {
         try c.encodeIfPresent(clearanceTool, forKey: .clearanceTool)
         if startDepth != 0 { try c.encode(startDepth, forKey: .startDepth) }
         try c.encodeIfPresent(inlay, forKey: .inlay)
+        try c.encodeIfPresent(flatRaster, forKey: .flatRaster)
     }
 }
 
@@ -479,7 +555,7 @@ extension VCarveParams: Codable {
 /// depth, its wall is inset d·tan(α) from the outline (α = the bit's half angle).
 ///
 /// The **plug** (male) carves the area *around* the design, mirrored left to right about the centre of the design's
-/// bounds, inside a boundary (a margin round the design, or a selected vector), so the design stands proud. It is carved as if the material top were S = P − G lower: at depth S the plug's walls lie
+/// bounds, inside a boundary (a margin round the design, a selected vector or the whole board), so the design stands proud. It is carved as if the material top were S = P − G lower: at depth S the plug's walls lie
 /// exactly on the (mirrored) outline, and above it they lean in at the bit's angle, d·tan(α) at height d above S.
 /// Flipped into the pocket, the plug's walls therefore meet the pocket's along their whole height when the plug's
 /// face (the plug board's original top) is S deep in the pocket, leaving
@@ -507,8 +583,16 @@ public struct VCarveInlay: Hashable, Codable, Sendable {
         /// The outermost selected vector: the one holding all the others (a rectangle the size of the plug board,
         /// say). A choice, not a guess: a design can have a shape round the rest of it too.
         case vector
+        /// The whole plug board (`VCarveInlay.board(around:stock:)`), carved right out to its edges. Format 14.
+        case board
         public var id: String { rawValue }
-        public var label: String { self == .margin ? "Margin" : "Selected vector" }
+        public var label: String {
+            switch self {
+            case .margin: "Margin"
+            case .vector: "Selected vector"
+            case .board: "Whole board"
+            }
+        }
     }
 
     public var role: Role
@@ -522,6 +606,9 @@ public struct VCarveInlay: Hashable, Codable, Sendable {
     public var boundary: Boundary
     /// Plug: how far past the design's outline the plug is carved with a margin boundary, mm.
     public var boundaryMargin: Double
+    /// Plug with a whole-board boundary: the plug board's width (x) and height (y), mm, centred on the design; nil = the
+    /// material, where it is.
+    public var boardSize: Vec2?
 
     public static let defaultPocketDepth = 0.2.inch
     public static let defaultGlueGap = 0.02.inch
@@ -530,13 +617,21 @@ public struct VCarveInlay: Hashable, Codable, Sendable {
 
     public init(role: Role, pocketDepth: Double = VCarveInlay.defaultPocketDepth, glueGap: Double = VCarveInlay.defaultGlueGap,
                 surfaceClearance: Double = VCarveInlay.defaultSurfaceClearance, boundary: Boundary = .margin,
-                boundaryMargin: Double = VCarveInlay.defaultBoundaryMargin) {
+                boundaryMargin: Double = VCarveInlay.defaultBoundaryMargin, boardSize: Vec2? = nil) {
         self.role = role
         self.pocketDepth = pocketDepth
         self.glueGap = glueGap
         self.surfaceClearance = surfaceClearance
         self.boundary = boundary
         self.boundaryMargin = boundaryMargin
+        self.boardSize = boardSize
+    }
+
+    /// The plug board a whole-board plug carves: the material, or a board of `boardSize` centred on `center` (the
+    /// middle of the design, which mirroring leaves where it is).
+    public func board(around center: Vec2, stock: Stock) -> Rect2 {
+        guard let size = boardSize, size.x > 0, size.y > 0 else { return stock.bounds }
+        return Rect2(x: center.x - size.x / 2, y: center.y - size.y / 2, width: size.x, height: size.y)
     }
 
     /// The plug's start depth, S = P − G.
@@ -1228,7 +1323,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`). 3D rotary finishing is format 7.
     /// Chamfers, flutes and prisms are format 8 (older builds can't read them). 3D finishing other than a single raster
     /// is format 10 (see `Finish3DParams.requiredFormatVersion`). 3D rotary roughing is format 12. Adaptive pocket
-    /// clearing is format 13.
+    /// clearing is format 13. A whole-board inlay plug is format 14.
     public var requiredFormatVersion: Int {
         let own: Int
         switch kind {
