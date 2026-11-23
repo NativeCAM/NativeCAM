@@ -225,9 +225,12 @@ enum ProfileGenerator {
         func clearOfWalls(_ p: Vec2) -> Bool {
             wallLoops.allSatisfy { $0.closestPoint(to: p).point.distance(to: p) >= clearance - 0.5 - 1e-6 }
         }
+        // What lands on the material when an edge bit plunges: its bottom inside the tip's radius (a form bit's pilot;
+        // the profile above it meets the edge it's meant to cut), half a dovetail's wide bottom.
+        let plungeProbe = tool.shape == .dovetail ? tool.radius * 0.5 : max(0.1, 0.9 * tool.radius(atHeight: 0))
         func intoMaterial(_ p: Vec2, z: Double) -> Bool {
             guard tool.shape.cutsEdgesOnly, let top = context.materialTop else { return false }
-            return top(p, tool.radius * 0.5) > z + 0.05
+            return top(p, plungeProbe) > z + 0.05
         }
         for contour in ordered {
             let near = probe ?? b.position.xy

@@ -24,7 +24,7 @@ struct OperationInspector: View {
                 IndexAnglesSection(angles: $op.indexAngles, blank: project.stock.rotary)
             }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
-                        loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
+                        kind: op.kind, loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
                         wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad, loopFeedLimit: adaptiveLoopLimit)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
@@ -715,7 +715,8 @@ func finishingNote(_ strategy: Finish3DStrategy) -> String {
 
 /// Theoretical scallop (cusp) height left between parallel passes of a ball-ended tool on a flat surface.
 func scallop(tool: Tool, stepover: Double) -> Double {
-    let R = tool.shape == .ballNose ? tool.radius : (tool.shape == .bullNose ? tool.cornerRadius : 0)
+    let R = tool.shape == .ballNose ? tool.radius : (tool.shape == .bullNose ? tool.cornerRadius
+        : (tool.shape == .taperedBallNose ? tool.tipDiameter / 2 : 0))
     guard R > 0, stepover < 2 * R else { return 0 }
     return R - (R * R - stepover * stepover / 4).squareRoot()
 }
@@ -745,7 +746,13 @@ struct DepthSection: View {
             LengthField(title: "Pass depth", mm: Binding(get: { depth.passDepth ?? step }, set: { depth.passDepth = max(0.05, $0) }),
                         units: units, help: passHelp ?? "Defaults to the tool's stepdown")
             let passes = depth.passLevels(toolStepdown: step, firstPassMinimum: tool.firstPassMinimum).count
-            LabeledContent("Passes", value: "\(passes)")
+            if tool.hasUndercut {
+                // A dovetail (or a form bit that narrows going up) can't step down: see `ProfileGenerator`.
+                LabeledContent("Passes", value: "1, at full depth")
+                    .help("The bit is wider at its tip than above it, so stepping down would cut into the wall above each pass")
+            } else {
+                LabeledContent("Passes", value: "\(passes)")
+            }
             if depth.cutDepth > stock.thickness + 0.04.inch {
                 Label("Deeper than the material (\(units.format(stock.thickness)) \(units.symbol))", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange).font(.caption)
@@ -1014,6 +1021,9 @@ struct ToolSection: View {
     let library: ToolLibraryStore
     var material: MaterialKind = .plywood
     var machine: MachineProfile = .avidPRO6060
+    /// The toolpath's kind: the picker lists only the bits it can cut with (`OperationKind.refusal(for:)`), and the
+    /// chip-load chart is read at the diameter that cuts at its depth.
+    var kind: OperationKind? = nil
     /// Profiles and pockets: the operation's "Adjust feeds for load" (nil hides it).
     var loadFeeds: Binding<Bool?>? = nil
     /// On a wrapped rotary job, where feeds are inverse time and don't follow the load.
@@ -1032,7 +1042,13 @@ struct ToolSection: View {
                 if match == nil {
                     Text("T\(tool.number) \(tool.name) (project copy)").tag(UUID?.none)
                 }
-                ForEach(library.tools) { t in Text("T\(t.number) \(t.name)").tag(Optional(t.id)) }
+                ForEach(library.tools.filter { $0.id == match?.id || kind?.refusal(for: $0) == nil }) { t in
+                    Text("T\(t.number) \(t.name)").tag(Optional(t.id))
+                }
+            }
+            if let why = kind?.refusal(for: tool) {
+                Label(why, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
             HStack(alignment: .center, spacing: 12) {
                 ToolShapeView(tool: tool, units: units).frame(width: 140, height: 150)
@@ -1040,6 +1056,10 @@ struct ToolSection: View {
                     Text(tool.shape.label).font(.headline)
                     Text("\(tool.fluteCount) flute \(tool.fluteDirection.label.lowercased())")
                     if tool.shape.isTapered { Text("\(Int(tool.includedAngle))° included") }
+                    let detail = tool.shapeDetail { "\(units.format($0)) \(units.symbol)" }
+                    if !detail.isEmpty {
+                        Text(detail.trimmingCharacters(in: CharacterSet(charactersIn: " ()"))).fixedSize(horizontal: false, vertical: true)
+                    }
                     Text("Chip load \(units.format(tool.chipLoad, decimals: 4)) \(units.symbol)")
                         .foregroundStyle(.secondary)
                 }
@@ -1051,10 +1071,10 @@ struct ToolSection: View {
             FeedField(title: "Plunge", mmPerMin: $tool.cutting.plungeRate, units: units)
             if let loadFeeds { LoadFeedsToggle(on: loadFeeds, tool: tool, wrapped: wrapped) }
             LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
-            PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
+            PercentField(title: tool.shape == .taperedBallNose ? "Stepover (of tip)" : "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
                 ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad,
-                            loopFeedLimit: loopFeedLimit)
+                            loopFeedLimit: loopFeedLimit, chartDiameter: ChipLoad.chartDiameter(tool, depth: kind?.requestedDepth))
             }
         }
     }
@@ -1070,9 +1090,11 @@ struct ChipLoadRow: View {
     var radialLoad: Double? = nil
     /// An adaptive pocket's loop feed limit (mm/min): the recommended feed keeps to it, slowing the spindle instead.
     var loopFeedLimit: Double? = nil
+    /// The diameter to read the chart at (`ChipLoad.chartDiameter`); nil is the tool's.
+    var chartDiameter: Double? = nil
 
     var body: some View {
-        let r = ChipLoad.range(material, diameter: tool.diameter)
+        let r = ChipLoad.range(material, diameter: chartDiameter ?? tool.diameter)
         let thin = radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         let chip = tool.chipLoad * thin
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
@@ -1091,7 +1113,8 @@ struct ChipLoadRow: View {
                 }
             }
         }
-        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine, thinning: thin, feedLimit: loopFeedLimit)
+        let rec = ChipLoad.recommend(for: tool, material: material, machine: machine, thinning: thin, feedLimit: loopFeedLimit,
+                                     diameter: chartDiameter)
         let held = loopFeedLimit.map { rec.feed >= $0 - 1e-6 && $0 < machine.maxFeedRate } ?? false
         if held {
             Text("Held to the fastest its loops can run with this machine's acceleration, with the spindle slowed to keep the chip in range.")

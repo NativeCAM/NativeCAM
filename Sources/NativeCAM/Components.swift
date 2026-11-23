@@ -108,7 +108,8 @@ struct ToolShapeView: View {
             let maxR = max(sil.map(\.x).max() ?? 1, 1e-3)
             // Room for dimension labels: right for cutting length, bottom for diameter.
             let rightPad: CGFloat = showDimensions ? 54 : 2
-            let leftPad: CGFloat = showDimensions ? (tool.shape.usesAngle ? 30 : 8) : 2
+            let angled = tool.shape.usesAngle || tool.shape == .taperedBallNose || tool.shape == .dovetail
+            let leftPad: CGFloat = showDimensions ? (angled ? 42 : 8) : 2
             let bottomPad: CGFloat = showDimensions ? 24 : 2
             let topPad: CGFloat = showDimensions ? 6 : 2
             let availW = size.width - leftPad - rightPad, availH = size.height - topPad - bottomPad
@@ -135,7 +136,7 @@ struct ToolShapeView: View {
                 layer.clip(to: outline)
                 layer.clip(to: Path(CGRect(x: 0, y: cutTop, width: size.width, height: base - cutTop + 1)))
                 var flutes = Path()
-                if tool.shape.isTapered || tool.shape == .drill {
+                if tool.shape.isTapered || tool.shape == .drill || tool.shape.cutsEdgesOnly {
                     flutes.move(to: pt(0, 0))
                     flutes.addLine(to: pt(tool.radius * 0.35, tool.fluteLength))
                 } else {
@@ -151,10 +152,11 @@ struct ToolShapeView: View {
                 layer.stroke(flutes, with: .color(Color(white: 0.2).opacity(0.55)), lineWidth: max(1, scale * CGFloat(tool.diameter) * 0.06))
             }
             ctx.stroke(outline, with: .color(Color(white: 0.15).opacity(0.8)), lineWidth: 1)
-            // Shank / cutting-edge boundary.
+            // Shank / cutting-edge boundary (at the width the edge has there: a dovetail's neck, a form bit's top).
             var edge = Path()
-            edge.move(to: CGPoint(x: cx - CGFloat(tool.radius) * scale, y: cutTop))
-            edge.addLine(to: CGPoint(x: cx + CGFloat(tool.radius) * scale, y: cutTop))
+            let edgeR = tool.shape.requiredFormatVersion > 1 ? tool.radius(atHeight: tool.fluteLength) : tool.radius
+            edge.move(to: CGPoint(x: cx - CGFloat(edgeR) * scale, y: cutTop))
+            edge.addLine(to: CGPoint(x: cx + CGFloat(edgeR) * scale, y: cutTop))
             ctx.stroke(edge, with: .color(.orange.opacity(0.8)), lineWidth: 1)
 
             guard showDimensions else { return }
@@ -187,6 +189,17 @@ struct ToolShapeView: View {
                 ctx.draw(label("\(Int(tool.includedAngle.rounded()))°"),
                          at: CGPoint(x: cx - CGFloat(tool.radius(atHeight: h * 0.5)) * scale - 4, y: base - CGFloat(h * 0.5) * scale),
                          anchor: .trailing)
+            }
+            // A tapered ball nose's and a dovetail's angle per side, halfway up the flutes; a tapered ball's tip radius.
+            if tool.shape == .taperedBallNose || tool.shape == .dovetail {
+                let h = tool.fluteLength * 0.5
+                let perSide = (tool.includedAngle / 2).formatted(.number.precision(.fractionLength(0...2)))
+                ctx.draw(label("\(perSide)°/side"),
+                         at: CGPoint(x: cx - CGFloat(tool.radius(atHeight: h)) * scale - 4, y: base - CGFloat(h) * scale), anchor: .trailing)
+            }
+            if tool.shape == .taperedBallNose {
+                ctx.draw(label("R\(units.format(tool.tipDiameter / 2, decimals: decimals))"),
+                         at: CGPoint(x: cx - CGFloat(tool.tipDiameter / 2) * scale - 4, y: base - 4), anchor: .trailing)
             }
         }
         .accessibilityLabel("\(tool.shape.label), \(units.format(tool.diameter)) \(units.symbol) diameter")
