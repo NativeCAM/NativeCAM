@@ -24,6 +24,17 @@ import Foundation
 //                     [--units inch|mm] [--tool-change m6|pause|atc] [-o out]
 //                                                      write the acceptance test program for a controller: run it in
 //                                                      check mode, then as an air cut, then 0.5 mm deep in scrap
+//   nativecam-cli calibrate timing|rotary|ladder [project.nativecam] [--controller c] [--sender s] [--units inch|mm] [-o stem]
+//                     timing: [--window WxH] [--air height]; ladder: [--tool n] [--material kind] [--depth d] [--rungs n] [--step-rpm]
+//                                                      write a calibration program for the project's machine (Avid's
+//                                                      PRO6060 without one): stem.tap (or the controller's extension),
+//                                                      its recording sheet stem.html and, for timing and rotary, the
+//                                                      times file stem-times.csv. Lengths are in the G-code's units
+//   nativecam-cli calibrate fit <times.csv> [more-times.csv] [project.nativecam] [--apply] [-o out.nativecam]
+//                                                      fit the machine's acceleration, Z rapid, corner tolerance and turn
+//                                                      speed to the measured times, print each value before and after
+//                                                      and the F-change and G93 verdicts; --apply writes the fitted values
+//                                                      into the project's machine (in place unless -o)
 //   nativecam-cli machine <settings> [--apply project.nativecam [-o out.nativecam]]
 //                                                      read machine limits from Grbl $$, Mach4 Machine.ini, LinuxCNC
 //                                                      INI, FluidNC YAML or Fusion .mch; optionally apply to a project
@@ -202,6 +213,118 @@ case "acceptance":
         do { try file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
         print("\(post.name) acceptance test -> \(path)")
     }
+
+case "calibrate":
+    // Calibration programs for the project's machine, and fitting its values to the times measured with them.
+    let usage = "usage: nativecam-cli calibrate timing|rotary|ladder [project.nativecam] [--controller c] [-o stem]"
+        + " | calibrate fit <times.csv> [project.nativecam] [--apply] [-o out.nativecam]"
+    guard args.count >= 2 else { fail(usage) }
+    let sub = args[1]
+    let rest = Array(args.dropFirst(2))
+    let projectPath = rest.first { $0.hasSuffix(".nativecam") }
+    let loaded = projectPath.map(loadProject)
+    if sub == "fit" {
+        let csvs = rest.filter { $0.lowercased().hasSuffix(".csv") }
+        guard !csvs.isEmpty else { fail("usage: nativecam-cli calibrate fit <times.csv> [project.nativecam] [--apply] [-o out.nativecam]") }
+        let machine = loaded?.machine ?? MachineProfile()
+        let result: Calibration.FitResult
+        do {
+            let times = try csvs.map { path -> Calibration.Times in
+                do { return try Calibration.readTimes(String(contentsOfFile: path, encoding: .utf8)) } catch let r as Calibration.Refused {
+                    throw Calibration.Refused("\(path): \(r.reason)")
+                }
+            }
+            result = try Calibration.fit(times, machine: machine)
+        } catch {
+            fail("Not fitted: \(error.localizedDescription)")
+        }
+        let u = loaded?.displayUnits ?? machine.outputUnits
+        print("Fitted \(result.programs.map(\.label).joined(separator: " and ")) times for \(machine.displayName), \(machine.controllerLabel):")
+        for line in result.report(u) { print(line) }
+        if args.contains("--apply") {
+            guard var project = loaded, let path = projectPath else { fail("--apply needs the project whose machine to change") }
+            if result.changes.isEmpty {
+                print("Nothing to apply: the fitted values are the machine's own.")
+            } else {
+                result.apply(to: &project.machine)
+                let out = option("-o", in: args) ?? path
+                do { try project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error)") }
+                print("Applied \(result.changes.map { $0.label.lowercased() }.joined(separator: ", ")) to \(out)")
+            }
+        } else if loaded != nil, !result.changes.isEmpty {
+            print("Nothing changed: add --apply to write these values into the project's machine.")
+        }
+        exit(0)
+    }
+    guard let kind = Calibration.Kind(rawValue: sub) else { fail(usage) }
+    var machine = loaded?.machine ?? MachineProfile()
+    if let family = option("--controller", in: args) {
+        machine.controller = ControllerProfile(family: ControllerFamily(rawValue: family), sender: option("--sender", in: args))
+        machine.model = .custom
+    }
+    if let units = option("--units", in: args) { machine.outputUnits = units == "mm" ? .mm : .inch }
+    let u = machine.outputUnits
+    func length(_ name: String) -> Double? {
+        guard let text = option(name, in: args) else { return nil }
+        guard let v = Double(text), v > 0 else { fail("\(name) takes a length in \(u.symbol)") }
+        return u.toMM(v)
+    }
+    let program: Calibration.Program
+    do {
+        switch kind {
+        case .timing:
+            var options = Calibration.TimingOptions.defaults(u)
+            if let text = option("--window", in: args) {
+                let parts = text.lowercased().split(separator: "x").compactMap { Double($0) }
+                guard parts.count == 2, parts.allSatisfy({ $0 > 0 }) else { fail("--window takes a width and height, e.g. 24x24, in \(u.symbol)") }
+                options.window = Vec2(u.toMM(parts[0]), u.toMM(parts[1]))
+            }
+            if let air = length("--air") { options.airHeight = air }
+            program = try Calibration.timing(machine: machine, options: options)
+        case .rotary:
+            program = try Calibration.rotary(machine: machine)
+        case .ladder:
+            let number = option("--tool", in: args).map { Int($0) ?? -1 } ?? 1
+            let projectTools = loaded?.operations.map(\.tool) ?? []
+            guard let tool = projectTools.first(where: { $0.number == number }) ?? ToolLibrary.starter.tool(number: number) else {
+                fail("--tool \(number): no such tool in the project or the starter library")
+            }
+            var material = loaded?.stock.material ?? .hardwood
+            if let text = option("--material", in: args) {
+                guard let m = MaterialKind(rawValue: text) else {
+                    fail("--material takes one of: \(MaterialKind.allCases.map(\.rawValue).joined(separator: ", "))")
+                }
+                material = m
+            }
+            var options = Calibration.LadderOptions(tool: tool, material: material, depth: length("--depth"))
+            if let text = option("--rungs", in: args) { options.rungs = Int(text) ?? options.rungs }
+            options.stepRPM = args.contains("--step-rpm")
+            program = try Calibration.ladder(machine: machine, options: options)
+        }
+    } catch {
+        fail("Not written: \(error.localizedDescription)")
+    }
+    for issue in program.issues { print("[\(issue.severity.rawValue)] \(issue.text)") }
+    if !program.passedChecks { fail("Not written: the \(kind.label.lowercased()) failed its checks.") }
+    let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? kind.fileStem
+    let gcodePath = stem + "." + program.fileExtension, sheetPath = stem + ".html", timesPath = stem + "-times.csv"
+    do {
+        try program.gcode.write(toFile: gcodePath, atomically: true, encoding: .ascii)
+        try RecordingSheet.html(program).write(toFile: sheetPath, atomically: true, encoding: .utf8)
+        if kind != .ladder { try Calibration.timesCSV(program).write(toFile: timesPath, atomically: true, encoding: .utf8) }
+    } catch {
+        fail("Can't write: \(error.localizedDescription)")
+    }
+    print("\(program.dialect.name) \(kind.label.lowercased()) -> \(gcodePath)")
+    print("Recording sheet -> \(sheetPath)")
+    if kind != .ladder { print("Times file -> \(timesPath)") }
+    for s in program.sections {
+        print("  \(s.id)  \(s.name): \(s.count)x, about \(String(format: "%.1f", s.estimate)) s")
+    }
+    for r in program.rungs {
+        print("  Rung \(r.number): \(Calibration.feed(r.feed, u)) at \(Int(r.rpm)) RPM, \(Calibration.chipText(r.chipLoad, u)), \(r.chart.label.lowercased())")
+    }
+    print("Moves take about \(formatTime(program.estimatedSeconds))\(kind == .ladder ? "" : ", plus the stops")")
 
 case "machine":
     // Read machine limits from a controller's settings ($$ dump, Machine.ini, LinuxCNC INI, FluidNC YAML, Fusion .mch).

@@ -135,6 +135,11 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// Adaptive clearing: the share of the bit's diameter its usual cut takes from the side (the optimal load), so the
     /// chip-load check allows for the thinner chip (`ChipLoad.radialThinning`). nil = a full-width chip.
     public var radialLoad: Double?
+    /// Calibration programs (`Calibration`): the program stops (M0) once the tool is over this toolpath's start at
+    /// safe Z, showing this message, and goes back to safe Z when the operator resumes. nil everywhere else. The
+    /// G-code and OpenSBP posts write it for flat and indexed toolpaths; imported Vectric posts and wrapped toolpaths
+    /// ignore it.
+    public var stopMessage: String?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

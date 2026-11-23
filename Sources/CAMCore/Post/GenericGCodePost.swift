@@ -178,6 +178,13 @@ public struct GenericGCodePost: PostProcessor {
                 lastA = target
                 turned = true
             }
+            // A calibration program's section: stop over its start with its message (shown on screen where the
+            // controller reads `(MSG,…)`), then restate safe Z, which also brings the tool back if Z was jogged.
+            if let message = tp.stopMessage {
+                w.comment(dialect.showsMessages ? "MSG,\(message)" : message)
+                w.line("M0")
+                w.line("G0 Z\(fmt(round(safe)))")
+            }
             emitMotions(tp, frame: frame, writer: &w, state: &state)
         }
 
