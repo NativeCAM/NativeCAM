@@ -578,12 +578,14 @@ extension Model3DGenerator {
 
     // MARK: Pencil
 
-    /// Pencil passes along the creases the map finds for this ball, nearest first, each ramping in along its own line.
-    static func pencil(_ map: CLMap, _ f: Finishing, _ b: inout ToolpathBuilder, warnings: inout [String]) {
-        let area = f.setup.boundary.flatMap(\.loops)
-        let minimum = max(2 * map.pitch, f.tool.radius)
+    /// Pencil passes along the creases the map finds for this ball (a tapered ball nose's tip ball), nearest first, each
+    /// ramping in along its own line, inside `area` (nil = the boundary).
+    static func pencil(_ map: CLMap, _ f: Finishing, _ b: inout ToolpathBuilder, warnings: inout [String], area within: [Polyline]? = nil) {
+        let area = within ?? f.setup.boundary.flatMap(\.loops)
+        let ball = f.tool.shape == .taperedBallNose && f.tool.tipDiameter > 1e-6 ? f.tool.tipDiameter / 2 : f.tool.radius
+        let minimum = max(2 * map.pitch, ball)
         var chains: [[Vec2]] = []
-        for crease in map.creases(ballRadius: f.tool.radius, angle: 20) {
+        for crease in map.creases(ballRadius: ball, angle: 20) {
             let pts = crease.isClosed ? crease.points + [crease.points[0]] : crease.points
             for piece in Clipper.clipOpen([Polyline(pts, closed: false)], to: area, fill: .nonZero) {
                 let simple = piece.simplified(tolerance: f.tolerance)
@@ -591,7 +593,8 @@ extension Model3DGenerator {
             }
         }
         guard !chains.isEmpty else {
-            warnings.append("No concave creases for \(f.tool.name) to clean up.")
+            warnings.append(within == nil ? "No concave creases for \(f.tool.name) to clean up."
+                            : "No concave creases inside the rest areas for \(f.tool.name)'s pencil pass.")
             return
         }
         // Each chain dropped onto the surface. Along the foot of a vertical wall the surface steps up right beside the

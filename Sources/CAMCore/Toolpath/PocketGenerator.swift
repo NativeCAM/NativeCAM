@@ -13,12 +13,22 @@ enum PocketGenerator {
         }
         let loops = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }.filter { $0.isClosed }
         let regions = Region.build(from: loops, fill: .evenOdd)
+        var notes: [String] = []
+        if params.restsFromEarlier, !regions.isEmpty {
+            let earlier = earlierReach(op: op, context: context)
+            if earlier.counted {
+                return restMachined(op: op, params: params, large: params.clearanceTool, earlier: earlier, regions: regions,
+                                    shapes: shapes, context: context)
+            }
+            notes = earlier.warnings
+        }
         if let large = params.clearanceTool, !regions.isEmpty {
-            return restMachined(op: op, params: params, large: large, regions: regions, shapes: shapes, context: context)
+            return restMachined(op: op, params: params, large: large, earlier: notes.isEmpty ? nil : EarlierReach(warnings: notes),
+                                regions: regions, shapes: shapes, context: context)
         }
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
         let result = clear(regions: regions, tool: tool, params: params, context: context, shapes: shapes, builder: &b)
-        var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: result.warnings)
+        var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: notes + result.warnings)
         toolpath.reliefCorners = result.corners
         if params.strategy == .adaptive { toolpath.radialLoad = params.adaptiveSettings.load }
         return [toolpath]
@@ -30,16 +40,104 @@ enum PocketGenerator {
     /// slivers left where two offsets of the same curve disagree by their arc tolerance.
     static func restTolerance(arcTolerance: Double) -> Double { 0.02 + 2 * arcTolerance }
 
+    /// What the pocket toolpaths a pocket rests from reached (`earlierReach`).
+    struct EarlierReach {
+        /// Each one's own pocket, less its allowance, opened by its bit's radius.
+        var reached: [Region] = []
+        var warnings: [String] = []
+        /// There were some to count; when false the warnings say there weren't, and the pocket is cleared as without
+        /// the option.
+        var counted = false
+    }
+
+    /// What the pocket toolpaths `op` rests from (`RestMachining.pocketReferences`) reached.
+    static func earlierReach(op: CAMOperation, context: GenerationContext) -> EarlierReach {
+        guard let project = context.project else {
+            return EarlierReach(warnings: ["Rest from earlier toolpaths follows the toolpaths before it in the job, so on its own this "
+                + "clears the whole pocket."])
+        }
+        let refs = RestMachining.pocketReferences(for: op, in: project)
+        let tol = context.arcTolerance
+        var out = EarlierReach(warnings: refs.warnings, counted: !refs.operations.isEmpty)
+        for ref in refs.operations {
+            guard case let .pocket(q) = ref.kind else { continue }
+            let loops = project.shapes(for: ref).filter { !$0.isKeepOut }.flatMap { $0.polylines(tolerance: context.flattenTolerance) }
+                .filter(\.isClosed)
+            let r = ref.tool.radius
+            out.reached += Region.build(from: loops, fill: .evenOdd).flatMap { $0.offset(by: -(r + q.allowance), arcTolerance: tol) }
+                .flatMap { $0.offset(by: r, arcTolerance: tol) }
+        }
+        return out
+    }
+
+    /// The part of the pocket (less the allowance) `small` reaches that `reached` doesn't cover, less pieces narrower
+    /// than the rest tolerance: what's left for it to cut.
+    static func leftover(_ regions: [Region], small: Tool, allowance: Double, reached: [Region], arcTolerance tol: Double) -> [Region] {
+        let mine = regions.flatMap { $0.offset(by: -(small.radius + allowance), arcTolerance: tol) }
+            .flatMap { $0.offset(by: small.radius, arcTolerance: tol) }.flatMap(\.loops)
+        let rest = Region.nest(Clipper.difference(mine, minus: reached.flatMap(\.loops)))
+        return opened(rest, by: restTolerance(arcTolerance: tol) / 2, arcTolerance: tol)
+    }
+
     /// The larger tool clears the whole pocket with the operation's strategy and its own stepover, pass depth and
     /// feeds, leaving the allowance plus the rest margin on the walls. The operation's tool then runs the wall
     /// pass (with any corner reliefs) at each of its pass depths, and offset rings wherever neither the larger tool
     /// nor that wall pass reaches.
-    static func restMachined(op: CAMOperation, params: PocketParams, large: Tool, regions: [Region], shapes: [DesignShape],
-                             context: GenerationContext) -> [Toolpath] {
+    ///
+    /// Resting from earlier toolpaths (`earlier`, with or without a clearance tool), what they reached counts too, and
+    /// the wall pass runs only where something is left to cut (`leftover`): in pieces round the corners and along the
+    /// walls next to what's left, each starting and ending where it's already clear. With nothing left, the toolpath is
+    /// empty and says so.
+    static func restMachined(op: CAMOperation, params: PocketParams, large: Tool?, earlier: EarlierReach?, regions: [Region],
+                             shapes: [DesignShape], context: GenerationContext) -> [Toolpath] {
+        let small = op.tool
+        let tol = context.arcTolerance
+        var warnings: [String] = earlier?.warnings ?? []
+        var toolpaths: [Toolpath] = []
+        var reached: [Region]?
+        let resting = earlier?.counted == true
+        if let large {
+            reached = clearFirst(op: op, params: params, large: large, regions: regions, context: context, resting: resting,
+                                 warnings: &warnings, toolpaths: &toolpaths)
+        }
+        var zone: [Region]?
+        var left: [Region]?
+        if let earlier, earlier.counted {
+            let all = (reached ?? []) + earlier.reached
+            reached = all
+            let rest = leftover(regions, small: small, allowance: params.allowance, reached: all, arcTolerance: tol)
+            left = rest
+            guard !rest.isEmpty else {
+                warnings.append("Nothing left to cut: the larger bits before it reach the whole pocket, so it posts nothing.")
+                var main = ToolpathBuilder(stock: context.stock, tool: small, startXY: nil)
+                    .build(id: op.id, name: op.name, tool: small, rpm: small.cutting.spindleRPM, warnings: warnings)
+                main.restAreas = []
+                toolpaths.append(main)
+                return toolpaths
+            }
+            // The wall pass is needed where the bit's edge reaches what's left: within its radius, and a little more so
+            // each piece runs on past it.
+            zone = rest.flatMap { $0.offset(by: 1.1 * small.radius + 0.05, arcTolerance: tol) }
+        }
+
+        var b = ToolpathBuilder(stock: context.stock, tool: small, startXY: nil)
+        let result = clear(regions: regions, tool: small, params: params, context: context, shapes: shapes, reached: reached,
+                           wallZone: zone, builder: &b)
+        var main = b.build(id: op.id, name: op.name, tool: small, rpm: small.cutting.spindleRPM, warnings: warnings + result.warnings)
+        main.reliefCorners = result.corners
+        main.restAreas = left?.flatMap(\.loops)
+        toolpaths.append(main)
+        return toolpaths
+    }
+
+    /// The clearance tool's toolpath, appended to `toolpaths`; returns the area it reached (nil when it doesn't fit).
+    /// `resting`: the pocket rests from earlier toolpaths too, so whether the clearance tool reaches it all isn't the
+    /// whole story.
+    private static func clearFirst(op: CAMOperation, params: PocketParams, large: Tool, regions: [Region], context: GenerationContext,
+                                   resting: Bool, warnings: inout [String], toolpaths: inout [Toolpath]) -> [Region]? {
         let small = op.tool
         let tol = context.arcTolerance
         func label(_ t: Tool) -> String { t.name.isEmpty ? "T\(t.number)" : t.name }
-        var warnings: [String] = []
         let larger = large.diameter > small.diameter + 1e-6
         if !larger {
             warnings.append("The clearance tool (\(label(large))) isn't larger than this toolpath's tool (\(label(small))), so it saves "
@@ -56,7 +154,6 @@ enum PocketGenerator {
         lp.depth.passDepth = nil
         lp.cornerRelief = nil
         let centres = regions.flatMap { $0.offset(by: -(large.radius + lp.allowance), arcTolerance: tol) }
-        var toolpaths: [Toolpath] = []
         var reached: [Region]?
         if centres.isEmpty {
             warnings.append("The clearance tool (\(label(large))) is too large to fit in the pocket, so this toolpath's tool clears "
@@ -71,18 +168,12 @@ enum PocketGenerator {
             // Without depths both toolpaths would say so; the operation's own does.
             if !tp.isEmpty { toolpaths.append(tp) }
             reached = centres.flatMap { $0.offset(by: large.radius, arcTolerance: tol) }
-            if larger, restRegion(regions, large: large, small: small, allowance: params.allowance, arcTolerance: tol).isEmpty {
+            if larger, !resting, restRegion(regions, large: large, small: small, allowance: params.allowance, arcTolerance: tol).isEmpty {
                 warnings.append("The clearance tool (\(label(large))) reaches the whole pocket, so this toolpath's tool only makes the "
                     + "pass round the walls. Cut the pocket with \(label(large)) alone and save a tool change.")
             }
         }
-
-        var b = ToolpathBuilder(stock: context.stock, tool: small, startXY: nil)
-        let result = clear(regions: regions, tool: small, params: params, context: context, shapes: shapes, reached: reached, builder: &b)
-        var main = b.build(id: op.id, name: op.name, tool: small, rpm: small.cutting.spindleRPM, warnings: warnings + result.warnings)
-        main.reliefCorners = result.corners
-        toolpaths.append(main)
-        return toolpaths
+        return reached
     }
 
     /// The parts of the finished pocket only `small` reaches: the regions (less the allowance) opened by its radius,
@@ -138,8 +229,9 @@ enum PocketGenerator {
     /// The clearing itself. `shapes` are the drawn shapes the regions came from, so corner choices can find their
     /// corners; also returns the wall corners that get reliefs (nil without corner reliefs). With `reached` (the area a
     /// clearance tool already cut), only the rest is cleared, with offset rings whatever the strategy, then the walls.
+    /// `wallZone` (with `reached`): the wall pass is cut only inside it, in pieces (`cutRest`).
     static func clear(regions: [Region], tool: Tool, params: PocketParams, context: GenerationContext, smoothBoundary: Bool = false,
-                      shapes: [DesignShape], reached: [Region]? = nil,
+                      shapes: [DesignShape], reached: [Region]? = nil, wallZone: [Region]? = nil,
                       builder b: inout ToolpathBuilder) -> (warnings: [String], corners: [ReliefCorner]?) {
         var warnings: [String] = []
         if regions.isEmpty {
@@ -205,8 +297,13 @@ enum PocketGenerator {
             var zAbove = -params.depth.startDepth
             for z in levels {
                 var first = true
-                cutTree(tree, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, reliefs: reliefs,
-                        first: &first, builder: &b)
+                if let wallZone {
+                    cutRest(tree, wallZone: wallZone, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe,
+                            reliefs: reliefs, toolRadius: r, first: &first, builder: &b)
+                } else {
+                    cutTree(tree, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, reliefs: reliefs,
+                            first: &first, builder: &b)
+                }
                 b.retract()
                 zAbove = z
             }
@@ -356,6 +453,80 @@ enum PocketGenerator {
             followLoop(loop, z: z, builder: &b)
         }
         first = false
+    }
+
+    /// Rest from earlier toolpaths at one depth: each wall ring's rest pieces (offset rings, inside out, as `cutTree`
+    /// cuts them), then its wall pass, but only the parts of it inside `wallZone` (`wallPieces`): a loop that's all
+    /// inside it as `cutLoop` cuts it, otherwise the pieces of it there, each fed in from a plunge where it's clear.
+    static func cutRest(_ nodes: [RingNode], wallZone zone: [Region], z: Double, zAbove: Double, params: PocketParams, stepover: Double,
+                        safe: [Region], reliefs: [CornerRelief.Relief], toolRadius r: Double, first: inout Bool,
+                        builder b: inout ToolpathBuilder) {
+        let ordered = nearestNeighborOrder(nodes, from: b.position.xy,
+                                           start: { $0.region.outer.closestPoint(to: b.position.xy).point },
+                                           end: { $0.region.outer.points[0] })
+        for node in ordered {
+            cutTree(node.children, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
+            for loop in node.region.holes + [node.region.outer] {
+                let oriented = params.direction == .climb ? loop : loop.reversed
+                let step = max(0.05, min(1, r / 2))
+                guard let pieces = wallPieces(CornerRelief.insert(reliefs, into: oriented), inside: zone, step: step) else {
+                    cutLoop(oriented, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, reliefs: reliefs,
+                            first: &first, builder: &b)
+                    continue
+                }
+                for piece in pieces where piece.count >= 2 {
+                    let start = Vec3(piece[0], z)
+                    if !first, abs(b.position.z - z) < 1e-6, b.position.xy.distance(to: piece[0]) <= stepover * 2.5,
+                       segmentInside(b.position.xy, piece[0], safe) {
+                        b.feed(start)
+                    } else {
+                        b.enter(at: start)
+                    }
+                    b.follow(piece.dropFirst().map { Vec3($0, z) })
+                    first = false
+                }
+            }
+        }
+    }
+
+    /// The parts of the closed `loop` inside `zone`, in the loop's direction, each running on to the first tested point
+    /// past the zone's edge at either end (points `step` apart along the loop are tested). nil when all of it is inside.
+    static func wallPieces(_ loop: Polyline, inside zone: [Region], step: Double) -> [[Vec2]]? {
+        let pts = loop.points
+        let n = pts.count
+        guard n >= 2 else { return [] }
+        func inZone(_ p: Vec2) -> Bool { zone.contains { $0.contains(p) } }
+        // Samples round the loop: each vertex (kept in a piece), then points along its segment (kept only at a piece's
+        // ends).
+        var samples: [(p: Vec2, vertex: Bool, inside: Bool)] = []
+        for i in 0..<n {
+            let a = pts[i], c = pts[(i + 1) % n]
+            let k = max(1, Int((a.distance(to: c) / step).rounded(.up)))
+            samples.append((a, true, inZone(a)))
+            for j in 1..<k {
+                let p = a.lerp(to: c, Double(j) / Double(k))
+                samples.append((p, false, inZone(p)))
+            }
+        }
+        guard let out = samples.firstIndex(where: { !$0.inside }) else { return nil }
+        guard samples.contains(where: \.inside) else { return [] }
+        let m = samples.count
+        var pieces: [[Vec2]] = []
+        var current: [Vec2] = []
+        for s in 1...m {
+            let k = (out + s) % m, prev = (out + s - 1) % m
+            let here = samples[k]
+            if here.inside {
+                if current.isEmpty { current = [samples[prev].p] }
+                if here.vertex || !samples[(k + 1) % m].inside || !samples[prev].inside { current.append(here.p) }
+            } else if !current.isEmpty {
+                current.append(here.p)
+                pieces.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { pieces.append(current) }
+        return pieces
     }
 
     private static func followLoop(_ loop: Polyline, z: Double, builder b: inout ToolpathBuilder) {
