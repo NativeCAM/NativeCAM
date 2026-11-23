@@ -1,0 +1,117 @@
+{
+  "displayUnits" : "mm",
+  "formatVersion" : 14,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : false,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Bits",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "B1750000-0000-4000-8000-000000001022",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 16,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Too deep",
+      "shapeIDs" : [
+        "B1750000-0000-4000-8000-000000001020"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2000,
+          "plungeRate" : 500,
+          "spindleRPM" : 18000,
+          "stepdown" : 3,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 12.7,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 12.7,
+        "id" : "B1750000-0000-4000-8000-000000001021",
+        "includedAngle" : 28,
+        "name" : "Dovetail",
+        "notes" : "",
+        "number" : 8,
+        "shankDiameter" : 6.35,
+        "shape" : "dovetail",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "B1750000-0000-4000-8000-000000001020",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 40,
+          "width" : 40
+        }
+      },
+      "layer" : "Default",
+      "name" : "Square",
+      "position" : {
+        "x" : 30,
+        "y" : 30
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 100,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 25,
+    "width" : 100,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}
