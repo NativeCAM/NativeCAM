@@ -202,8 +202,9 @@ public struct NestJob: Sendable {
     // MARK: Holes (part in part)
 
     /// Finds each closed part's holes: openings inside its outlines (with nothing of the part inside them) that its
-    /// toolpaths cut right through. Each gets how far those toolpaths reach into it from its edge (the cutter's edge),
-    /// and the run-order position of the first toolpath that frees it (`freedAt`).
+    /// toolpaths cut free, right through the material and all the way round from the inside (`holeCut`). Each gets
+    /// how far those toolpaths reach into it from its edge (the cutter's edge), and the run-order position of the first
+    /// toolpath that frees it, the hole's cut or the part's cut-out (`freedAt`).
     static func measureHoles(_ parts: inout [Part], toolpaths: [Toolpath], in project: Project) {
         let thickness = project.stock.thickness
         let index = Dictionary(project.operations.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -212,55 +213,59 @@ public struct NestJob: Sendable {
             let candidates = holeLoops(part, in: project)
             guard !candidates.isEmpty else { continue }
             let shapeIDs = Set(part.shapeIDs)
-            let ops = project.operations.filter { !Set($0.shapeIDs).isDisjoint(with: shapeIDs) }
-            let opIDs = Set(ops.map(\.id))
+            let opIDs = Set(project.operations.filter { !Set($0.shapeIDs).isDisjoint(with: shapeIDs) }.map(\.id))
             let mine = toolpaths.filter { opIDs.contains($0.sourceOperationID) && ($0.sheet ?? 0) == part.sheet }
             // Toolpaths on the part that cut right through somewhere: the cut-out frees everything inside it.
             let through = Set(mine.filter { tp in tp.cuttingExtents.map { $0.min.z <= -thickness + 0.05 } ?? false }
                 .map(\.sourceOperationID))
             var holes: [Nesting.Hole] = []
             for loop in candidates {
-                let cut = cutInto(loop, toolpaths: mine)
-                guard cut.deepest <= -thickness + 0.05, cut.reach > 0 else { continue }
+                let cut = holeCut(loop, toolpaths: mine, thickness: thickness)
+                guard cut.freed else { continue }
                 // Freed by whatever cuts into it or cuts the part out: the first of those in the run order.
-                let freeing = cut.operations.union(through).compactMap { index[$0] }
-                guard let first = freeing.min() else { continue }
+                guard let first = cut.operations.union(through).compactMap({ index[$0] }).min() else { continue }
                 var hole = Nesting.Hole(outline: loop, reach: cut.reach)
                 hole.freedAt = first
-                hole.freedByProfile = { if case .profile = project.operations[first].kind { true } else { false } }()
+                if case .profile = project.operations[first].kind { hole.freedByProfile = true }
                 holes.append(hole)
             }
             parts[p].holes = holes
         }
     }
 
-    /// The loops inside a part's outlines with none of the part inside them: its holes, from its shapes' own fill.
+    /// The loops inside a part's outlines that its closed vectors, filled even-odd as a profile reads them, leave
+    /// open, with none of the part inside them: its holes.
     static func holeLoops(_ part: Part, in project: Project) -> [Polyline] {
-        var loops: [Polyline] = []
+        var closed: [Polyline] = []
         for piece in part.pieces {
             guard let shape = project.shape(id: piece.shapeID) else { continue }
             let all = shape.polylines(tolerance: 0.05)
             let lines = piece.paths.map { $0.filter { $0 < all.count }.map { all[$0] } } ?? all
-            let closed = lines.filter { $0.isClosed && $0.count >= 3 && $0.area > 1e-6 }
-            for region in Region.build(from: closed, fill: .evenOdd) { loops += region.loops.map { $0 } }
+            closed += lines.filter { $0.isClosed && $0.count >= 3 && $0.area > 1e-6 }
         }
-        let material = Clipper.union(loops.map { $0 })
-        let holes = material.filter { $0.signedArea < 0 }.map { $0.oriented(counterClockwise: true) }
-        let islands = material.filter { $0.signedArea > 0 }
+        let regions = Region.build(from: closed, fill: .evenOdd)
+        let holes = regions.flatMap(\.holes).map { $0.oriented(counterClockwise: true) }
         // A hole with some of the part inside it (an island) isn't free to use.
         return holes.filter { hole in
-            !islands.contains { island in
-                guard let probe = island.interiorPoint() else { return false }
-                return hole.bounds.contains(probe) && hole.contains(probe) && island.area < hole.area
+            !regions.contains { island in
+                guard island.outer.area < hole.area, let probe = island.outer.interiorPoint() else { return false }
+                return hole.bounds.contains(probe) && hole.contains(probe)
             }
         }
     }
 
-    /// How far `toolpaths` cut into a hole from its edge (to the cutter's edge, mm; 0 when they don't reach it), how
-    /// deep they go where they do (design Z), and the operations that do.
-    static func cutInto(_ hole: Polyline, toolpaths: [Toolpath]) -> (reach: Double, deepest: Double, operations: Set<UUID>) {
-        var reach = 0.0, deepest = 0.0
+    /// What `toolpaths` do to a hole: how far they cut into it from its edge (to the cutter's edge, mm; 0 when they
+    /// don't reach it), the operations that do, and whether they cut it free. Free means a cutter running inside it,
+    /// along its edge, reaches every part of the edge (all but a few corners a round bit can't) and cuts right through
+    /// the material along nearly all of it (tabs aside). A loop cut from outside (a part drawn inside another), drilled
+    /// or only engraved is no hole.
+    static func holeCut(_ hole: Polyline, toolpaths: [Toolpath], thickness: Double)
+        -> (reach: Double, freed: Bool, operations: Set<UUID>) {
+        var reach = 0.0
         var ops = Set<UUID>()
+        // Cutter centres inside the hole, about a radius in from its edge: a cut along the edge from inside.
+        struct Edge { var at: Vec2; var radius: Double; var through: Bool }
+        var edge: [Edge] = []
         let box = hole.bounds
         for tp in toolpaths {
             let r = tp.tool.radius
@@ -269,11 +274,14 @@ public struct NestJob: Sendable {
             func visit(_ q: Vec3) {
                 guard q.z < -0.01, near.contains(q.xy) else { return }
                 let d = hole.closestPoint(to: q.xy).distance
-                let into = (hole.contains(q.xy) ? d : -d) + r
+                let inside = hole.contains(q.xy)
+                let into = (inside ? d : -d) + r
                 guard into > 1e-6 else { return }
                 reach = max(reach, into)
-                deepest = min(deepest, q.z)
                 hit = true
+                if inside && d >= 0.5 * r - 0.01 && d <= r + 0.5 {
+                    edge.append(Edge(at: q.xy, radius: r, through: q.z <= -thickness + 0.05))
+                }
             }
             var pos = tp.start
             for m in tp.motions {
@@ -282,15 +290,44 @@ public struct NestJob: Sendable {
                 case .rapid, .dwell:
                     continue
                 case .arcCW, .arcCCW:
-                    for q in m.samples(from: pos, maxStep: 1) { visit(q) }
+                    for q in m.samples(from: pos, maxStep: 0.5) { visit(q) }
                 case .feed:
-                    let n = max(1, Int((pos.distance(to: m.end) / 2).rounded(.up)))
+                    // Only the part of the move near the hole needs the fine steps.
+                    guard Rect2(min: Vec2(min(pos.x, m.end.x), min(pos.y, m.end.y)), max: Vec2(max(pos.x, m.end.x), max(pos.y, m.end.y))).intersects(near) else { continue }
+                    let n = max(1, Int((pos.distance(to: m.end) / 0.5).rounded(.up)))
                     for k in 1...n { visit(pos.lerp(to: m.end, Double(k) / Double(n))) }
                 }
             }
             if hit { ops.insert(tp.sourceOperationID) }
         }
-        return (reach, deepest, ops)
+        guard !edge.isEmpty else { return (reach, false, ops) }
+        // Points round the hole's edge, every 2 mm (at least 24).
+        let perimeter = hole.length
+        let count = max(24, min(4000, Int((perimeter / 2).rounded(.up))))
+        let samples = (0..<count).map { hole.point(atDistance: perimeter * Double($0) / Double(count)) }
+        // A grid of the edge cuts, for finding those near each point.
+        let cell = max(0.5, (edge.map(\.radius).max() ?? 1) * 1.5 + 0.1)
+        struct Key: Hashable { var x: Int; var y: Int }
+        func key(_ p: Vec2) -> Key { Key(x: Int((p.x / cell).rounded(.down)), y: Int((p.y / cell).rounded(.down))) }
+        var grid: [Key: [Int]] = [:]
+        for (i, e) in edge.enumerated() { grid[key(e.at), default: []].append(i) }
+        var reached = 0, cutThrough = 0
+        for s in samples {
+            let k = key(s)
+            var any = false, through = false
+            for dx in -1...1 {
+                for dy in -1...1 {
+                    for i in grid[Key(x: k.x + dx, y: k.y + dy)] ?? [] where edge[i].at.distance(to: s) <= edge[i].radius * 1.5 + 0.1 {
+                        any = true
+                        if edge[i].through { through = true }
+                    }
+                }
+            }
+            if any { reached += 1 }
+            if through { cutThrough += 1 }
+        }
+        let freed = Double(reached) >= 0.95 * Double(count) && Double(cutThrough) >= 0.8 * Double(count)
+        return (reach, freed, ops)
     }
 
     /// Groups the parts by the toolpaths that cut them, and says which groups each hole takes: those whose every
