@@ -421,6 +421,48 @@ final class Workspace {
         return v
     }
 
+    // MARK: Rest areas (the selected rest toolpath's)
+
+    /// The selected toolpath's rest areas: where a 3D rest pass's bit goes, or what a pocket resting from earlier
+    /// toolpaths has left to clear. nil when it isn't a rest toolpath or nothing's been generated.
+    func selectedRestAreas(_ project: Project) -> [Polyline]? {
+        guard let id = selectedOperationID else { return nil }
+        return job?.toolpaths.last { $0.sourceOperationID == id && $0.restAreas != nil }?.restAreas
+    }
+
+    /// Line geometry shading the selected toolpath's rest areas: their outlines and 45° hatching inside them, in amber.
+    private func restAreaLines(_ project: Project) -> [LineVertex] {
+        guard !isSimulating, rotaryAxis == nil, let loops = selectedRestAreas(project), !loops.isEmpty else { return [] }
+        var v: [LineVertex] = []
+        let z: Float = 0.055
+        let edge = SIMD4<Float>(1, 0.76, 0.2, 0.95), hatch = SIMD4<Float>(1, 0.76, 0.2, 0.55)
+        func line(_ a: Vec2, _ b: Vec2, _ c: SIMD4<Float>) {
+            v.append(LineVertex(SIMD3(Float(a.x), Float(a.y), z), c))
+            v.append(LineVertex(SIMD3(Float(b.x), Float(b.y), z), c))
+        }
+        for loop in loops {
+            for i in 0..<loop.segmentCount {
+                let (a, b) = loop.segment(i)
+                line(a, b, edge)
+            }
+        }
+        // Hatching a fixed distance apart on the material, at least 100 lines across the stock's diagonal.
+        let bounds = loops.bounds
+        let gap = max(0.4, min(2, hypot(project.stock.width, project.stock.height) / 100))
+        var raw: [Polyline] = []
+        var t = -bounds.height
+        while t <= bounds.width {
+            let a = Vec2(bounds.min.x + t, bounds.min.y), b = Vec2(bounds.min.x + t + bounds.height, bounds.max.y)
+            raw.append(Polyline([a, b], closed: false))
+            t += gap * 2.squareRoot()
+        }
+        for piece in Clipper.clipOpen(raw, to: loops, fill: .evenOdd) {
+            guard let a = piece.points.first, let b = piece.points.last else { continue }
+            line(a, b, hatch)
+        }
+        return v
+    }
+
     // MARK: Canvas drag preview (committed to the document once, on mouse-up, so it's a single undo step)
 
     private(set) var dragOffset: Vec2?
@@ -480,6 +522,7 @@ final class Workspace {
             }
         }
         v += reliefMarkLines(project)
+        v += restAreaLines(project)
         v += wrapGuideLines(project)
         v += tileLines(project)
         vectorLines = v

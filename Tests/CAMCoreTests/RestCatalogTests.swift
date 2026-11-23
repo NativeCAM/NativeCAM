@@ -95,6 +95,16 @@ struct RestCatalogTests {
         try Self.checkGolden(p, "decoded-rest-3d-v17")
     }
 
+    /// With `NATIVECAM_REST_PROJECTS=<dir>`, writes the demo relief with its rest pass and the pocket rest job there, for
+    /// checking the app with `-NativeCAMSnapshotProject`. Off in normal runs.
+    @Test func writeProjectsForTheApp() throws {
+        guard let dir = ProcessInfo.processInfo.environment["NATIVECAM_REST_PROJECTS"] else { return }
+        let url = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try RestFinishingTests.reliefRest().encoded().write(to: url.appendingPathComponent("relief-rest.nativecam"))
+        try Self.pocketRest().encoded().write(to: url.appendingPathComponent("pocket-rest.nativecam"))
+    }
+
     // MARK: Edge cases
 
     /// The valley with its two finishes, with `change` applied.
