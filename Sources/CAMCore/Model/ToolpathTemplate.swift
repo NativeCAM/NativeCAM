@@ -194,6 +194,17 @@ extension Tool {
         if shape.usesAngle && abs(includedAngle - other.includedAngle) > 0.05 { return false }
         if shape.isTapered && !near(tipDiameter, other.tipDiameter) { return false }
         if shape.usesCornerRadius && !near(cornerRadius, other.cornerRadius) { return false }
+        switch shape {
+        case .taperedBallNose:
+            if !near(tipDiameter, other.tipDiameter) || abs(includedAngle - other.includedAngle) > 0.05 { return false }
+        case .dovetail:
+            if abs(includedAngle - other.includedAngle) > 0.05 || !near(fluteLength, other.fluteLength) { return false }
+        case .form:
+            let a = cuttingEdge, b = other.cuttingEdge
+            if a.count != b.count || zip(a, b).contains(where: { !near($0.x, $1.x) || !near($0.y, $1.y) }) { return false }
+        default:
+            break
+        }
         return true
     }
 }

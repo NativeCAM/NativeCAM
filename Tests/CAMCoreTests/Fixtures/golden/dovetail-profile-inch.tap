@@ -1,0 +1,48 @@
+(Dovetail profile)
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
+(Material: Plywood X=6.0000 Y=4.0000 Z=0.7500 in)
+(Z zero: Material top   XY zero: Lower left)
+(Program extents: X-0.5000 to X6.5000  Y0.7500 to Y3.5000  Z-0.3750 to Z0.1000)
+(Safe Z = 0.5000)
+(Tools used:)
+(  T4 Dovetail - D0.5000 Dovetail)
+(Toolpaths:)
+(  1. Dovetail pin - T4)
+(  2. Sliding dovetail - T4)
+G00 G94 G20 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T4 Dovetail)
+T4M6
+M07
+S18000 M03
+(Toolpath: Dovetail pin  Tool: T4 Dovetail)
+G00 Z0.5000
+G00 X4.5000 Y1.3868
+G00 Z0.1000
+G01 Z-0.3750 F19.7
+G01 Y1.5000 F78.7
+G01 X1.5000
+G02 X1.2500 Y1.7500 I0.0000 J0.2500
+G01 Y3.2500
+G02 X1.5000 Y3.5000 I0.2500 J0.0000
+G01 X4.5000
+G02 X4.7500 Y3.2500 I0.0000 J-0.2500
+G01 Y1.7500
+G02 X4.5000 Y1.5000 I-0.2500 J0.0000
+G01 X4.5045 Y1.3869
+G00 Z0.5000
+(Toolpath: Sliding dovetail  Tool: T4 Dovetail)
+G00 Z0.5000
+G00 X-0.5000 Y0.7500
+G00 Z0.1000
+G01 Z-0.2500 F19.7
+G01 X6.5000 F78.7
+G00 Z0.5000
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+M05
+M09
+M30

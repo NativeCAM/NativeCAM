@@ -75,7 +75,7 @@ public struct MaterialSimulator: Sendable {
     private mutating func kernel(for tool: Tool) -> Kernel {
         if let k = kernels[tool.id] { return k }
         let table = (0...512).map { Float(tool.profileHeight(atRadius: tool.radius * Double($0) / 512) ?? 0) }
-        let k = Kernel(table: table, radius: tool.radius, flat: tool.shape == .flatEndMill || tool.shape == .surfacing)
+        let k = Kernel(table: table, radius: tool.radius, flat: tool.isFlatBottomed)
         kernels[tool.id] = k
         return k
     }
@@ -180,8 +180,11 @@ public struct MaterialSimulator: Sendable {
         let cols = grid.columns
         let ox = grid.origin.x, oy = grid.origin.y
         let R2 = R * R
-        // Flat-bottomed tools are a common fast path.
-        let flat = tool.shape == .flatEndMill || tool.shape == .surfacing
+        // Flat-bottomed tools are a common fast path. A form bit's profile is read from its kernel's table (working it
+        // out from the cutting edge for every cell would be slow); the other shapes keep their exact heights.
+        let flat = tool.isFlatBottomed
+        let table: [Float]? = tool.shape == .form ? kernel(for: tool).table : nil
+        let tableScale = Float(512 / max(R, 1e-9))
         grid.heights.withUnsafeMutableBufferPointer { h in
             for r in r0...r1 {
                 let py = oy + Double(r) * cs
@@ -197,6 +200,10 @@ public struct MaterialSimulator: Sendable {
                     let v: Float
                     if flat {
                         v = zf
+                    } else if let t = table {
+                        let x = Float(d2.squareRoot()) * tableScale
+                        let k = min(511, Int(x))
+                        v = zf + t[k] + (t[k + 1] - t[k]) * (x - Float(k))
                     } else {
                         guard let hh = tool.profileHeight(atRadius: d2.squareRoot()) else { continue }
                         v = zf + Float(hh)

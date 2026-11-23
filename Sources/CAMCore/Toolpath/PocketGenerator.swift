@@ -147,7 +147,7 @@ enum PocketGenerator {
             return (warnings, nil)
         }
         let r = tool.radius
-        let stepover = max(0.05, tool.diameter * (params.stepoverFraction ?? tool.cutting.stepoverFraction))
+        let stepover = max(0.05, tool.stepoverBasis * (params.stepoverFraction ?? tool.cutting.stepoverFraction))
         if stepover > tool.diameter * 0.95 {
             warnings.append("Stepover is larger than the tool diameter; material will be left behind.")
         }

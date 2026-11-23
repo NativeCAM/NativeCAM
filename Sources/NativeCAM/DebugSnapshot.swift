@@ -355,7 +355,8 @@ enum DebugSnapshot {
         return result
     }
 
-    /// Job Setup, each toolpath's inspector, the first shape's and the machine setup assistant's setup step, to inspector-*.png.
+    /// Job Setup, each toolpath's inspector, the first shape's and the machine setup assistant's setup step, to inspector-*.png,
+    /// and the tool editor for each bit the toolpaths use, to tool-T*.png.
     @MainActor
     private static func renderInspectors(_ project: Project, workspace ws: Workspace, out: URL, spin: (Double) -> Void) {
         func render(_ view: some View, size: NSSize, name: String) {
@@ -372,6 +373,12 @@ enum DebugSnapshot {
         }
         render(MachineSetupView(offerUseHere: false, start: ("generic", .setup), height: 1100) { _, _, _ in },
                size: NSSize(width: 640, height: 1100), name: "inspector-machine-setup.png")
+        // The Tool Library's editor for each bit the toolpaths use, with its live drawing (tool-T<number>.png).
+        var seen = Set<UUID>()
+        for op in project.operations where seen.insert(op.tool.id).inserted {
+            render(ToolEditor(tool: .constant(op.tool), units: project.displayUnits), size: NSSize(width: 720, height: 1100),
+                   name: "tool-T\(op.tool.number).png")
+        }
     }
 
     /// Logs what the Tool Library's Reset to Starter Library… dialog and Add Missing Starter Tools report say, for a

@@ -166,7 +166,7 @@ public struct RadialSimulator: Sendable {
     private mutating func kernel(for tool: Tool) -> MaterialSimulator.Kernel {
         if let k = kernels[tool.id] { return k }
         let table = (0...512).map { Float(tool.profileHeight(atRadius: tool.radius * Double($0) / 512) ?? 0) }
-        let k = MaterialSimulator.Kernel(table: table, radius: tool.radius, flat: tool.shape == .flatEndMill || tool.shape == .surfacing)
+        let k = MaterialSimulator.Kernel(table: table, radius: tool.radius, flat: tool.isFlatBottomed)
         kernels[tool.id] = k
         return k
     }

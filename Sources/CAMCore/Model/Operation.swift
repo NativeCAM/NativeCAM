@@ -760,7 +760,7 @@ public struct Finish3DParams: Hashable, Sendable {
     public func overlapInUse(tool: Tool) -> Double { max(0, overlap ?? Self.autoOverlap(tool: tool)) }
     /// Waterline Z step for `tool`: stepover × tan(steep angle).
     public func waterlineStep(tool: Tool) -> Double {
-        max(0.01, tool.diameter * stepoverFraction) * tan(steepAngleInUse.radians)
+        max(0.01, tool.stepoverBasis * stepoverFraction) * tan(steepAngleInUse.radians)
     }
 
     /// Format 10 adds the waterline, steep-and-shallow and pencil strategies and cross-hatching: a format-9 build would
@@ -906,11 +906,11 @@ public struct RotaryFinishParams: Hashable, Codable, Sendable {
     }
 
     /// The finish's stepover with `tool`, mm.
-    public func stepover(_ tool: Tool) -> Double { max(0.01, stepoverFraction * tool.diameter) }
+    public func stepover(_ tool: Tool) -> Double { max(0.01, stepoverFraction * tool.stepoverBasis) }
 
     /// The layers' stepover with `tool`, mm: never finer than the finish's.
     public func layerStepover(_ tool: Tool) -> Double {
-        max(stepover(tool), (layerStepoverFraction ?? Self.defaultLayerStepover) * tool.diameter)
+        max(stepover(tool), (layerStepoverFraction ?? Self.defaultLayerStepover) * tool.stepoverBasis)
     }
 
     /// The deepest cut per pass with `tool`, mm.
@@ -979,7 +979,7 @@ public struct RotaryRoughParams: Hashable, Codable, Sendable {
     public func stepdown(_ tool: Tool) -> Double { max(0.05, stepdown ?? tool.cutting.stepdown) }
 
     /// Stepover with `tool`, mm.
-    public func stepover(_ tool: Tool) -> Double { max(0.05, (stepoverFraction ?? tool.cutting.stepoverFraction) * tool.diameter) }
+    public func stepover(_ tool: Tool) -> Double { max(0.05, (stepoverFraction ?? tool.cutting.stepoverFraction) * tool.stepoverBasis) }
 
     /// The most a flat bottom (and a bull nose's corners) leaves standing on a round surface `radius` from the axis,
     /// mm: across its width the bottom is a plane tangent to the round, which falls away under it to √(ρ² + y²) − ρ
@@ -1131,8 +1131,8 @@ public struct FlutingParams: Hashable, Codable, Sendable {
     /// Tool shapes that leave a rounded or V-shaped flute (a core box bit is a ball nose in the tool library).
     public static func suits(_ shape: ToolShape) -> Bool {
         switch shape {
-        case .ballNose, .bullNose, .vBit, .engraving: true
-        case .flatEndMill, .surfacing, .drill: false
+        case .ballNose, .bullNose, .vBit, .engraving, .taperedBallNose: true
+        case .flatEndMill, .surfacing, .drill, .form, .dovetail: false
         }
     }
 
@@ -1323,8 +1323,15 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// start depth or inlay plug is format 6 (see `VCarveParams.requiredFormatVersion`). 3D rotary finishing is format 7.
     /// Chamfers, flutes and prisms are format 8 (older builds can't read them). 3D finishing other than a single raster
     /// is format 10 (see `Finish3DParams.requiredFormatVersion`). 3D rotary roughing is format 12. Adaptive pocket
-    /// clearing is format 13. A whole-board inlay plug is format 14.
+    /// clearing is format 13. A whole-board inlay plug is format 14. A tapered ball nose, form or dovetail bit, as the
+    /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`).
     public var requiredFormatVersion: Int {
+        var bits = tool.shape.requiredFormatVersion
+        switch kind {
+        case let .pocket(p): bits = max(bits, p.clearanceTool?.shape.requiredFormatVersion ?? 1)
+        case let .vcarve(p): bits = max(bits, p.clearanceTool?.shape.requiredFormatVersion ?? 1)
+        default: break
+        }
         let own: Int
         switch kind {
         case let .pocket(p): own = p.requiredFormatVersion
@@ -1336,7 +1343,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case let .finish3D(p): own = p.requiredFormatVersion
         default: own = 1
         }
-        return max(own, indexAngles == nil ? 1 : 3)
+        return max(own, indexAngles == nil ? 1 : 3, bits)
     }
 }
 

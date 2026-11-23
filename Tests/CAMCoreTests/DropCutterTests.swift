@@ -48,6 +48,8 @@ struct DropCutterTests {
         bit(tool(.bullNose, diameter: 6.35, corner: 1.5)),
         bit(tool(.bullNose, diameter: 12.7, corner: 6.35)), // all corner: a ball
         taperedBall(radius: 3.175, ball: 0.5, halfAngle: 10 * .pi / 180),
+        // The Tool shape (#82): dropped as the same profile, its reference from `Tool.profileHeight`.
+        bit(BitShapeTests.taperedBall(tipRadius: 0.5, perSide: 8, flute: 15, shank: 6.35)),
     ]
 
     // MARK: References

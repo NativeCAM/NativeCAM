@@ -35,11 +35,9 @@ final class ToolLibraryStore {
 
     func add(_ shape: ToolShape) -> Tool {
         let next = (tools.map(\.number).max() ?? 0) + 1
-        let template = ToolLibrary.starter.tools.first { $0.shape == shape } ?? ToolLibrary.starter.tools[0]
-        var t = template
+        var t = ToolLibrary.template(for: shape)
         t.id = UUID()
         t.number = next
-        t.shape = shape
         t.name = "New \(shape.label)"
         tools.append(t)
         return t
@@ -296,23 +294,16 @@ struct ToolEditor: View {
                     IntField(title: "Number of flutes", value: $tool.fluteCount, range: 1...8)
                 }
                 Section("Geometry") {
-                    LengthField(title: tool.shape.isTapered ? "Max diameter" : "Diameter", mm: $tool.diameter, units: units, minimum: 0.1)
-                    if tool.shape.usesAngle {
-                        NumberField(title: "Included angle", value: $tool.includedAngle, suffix: "°", decimals: 1, range: 5...170)
-                    }
-                    if tool.shape.isTapered {
-                        LengthField(title: "Tip diameter", mm: $tool.tipDiameter, units: units, minimum: 0)
-                        LabeledContent("V depth to full diameter", value: "\(units.format(tool.taperHeight)) \(units.symbol)")
+                    switch tool.shape {
+                    case .taperedBallNose, .form, .dovetail:
+                        ShapeGeometryFields(tool: $tool, units: units)
+                    default:
+                        classicGeometry
                     }
                     if tool.fluteDirection == .compression {
                         LengthField(title: "Upcut length", mm: Binding(get: { tool.upcutLength ?? tool.diameter }, set: { tool.upcutLength = max(0.1, $0) }),
                                     units: units, help: "First passes go at least this deep (+0.5 mm) so the top face doesn't fray")
                     }
-                    if tool.shape.usesCornerRadius {
-                        LengthField(title: "Corner radius", mm: $tool.cornerRadius, units: units, minimum: 0)
-                    }
-                    LengthField(title: "Cutting length", mm: $tool.fluteLength, units: units, minimum: 0.1)
-                    LengthField(title: "Shank diameter", mm: $tool.shankDiameter, units: units, minimum: 0.1)
                     LengthField(title: "Stickout", mm: $tool.stickout, units: units, minimum: 0.1)
                 }
                 Section("Feeds & Speeds") {
@@ -320,7 +311,7 @@ struct ToolEditor: View {
                     FeedField(title: "Feed", mmPerMin: $tool.cutting.feedRate, units: units)
                     FeedField(title: "Plunge", mmPerMin: $tool.cutting.plungeRate, units: units)
                     LengthField(title: "Stepdown", mm: $tool.cutting.stepdown, units: units, minimum: 0.05)
-                    PercentField(title: "Stepover", fraction: $tool.cutting.stepoverFraction)
+                    PercentField(title: tool.shape == .taperedBallNose ? "Stepover (of tip)" : "Stepover", fraction: $tool.cutting.stepoverFraction)
                     LabeledContent("Chip load", value: "\(units.format(tool.chipLoad, decimals: 4)) \(units.symbol)/tooth")
                     LengthField(title: "Set feed from chip load", mm: Binding(get: { tool.chipLoad }, set: { tool.cutting.feedRate = tool.feedRate(forChipLoad: $0) }),
                                 units: units, help: "Type a chip load to compute the feed")
@@ -331,6 +322,23 @@ struct ToolEditor: View {
             }
             .formStyle(.grouped)
             .frame(minWidth: 380)
+            .onChange(of: tool.shape) { _, shape in
+                // A shape's own dimensions start from a typical bit of that kind.
+                if shape == .form, tool.form == nil {
+                    let t = ToolLibrary.template(for: .form)
+                    tool.form = t.form
+                    tool.fluteLength = max(tool.fluteLength, t.fluteLength)
+                }
+                if shape == .taperedBallNose, tool.tipDiameter <= 0 || tool.includedAngle / 2 > 45 {
+                    let t = ToolLibrary.template(for: .taperedBallNose)
+                    tool.tipDiameter = t.tipDiameter
+                    tool.includedAngle = t.includedAngle
+                }
+                if shape == .dovetail, tool.dovetailSmallDiameter <= 0 || tool.includedAngle / 2 > 45 {
+                    tool.includedAngle = ToolLibrary.template(for: .dovetail).includedAngle
+                }
+                tool.fitDiameterToShape()
+            }
             VStack(spacing: 8) {
                 ToolShapeView(tool: tool, units: units)
                     .frame(width: 240, height: 380)
@@ -338,12 +346,147 @@ struct ToolEditor: View {
                 Text(tool.name).font(.headline).multilineTextAlignment(.center)
                 Text("\(tool.shape.label) · \(tool.fluteCount) flute \(tool.fluteDirection.label.lowercased())")
                     .font(.callout).foregroundStyle(.secondary)
+                let detail = tool.shapeDetail { "\(units.format($0)) \(units.symbol)" }
+                if !detail.isEmpty {
+                    Text(detail.trimmingCharacters(in: CharacterSet(charactersIn: " ()")))
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
                 Spacer()
             }
             .padding(.horizontal, 12)
             .frame(width: 280)
             .background(.background.secondary)
         }
+    }
+}
+
+extension ToolEditor {
+    /// Diameter, angle, tip and corner for the end mills, ball and bull noses, V-bits, engravers, surfacing bits and drills.
+    @ViewBuilder var classicGeometry: some View {
+        LengthField(title: tool.shape.isTapered ? "Max diameter" : "Diameter", mm: $tool.diameter, units: units, minimum: 0.1)
+        if tool.shape.usesAngle {
+            NumberField(title: "Included angle", value: $tool.includedAngle, suffix: "°", decimals: 1, range: 5...170)
+        }
+        if tool.shape.isTapered {
+            LengthField(title: "Tip diameter", mm: $tool.tipDiameter, units: units, minimum: 0)
+            LabeledContent("V depth to full diameter", value: "\(units.format(tool.taperHeight)) \(units.symbol)")
+        }
+        if tool.shape.usesCornerRadius {
+            LengthField(title: "Corner radius", mm: $tool.cornerRadius, units: units, minimum: 0)
+        }
+        LengthField(title: "Cutting length", mm: $tool.fluteLength, units: units, minimum: 0.1)
+        LengthField(title: "Shank diameter", mm: $tool.shankDiameter, units: units, minimum: 0.1)
+    }
+}
+
+/// The dimensions of a tapered ball nose, form or dovetail bit. Each change keeps the diameter the others give
+/// (`Tool.fitDiameterToShape`), so the drawing and the toolpaths follow the bit as described.
+struct ShapeGeometryFields: View {
+    @Binding var tool: Tool
+    let units: LengthUnit
+    @State private var pointsText = ""
+
+    /// A binding that refits the diameter after every change.
+    private func fitting(_ key: WritableKeyPath<Tool, Double>, scale: Double = 1, minimum: Double = 0.01) -> Binding<Double> {
+        Binding(get: { tool[keyPath: key] * scale }, set: {
+            tool[keyPath: key] = max(minimum, $0) / scale
+            tool.fitDiameterToShape()
+        })
+    }
+
+    private var form: FormProfile { tool.form ?? ToolLibrary.template(for: .form).form! }
+
+    private func setForm(_ change: (inout FormProfile) -> Void) {
+        var f = form
+        change(&f)
+        tool.form = f
+        // The flutes reach at least the top of the profile.
+        tool.fluteLength = max(tool.fluteLength, f.profileHeight)
+        tool.fitDiameterToShape()
+    }
+
+    private func formLength(_ title: String, _ key: WritableKeyPath<FormProfile, Double>, minimum: Double = 0.1, help: String? = nil) -> some View {
+        LengthField(title: title, mm: Binding(get: { form[keyPath: key] }, set: { v in setForm { $0[keyPath: key] = max(minimum, v) } }),
+                    units: units, help: help)
+    }
+
+    var body: some View {
+        switch tool.shape {
+        case .taperedBallNose:
+            LengthField(title: "Tip radius", mm: fitting(\.tipDiameter, scale: 0.5), units: units)
+            NumberField(title: "Taper per side", value: Binding(get: { tool.includedAngle / 2 }, set: {
+                tool.includedAngle = 2 * min(45, max(0.1, $0))
+                tool.fitDiameterToShape()
+            }), suffix: "°", decimals: 2, range: 0.1...45)
+            LengthField(title: "Cutting length", mm: fitting(\.fluteLength, minimum: 0.1), units: units)
+            LengthField(title: "Shank diameter", mm: fitting(\.shankDiameter, minimum: 0.1), units: units)
+            LabeledContent("Diameter at the top of the flutes", value: "\(units.format(tool.diameter)) \(units.symbol)")
+        case .form:
+            Picker("Profile", selection: Binding(get: { form.kind }, set: { k in setForm { $0.kind = k } })) {
+                ForEach(FormProfile.Kind.allCases) { Text($0.label).tag($0) }
+            }
+            switch form.kind {
+            case .roundover, .cove:
+                formLength("Radius", \.radius)
+            case .ogee:
+                formLength("Lower (cove) radius", \.radius)
+                formLength("Upper (roundover) radius", \.upperRadius)
+            case .custom:
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Profile points: radius, height above the tip (\(units.symbol)), from the tip up, one per line")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $pointsText)
+                        .font(.body.monospacedDigit())
+                        .frame(minHeight: 80)
+                        .onAppear { pointsText = Self.text(form.points, units) }
+                        .onChange(of: pointsText) { _, text in
+                            if let pts = Self.points(text, units), pts != form.points { setForm { $0.points = pts } }
+                        }
+                }
+            }
+            if form.kind != .custom {
+                formLength("Pilot diameter", \.pilotDiameter, minimum: 0,
+                           help: "Diameter at the bottom of the profile, where a bearing or pilot rides the edge")
+            }
+            LengthField(title: "Cutting length", mm: Binding(get: { tool.fluteLength }, set: { v in
+                tool.fluteLength = max(v, form.profileHeight, 0.1)
+                tool.fitDiameterToShape()
+            }), units: units)
+            LengthField(title: "Shank diameter", mm: $tool.shankDiameter, units: units, minimum: 0.1)
+            LabeledContent("Diameter", value: "\(units.format(tool.diameter)) \(units.symbol)")
+        case .dovetail:
+            LengthField(title: "Diameter at the tip", mm: $tool.diameter, units: units, minimum: 0.1)
+            NumberField(title: "Angle per side", value: Binding(get: { tool.includedAngle / 2 }, set: { tool.includedAngle = 2 * min(45, max(0.5, $0)) }),
+                        suffix: "°", decimals: 1, range: 0.5...45)
+            LengthField(title: "Cutting height", mm: $tool.fluteLength, units: units, minimum: 0.1)
+            LengthField(title: "Neck diameter", mm: Binding(get: { tool.dovetailSmallDiameter }, set: { d in
+                let rise = max(0, tool.diameter - max(0.1, d)) / 2
+                tool.includedAngle = 2 * min(45, max(0.5, atan2(rise, max(tool.fluteLength, 1e-6)) * 180 / .pi))
+            }), units: units, help: "The diameter at the top of the cutting edge; setting it sets the angle")
+            LengthField(title: "Shank diameter", mm: $tool.shankDiameter, units: units, minimum: 0.1)
+        default:
+            EmptyView()
+        }
+        if let problem = tool.geometryProblem {
+            Label(problem, systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    static func text(_ points: [Vec2], _ units: LengthUnit) -> String {
+        points.map { "\(units.format($0.x)), \(units.format($0.y))" }.joined(separator: "\n")
+    }
+
+    /// Points typed one per line as "radius, height"; nil until every line reads.
+    static func points(_ text: String, _ units: LengthUnit) -> [Vec2]? {
+        var out: [Vec2] = []
+        for line in text.split(whereSeparator: \.isNewline) {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            let parts = line.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\t" }).compactMap { Double($0) }
+            guard parts.count == 2 else { return nil }
+            out.append(Vec2(units.toMM(parts[0]), units.toMM(parts[1])))
+        }
+        return out.count >= 2 ? out : nil
     }
 }
 
@@ -639,7 +782,7 @@ private struct ImportToolRow: View {
     /// guesses are noted too, but each toolpath sets those anyway.)
     static func estimates(in tool: Tool) -> [String] {
         tool.notes.split(separator: "\n").map(String.init).filter { line in
-            line.contains("Cutting length estimated")
+            line.contains("Cutting length estimated") || line.hasPrefix("⚠")
                 || (line.contains("conservative defaults") && ["feed", "speed", "plunge"].contains { line.contains($0) })
         }
     }

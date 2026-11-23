@@ -164,7 +164,9 @@ public enum CAMEngine {
                 }
                 opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
                 var generated: [Toolpath]
-                if case let .rotaryRough(p) = op.kind {
+                if let refused = refusal(op, context: opContext) {
+                    generated = [refused]
+                } else if case let .rotaryRough(p) = op.kind {
                     let result = Rotary3DRoughing.generate(op: op, params: p, shapes: shapes, context: opContext)
                     generated = [result.toolpath]
                     if let left = result.left { roughed = left }
@@ -501,7 +503,16 @@ public enum CAMEngine {
         return issues
     }
 
+    /// An empty toolpath saying why, when the operation's bit is one its kind of toolpath can't cut with
+    /// (`CAMOperation.toolRefusal`).
+    static func refusal(_ op: CAMOperation, context: GenerationContext) -> Toolpath? {
+        guard let why = op.toolRefusal else { return nil }
+        return ToolpathBuilder(stock: context.stock, tool: op.tool, startXY: nil)
+            .build(id: op.id, name: op.name, tool: op.tool, rpm: op.tool.cutting.spindleRPM, warnings: [why])
+    }
+
     public static func generate(_ op: CAMOperation, shapes: [DesignShape], context: GenerationContext) -> [Toolpath] {
+        if let refused = refusal(op, context: context) { return [refused] }
         switch op.kind {
         case let .profile(p):
             return [ProfileGenerator.generate(op: op, params: p, shapes: shapes, context: context)]

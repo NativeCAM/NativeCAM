@@ -117,7 +117,7 @@ enum AdaptiveClearing {
         let r = tool.radius
         let tol = context.arcTolerance
         // The bit's ordinary cut, for what the walk leaves behind.
-        let stepover = max(0.05, tool.diameter * (params.stepoverFraction ?? tool.cutting.stepoverFraction))
+        let stepover = max(0.05, tool.stepoverBasis * (params.stepoverFraction ?? tool.cutting.stepoverFraction))
         var ordinary = params
         ordinary.entry = EntrySettings(kind: .ramp, rampLength: 2 * tool.diameter)
         var wallParams = params
