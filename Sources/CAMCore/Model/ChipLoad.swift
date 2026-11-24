@@ -40,8 +40,15 @@ public enum MaterialKind: String, Codable, Sendable, CaseIterable, Identifiable 
 /// NativeCAM takes the slower; a bit's own rating, on its shank or packaging, comes first. A bit wider than 3-1/2" is
 /// outside the chart.
 ///
+/// **Depth of cut.** Both of Freud's charts are for a cut no deeper than the bit's diameter. Deeper, Freud says: "If Cut
+/// Depth is 2X the bit diameter, reduce the Chip Load by at least 25%; if 3X, reduce by at least 50%" (the same guide;
+/// Onsrud's chart, as the Artisan's Asylum ShopBot wiki gives it, makes the same cuts). NativeCAM takes the straight
+/// line between them, holds it at half past 3×D, and scales the range and the recommendation's chip by it
+/// (`depthShare`). Form bits keep their cross-section rule instead (`crossSectionShare`), so one cut is never derated
+/// twice; adaptive clearing's light cut, which is why it goes deep, keeps its radial thinning instead.
+///
 /// Below a chart's range the chip is too thin to carry heat away (rubbing, burning, early dulling); above it the cut
-/// gets rough. They are starting points: wood varies.
+/// gets rough. They are starting points: wood varies, and none of these figures has been calibrated on a machine.
 public enum ChipLoad {
     /// Diameters (in) of the end-mill chart's rows.
     static let diameters: [Double] = [0.125, 0.25, 0.375, 0.5]
@@ -92,6 +99,18 @@ public enum ChipLoad {
 
     /// Outside every chart, the feed is held to this share of the machine's cutting cap at most.
     static let outsideFeedShare = 0.5
+
+    /// The least share of the chart's chip a deep pass is cut to: Freud's figure for a pass 3× the bit's diameter deep,
+    /// held from there on.
+    public static let depthShareFloor = 0.5
+
+    /// The share of the chart's chip load for a pass `pass` mm deep with a bit cutting `diameter` mm across: 1 up to and
+    /// including 1×D, then Freud's derate, 25% less at 2×D and 50% less at 3×D, in a straight line between and held at
+    /// half (`depthShareFloor`) past 3×D.
+    public static func depthShare(pass: Double, diameter: Double) -> Double {
+        guard diameter > 1e-9, pass > diameter + 1e-9 else { return 1 }
+        return max(depthShareFloor, 1 - 0.25 * (pass / diameter - 1))
+    }
 
     /// Recommended chip-load range (mm per tooth) for a bit diameter (mm) in a material, from the end-mill chart.
     public static func range(_ material: MaterialKind, diameter: Double) -> ClosedRange<Double> {
@@ -183,6 +202,11 @@ public enum ChipLoad {
         /// The share of the chart's feed the cross-section allows (`ChipLoad.crossSectionShare`): 1 unless the cut is
         /// bigger than a slot as wide and as deep as the bit's shank.
         public var crossSectionShare: Double
+        /// The deepest single pass the reading is for, mm; nil when it isn't known (read as no deeper than the diameter).
+        public var passDepth: Double? = nil
+        /// The share of the chart's chip the pass depth allows (`ChipLoad.depthShare`), already taken into `range` and
+        /// `target`: 1 for a pass no deeper than the bit's diameter, and always for form bits.
+        public var depthShare: Double = 1
 
         /// What the bit is called in notes: "roundover", "dovetail", "end mill".
         public var bitName: String {
@@ -233,6 +257,11 @@ public enum ChipLoad {
                 out.append("Feed held to \(Int((100 * crossSectionShare).rounded()))% for the profile's cross-section, "
                     + "bigger than a slot as wide and as deep as the shank.")
             }
+            if depthShare < 1 - 1e-9, let passDepth {
+                let times = (passDepth / diameter).formatted(.number.precision(.fractionLength(0...1)))
+                out.append("Chip load cut to \(Int((100 * depthShare).rounded()))% for passes \(times)× the bit's diameter deep "
+                    + "(Freud: at least 25% less at 2×D, 50% at 3×D).")
+            }
             return out
         }
     }
@@ -240,7 +269,24 @@ public enum ChipLoad {
     /// Reads the chart for `tool` cutting `depth` deep (nil: at its full diameter and, for a form bit, the whole profile)
     /// in `material`. `crossSection` is what one pass of a form bit takes when that's less than a full pass at the depth
     /// (an edge profile's passes, `EdgeProfilePlan`), mm²; nil = a full pass.
-    public static func reading(_ tool: Tool, material: MaterialKind, depth: Double?, crossSection passArea: Double? = nil) -> Reading {
+    ///
+    /// `passDepth` is the deepest single pass, mm: past the diameter it's read at, the range and target are cut by
+    /// `depthShare`, except for form bits (their cross-section rule covers the depth). nil = no deeper than the diameter.
+    public static func reading(_ tool: Tool, material: MaterialKind, depth: Double?, crossSection passArea: Double? = nil,
+                               passDepth: Double? = nil) -> Reading {
+        var r = baseReading(tool, material: material, depth: depth, crossSection: passArea)
+        guard tool.shape != .form, let passDepth else { return r }
+        r.passDepth = passDepth
+        let share = depthShare(pass: passDepth, diameter: r.diameter)
+        guard share < 1 else { return r }
+        r.depthShare = share
+        r.range = (r.range.lowerBound * share)...(r.range.upperBound * share)
+        r.target *= share
+        return r
+    }
+
+    /// The chart's reading for a pass no deeper than the bit's diameter.
+    private static func baseReading(_ tool: Tool, material: MaterialKind, depth: Double?, crossSection passArea: Double?) -> Reading {
         let d = chartDiameter(tool, depth: depth)
         let full = max(tool.diameter, tool.shape.cutsEdgesOnly ? 2 * (tool.cuttingEdge.map(\.x).max() ?? 0) : 0)
         let inches = d / LengthUnit.mmPerInch
@@ -360,9 +406,14 @@ public enum ChipLoad {
     /// even below the spindle's slowest; a form bit whose cut is bigger than a slot as wide and as deep as its shank has
     /// its feed cut in proportion (`crossSectionShare`); and a bit outside every chart takes the thin end of the widest
     /// row, the speed limit, and at most half the machine's cutting feed.
+    ///
+    /// `passDepth` is the deepest single pass (mm): a pass deeper than the bit's diameter aims at a thinner chip
+    /// (`depthShare`), so at the bit's speed it gets a lower feed. (Where the machine's cap already holds the feed, the
+    /// spindle turns faster instead, which thins the chip the same way.)
     public static func recommendation(for tool: Tool, material: MaterialKind, machine: MachineProfile, thinning: Double = 1,
-                                      feedLimit: Double? = nil, depth: Double? = nil, crossSection: Double? = nil) -> Recommendation {
-        let reading = Self.reading(tool, material: material, depth: depth, crossSection: crossSection)
+                                      feedLimit: Double? = nil, depth: Double? = nil, crossSection: Double? = nil,
+                                      passDepth: Double? = nil) -> Recommendation {
+        let reading = Self.reading(tool, material: material, depth: depth, crossSection: crossSection, passDepth: passDepth)
         let target = reading.target
         let z = Double(max(1, tool.fluteCount))
         let k = min(1, max(0.05, thinning))
@@ -387,9 +438,9 @@ public enum ChipLoad {
     /// The recommended spindle speed and feed (`recommendation(for:material:machine:thinning:feedLimit:depth:crossSection:)`).
     public static func recommend(for tool: Tool, material: MaterialKind, machine: MachineProfile,
                                  thinning: Double = 1, feedLimit: Double? = nil, depth: Double? = nil,
-                                 crossSection: Double? = nil) -> (rpm: Double, feed: Double) {
+                                 crossSection: Double? = nil, passDepth: Double? = nil) -> (rpm: Double, feed: Double) {
         let r = recommendation(for: tool, material: material, machine: machine, thinning: thinning, feedLimit: feedLimit, depth: depth,
-                               crossSection: crossSection)
+                               crossSection: crossSection, passDepth: passDepth)
         return (r.rpm, r.feed)
     }
 
