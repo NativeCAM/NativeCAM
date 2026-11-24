@@ -413,6 +413,11 @@ struct TemplateFilterTests {
         let inchBox = SizeFilter.box(width: SizeRange(min: 0.5.inch, max: 2.inch), height: SizeRange(min: (1.0 / 64).inch))
         #expect(inchBox.label(.mm) == "0.5–2 in wide, at least 0.015625 in tall")
         #expect(inchBox.label(.inch) == "0.5–2 in wide, at least 0.015625 in tall")
+        // Round in the design's own units: those units first, even when also round in the other ones.
+        let quarter = SizeFilter.circles(0.25.inch, 0.25.inch)
+        #expect(quarter.label(.inch) == "circles 0.25 in across")
+        #expect(SizeFilter.circles(8, 8).label(.mm) == "circles 8 mm across")
+        #expect(SizeFilter.circles(8, 8).label(.inch) == "circles 8 mm across")
         // A rule mixing both stays in the design's units.
         let mixed = SizeFilter.box(width: SizeRange(min: 0.1875.inch, max: 250), height: nil)
         #expect(mixed.label(.inch) == "0.1875–9.843 in wide")
