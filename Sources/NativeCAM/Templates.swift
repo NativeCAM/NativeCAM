@@ -298,6 +298,8 @@ struct MissingLayersSection: View {
         } footer: {
             Text(choice == .create
                  ? "Put vectors on the new layers, then choose Toolpaths ▸ Recalculate All: their toolpaths pick them up."
+                 : choice == .skip
+                 ? "Each toolpath whose layers are all missing is left out, with its tool."
                  : "The template's toolpaths find their vectors on layers this design doesn't have. Choose one to go on.")
                 .font(.caption).foregroundStyle(choice == nil ? .orange : .secondary)
         }

@@ -161,7 +161,8 @@ struct SizeFilterRows: View {
                 s.tolerance = t
                 self.size = s
             }), units: units, help: "How far outside the range a size may be and still count", minimum: 0)
-            Text("Finds \(rule.sized(nil).label(units).lowercased()) that are \(size.label(units)).")
+            Text((size.measuresDiameter ? "Only \(size.label(units))" : "Only closed shapes \(size.label(units))")
+                 + " are picked up. Imported vectors are measured outline by outline.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
