@@ -251,6 +251,30 @@ struct CalibrationTests {
         #expect(verdict.passed, "\(verdict.text)")
     }
 
+    /// Only the straight lines timed: the values they leave open say "timed but not pinned down", as the note does.
+    @Test func valuesTimedButNotPinnedDownMatchTheNote() throws {
+        let plan = try Calibration.timingPlan(machine: MachineProfile(), options: .defaults(.inch))
+        let lines: Set = ["line-1", "line-2", "line-3"]
+        let measured = Self.madeUpTimes(plan, truth: Self.known()).filter { lines.contains($0.key) }
+        let times = Calibration.Times(kind: .timing, controller: plan.controller, plan: plan, measured: measured)
+        let fit = try Calibration.fit([times], machine: MachineProfile())
+        let open = fit.values.filter { !$0.determined }
+        #expect(!open.isEmpty, "\(fit.values.map(\.label))")
+        let note = try #require(fit.notes.first { $0.hasPrefix("Not pinned down by the sections timed") }, "\(fit.notes)")
+        let report = fit.report(.inch)
+        for v in fit.values {
+            if v.determined {
+                #expect(!note.contains(v.label), "\(v.label): \(note)")
+                continue
+            }
+            #expect(v.timed, "\(v.label)")
+            #expect(v.afterText(.inch) == "timed but not pinned down, stays", "\(v.label)")
+            #expect(note.contains(v.label), "\(v.label): \(note)")
+            #expect(report.contains("  \(v.label): \(v.text(v.before, .inch)) -> timed but not pinned down, stays"), "\(report)")
+        }
+        #expect(!report.contains("not timed, stays"), "\(report)")
+    }
+
     /// The times fixture: the full-size suite for Avid Mach4 in inches, timed (made up) on `known()`.
     static func fixtureTimes(editing: (inout [String: Double]) -> Void = { _ in }) throws -> String {
         let program = try Calibration.timing(machine: MachineProfile())
