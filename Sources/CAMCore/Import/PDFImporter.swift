@@ -213,7 +213,8 @@ struct PDFLayers {
         let offGroups = groups.filter { !groupIsOn($0) }
         var policy: UnsafePointer<CChar>?
         let visible: Bool
-        switch CGPDFDictionaryGetName(dict, "P", &policy) ? policy.map { String(cString: $0) } : nil {
+        let policyName = CGPDFDictionaryGetName(dict, "P", &policy) ? policy.map { String(cString: $0) } : nil
+        switch policyName {
         case "AllOn": visible = offGroups.isEmpty
         case "AnyOff": visible = !offGroups.isEmpty
         case "AllOff": visible = offGroups.count == groups.count
