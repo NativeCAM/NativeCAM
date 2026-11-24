@@ -366,7 +366,7 @@ struct Finish3DSection: View {
             if p.strategy == .radial {
                 NumberField(title: "Angular step", value: Binding(get: { p.radialStep ?? 0 }, set: { var q = p; q.radialStep = $0 > 0 ? min(45, max(0.1, $0)) : nil; set(q) }),
                             suffix: "°", decimals: 2)
-                    .help("Angle between spokes. 0 = automatic: a stepover apart at the boundary's farthest point")
+                    .help("Angle between spokes. 0 = automatic: a stepover apart where each spoke meets the boundary")
                 LengthField(title: "Minimum spacing", mm: Binding(get: { p.radialMinSpacing ?? stepover / 2 }, set: { var q = p; q.radialMinSpacing = max(0.01, $0); set(q) }),
                             units: units, help: "Near the centre, spokes stop short rather than come closer than this. Automatic: half the stepover")
                 if p.radialMinSpacing != nil {
@@ -1185,7 +1185,7 @@ func finishingNote(_ strategy: Finish3DStrategy) -> String {
     case .constantScallop:
         "Passes the same distance apart along the surface, from the boundary inward, so the scallop stays even on steep and shallow ground alike. Best on reliefs with mixed slopes."
     case .spiral:
-        "One continuous spiral from the centre out to the boundary. Suits round, shallow work: coins, domes, rosettes and clock faces."
+        "A spiral from the centre out to the boundary, one continuous cut inside a round one. Suits round, shallow work: coins, domes, rosettes and clock faces."
     case .radial:
         "Spokes from the centre out to the boundary, every other one stopping short near the centre so they don't crowd. Suits round work with features that radiate from the middle."
     }
