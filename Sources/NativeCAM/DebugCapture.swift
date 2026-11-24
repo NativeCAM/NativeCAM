@@ -74,7 +74,7 @@ enum DebugCapture {
     }
 
     /// CGWindowListCreateImage is hidden from the macOS 15+ SDK but still present at runtime; look it up dynamically.
-    private static func image(of window: NSWindow) -> CGImage? {
+    static func image(of window: NSWindow) -> CGImage? {
         typealias CreateImage = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
         guard let handle = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY),
               let sym = dlsym(handle, "CGWindowListCreateImage") else { return nil }

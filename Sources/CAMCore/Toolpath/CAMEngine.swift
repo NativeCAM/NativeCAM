@@ -104,14 +104,38 @@ public struct SheetJob: Sendable {
 /// Turns a project into ordered toolpaths and checks them against the material and machine.
 public enum CAMEngine {
     public static func generate(_ project: Project, operationIDs: Set<UUID>? = nil) -> JobResult {
-        if project.sheetCount > 1 { return generateSheets(project, operationIDs: operationIDs) }
-        var job = generateSheet(project, operationIDs: operationIDs)
-        if operationIDs == nil {
-            let (issues, reorder) = schedulingIssues(project)
-            job.issues += issues
-            job.reorder = reorder
+        var job: JobResult
+        if project.sheetCount > 1 {
+            job = generateSheets(project, operationIDs: operationIDs)
+        } else {
+            job = generateSheet(project, operationIDs: operationIDs)
+            if operationIDs == nil {
+                let (issues, reorder) = schedulingIssues(project)
+                job.issues += issues
+                job.reorder = reorder
+            }
         }
+        if operationIDs == nil, let note = offMaterialNote(project) { job.issues.append(note) }
         return job
+    }
+
+    /// On a flat job, a note when shapes a toolpath cuts lie wholly off the material (or off their sheet): their
+    /// toolpaths run past its edges, which is what a design laid out loosely for nesting (the frames and coasters demo)
+    /// opens with, so it points to Nest Parts. nil when there are none.
+    static func offMaterialNote(_ project: Project) -> JobIssue? {
+        guard project.stock.rotary == nil else { return nil }
+        let cut = Set(project.operations.filter { $0.enabled && $0.kind.needsShapes }.flatMap(\.shapeIDs))
+        let off = project.shapes.filter { shape in
+            guard cut.contains(shape.id), !shape.isKeepOut else { return false }
+            let size = project.sheetSize(project.sheetIndex(of: shape))
+            let bounds = shape.polylines(tolerance: 0.1).bounds
+            return !bounds.isEmpty && !bounds.intersects(Rect2(x: 0, y: 0, width: size.x, height: size.y))
+        }
+        guard let first = off.first else { return nil }
+        let which = off.count == 1 ? "“\(first.name)” lies" : "“\(first.name)” and \(off.count - 1) other shape\(off.count == 2 ? "" : "s") lie"
+        return JobIssue(.info, "\(which) off the material, so the toolpaths cutting \(off.count == 1 ? "it" : "them") run past its edges: "
+            + "that's what the warnings about the material's edges and the work area are about. Toolpaths ▸ Nest Parts… lays the "
+            + "parts out on the material, and on more sheets if they don't all fit.")
     }
 
     /// A job nested onto several sheets: each sheet generated as a job of its own. Checks that every sheet has are

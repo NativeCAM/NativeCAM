@@ -75,7 +75,8 @@ public enum SetupSheet {
         """
         h += "<h2>Sheets</h2>\n<table><tr><th>#</th><th>Size</th><th class=\"num\">Parts</th><th>File</th><th class=\"num\">Time</th></tr>\n"
         for s in sheets {
-            let parts = NestJob.parts(of: s.project).filter(\.isClosed).count
+            // As nesting counts them: a part in another's hole is a part of its own.
+            let parts = NestJob.separateParts(of: s.project, toolpaths: s.job.toolpaths).filter(\.isClosed).count
             let file = s.cutsAnything ? files(ofSheet: s.index).map(esc).joined(separator: "<br>") : "Nothing to cut: no file"
             h += "<tr><td>\(s.index + 1)</td><td>\(size(sizes[s.index]))</td><td class=\"num\">\(parts)</td><td>\(file)</td>"
                 + "<td class=\"num\">\(time(s.job.estimatedSeconds))</td></tr>\n"

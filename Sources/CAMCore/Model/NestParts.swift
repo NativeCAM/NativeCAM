@@ -4,7 +4,8 @@ import Foundation
 /// `Nesting` puts them on the sheet.
 ///
 /// A part is a closed outline and everything inside or overlapping it (an outermost shape with the holes, text and
-/// other vectors drawn inside it), moved as one. An imported shape holding several separate outlines (a DXF with
+/// other vectors drawn inside it), moved as one, except what sits in a hole its toolpaths cut free: a part nested
+/// there (part in part) is a part of its own. An imported shape holding several separate outlines (a DXF with
 /// every part on one layer) gives one part per outline. Selecting any shape of a part nests the whole part; with
 /// nothing selected every part is nested. Parts not nested, clamps and keep-outs stay where they are and the nested
 /// parts keep clear of them.
@@ -86,6 +87,10 @@ public struct NestJob: Sendable {
     /// Spacing to start with: the cut-out bit's diameter plus a margin.
     public var defaultSpacing: Double
 
+    /// How many sheets Nest Parts (and `nativecam-cli nest`) may use until a limit is set: parts that don't fit on the
+    /// sheets a job has go on new ones, up to this many (or as many as the job has, if more).
+    public static let defaultSheetLimit = 10
+
     /// Margin added to the cut-out bit for the default spacing: 1/8 in, or 3 mm in a metric job.
     public static func spacingMargin(_ units: LengthUnit) -> Double { units == .inch ? 0.125.inch : 3 }
 
@@ -118,7 +123,8 @@ public struct NestJob: Sendable {
     public static func prepare(_ project: Project, selection: Set<UUID>, toolpaths: [Toolpath]) throws(Refusal) -> NestJob {
         if project.stock.rotary != nil { throw .rotary }
         let sheet = Rect2(x: 0, y: 0, width: project.stock.width, height: project.stock.height)
-        var all = parts(of: project)
+        // A part nested in another's hole before is a part of its own again.
+        var all = separateParts(of: project, toolpaths: toolpaths)
         let reach = reach(of: toolpaths, in: project)
         measureHoles(&all, toolpaths: toolpaths, in: project)
         let selectedShapes = selection.intersection(project.shapes.map(\.id))
@@ -607,19 +613,71 @@ public struct NestJob: Sendable {
 
     // MARK: Finding the parts
 
-    /// Every part in the design (keep-outs aside), nested or not.
+    /// One piece of the design as the parts are found: a whole shape, or one outline of an imported shape with the
+    /// vectors inside it.
+    struct Raw {
+        var piece: Piece
+        var sheet: Int
+        var name: String
+        /// Its closed vectors.
+        var closed: [Polyline]
+        /// Its outer outlines, filled (holes and all).
+        var fills: [Polyline]
+        var open: [Polyline]
+        var bounds: Rect2
+        var area: Double
+        /// Open vectors that aren't entirely inside the piece's outlines.
+        var strayLines: [Polyline]
+    }
+
+    /// Every part in the design (keep-outs aside), nested or not, by the shapes alone: a part sitting in another's hole
+    /// is part of it here (see `separateParts(of:toolpaths:)`).
     public static func parts(of project: Project) -> [Part] {
-        struct Raw {
-            var piece: Piece
-            var sheet: Int
-            var name: String
-            var fills: [Polyline]
-            var open: [Polyline]
-            var bounds: Rect2
-            var area: Double
-            /// Open vectors that aren't entirely inside the piece's outlines.
-            var strayLines: [Polyline]
+        let raws = raws(of: project)
+        return groups(raws, among: Array(raws.indices)).enumerated().map { part($1, id: $0, raws) }
+    }
+
+    /// Every part in the design (keep-outs aside), nested or not, with a part sitting in another part's hole (as
+    /// nesting puts it there, part in part) a part of its own: the pieces lying inside a hole of the rest that
+    /// `toolpaths` cut free (`holeCut`) are parts apart from it, so each can be nested on its own. Pieces inside a loop
+    /// that isn't cut right through from inside (a pocket's or an engraved ring's) stay with their part. Toolpaths cut in
+    /// the order they did: which part a piece belongs to doesn't change the run order.
+    public static func separateParts(of project: Project, toolpaths: [Toolpath]) -> [Part] {
+        let raws = raws(of: project)
+        guard !toolpaths.isEmpty else { return groups(raws, among: Array(raws.indices)).enumerated().map { part($1, id: $0, raws) } }
+        let thickness = project.stock.thickness
+        // Whether the toolpaths on a group's shapes cut `hole` free, on the group's sheet.
+        func freed(_ hole: Polyline, group: [Int]) -> Bool {
+            let shapeIDs = Set(group.map { raws[$0].piece.shapeID })
+            let opIDs = Set(project.operations.filter { !Set($0.shapeIDs).isDisjoint(with: shapeIDs) }.map(\.id))
+            let sheet = raws[group[0]].sheet
+            let mine = toolpaths.filter { opIDs.contains($0.sourceOperationID) && ($0.sheet ?? 0) == sheet }
+            return holeCut(hole, toolpaths: mine, thickness: thickness).freed
         }
+        // Whether a piece lies inside `hole` (and none of its own vectors is the hole).
+        func inside(_ r: Raw, _ hole: Polyline) -> Bool {
+            let box = hole.bounds.insetBy(1e-3)
+            guard box.contains(r.bounds.min), box.contains(r.bounds.max) else { return false }
+            return (r.closed + r.open).allSatisfy { line in line.points.allSatisfy { hole.contains($0) } }
+        }
+        func separated(_ group: [Int]) -> [[Int]] {
+            guard group.count > 1 else { return [group] }
+            let loops = group.flatMap { raws[$0].closed }
+            let holes = Region.build(from: loops, fill: .evenOdd).flatMap(\.holes).sorted { $0.area > $1.area }
+            for hole in holes {
+                let within = group.filter { inside(raws[$0], hole) }
+                guard !within.isEmpty, within.count < group.count, freed(hole, group: group) else { continue }
+                let rest = group.filter { !within.contains($0) }
+                return separated(rest) + groups(raws, among: within).flatMap(separated)
+            }
+            return [group]
+        }
+        let all = groups(raws, among: Array(raws.indices)).flatMap(separated).sorted { $0.min()! < $1.min()! }
+        return all.enumerated().map { part($1, id: $0, raws) }
+    }
+
+    /// The design's pieces (keep-outs aside).
+    static func raws(of project: Project) -> [Raw] {
         var raws: [Raw] = []
         for shape in project.shapes where !shape.isKeepOut {
             let lines = shape.polylines(tolerance: 0.05)
@@ -635,18 +693,23 @@ public struct NestJob: Sendable {
                 }
                 let name = groups.count > 1 ? "\(shape.name) \(g + 1)" : shape.name
                 raws.append(Raw(piece: Piece(shapeID: shape.id, paths: groups.count > 1 ? group : nil),
-                                sheet: project.sheetIndex(of: shape), name: name,
+                                sheet: project.sheetIndex(of: shape), name: name, closed: closed,
                                 fills: fills, open: fills.isEmpty ? openLines : [], bounds: members.bounds,
                                 area: fills.reduce(0) { $0 + $1.area }, strayLines: stray))
             }
         }
-        // Pieces whose outlines overlap (or with open vectors over an outline) are one part.
-        var parent = Array(raws.indices)
+        return raws
+    }
+
+    /// The pieces at `indices` grouped into parts: pieces whose outlines overlap (or with open vectors over an outline)
+    /// are one part. Each group is in index order, the groups in the order of their first piece.
+    static func groups(_ raws: [Raw], among indices: [Int]) -> [[Int]] {
+        var parent = Dictionary(uniqueKeysWithValues: indices.map { ($0, $0) })
         func root(_ i: Int) -> Int {
             var i = i
-            while parent[i] != i {
-                parent[i] = parent[parent[i]]
-                i = parent[i]
+            while parent[i]! != i {
+                parent[i] = parent[parent[i]!]!
+                i = parent[i]!
             }
             return i
         }
@@ -660,29 +723,32 @@ public struct NestJob: Sendable {
             if lines.contains(where: { $0.points.contains { p in fills.contains { $0.contains(p) } } }) { return true }
             return !Clipper.clipOpen(lines, to: fills).isEmpty
         }
-        for i in raws.indices {
-            for j in raws.indices where j > i && root(i) != root(j) && touches(raws[i], raws[j]) {
+        let sorted = indices.sorted()
+        for (n, i) in sorted.enumerated() {
+            for j in sorted[(n + 1)...] where root(i) != root(j) && touches(raws[i], raws[j]) {
                 parent[root(j)] = root(i)
             }
         }
         var members: [Int: [Int]] = [:]
         var order: [Int] = []
-        for i in raws.indices {
+        for i in sorted {
             let r = root(i)
             if members[r] == nil { order.append(r) }
             members[r, default: []].append(i)
         }
-        return order.enumerated().map { n, r in
-            let group = members[r]!
-            let fills = group.flatMap { raws[$0].fills }
-            // Open vectors reaching outside the outlines (a line drawn past a part's edge) count as part of it.
-            let strips = fills.isEmpty ? [] : Clipper.offset(group.flatMap { raws[$0].strayLines }, delta: 0.01, join: .round, end: .round)
-            let outlines = fills.isEmpty ? [] : Clipper.union(fills + strips).filter { $0.signedArea > 0 }
-            let largest = group.max { raws[$0].area < raws[$1].area || (raws[$0].area == raws[$1].area && $0 > $1) }!
-            return Part(id: n, name: raws[largest].name, pieces: group.map { raws[$0].piece }, outlines: outlines,
-                        openLines: fills.isEmpty ? group.flatMap { raws[$0].open } : [],
-                        area: outlines.reduce(0) { $0 + $1.area }, reach: 0, reachToolpath: nil, sheet: raws[r].sheet)
-        }
+        return order.map { members[$0]! }
+    }
+
+    /// The part made of the pieces at `group`.
+    static func part(_ group: [Int], id n: Int, _ raws: [Raw]) -> Part {
+        let fills = group.flatMap { raws[$0].fills }
+        // Open vectors reaching outside the outlines (a line drawn past a part's edge) count as part of it.
+        let strips = fills.isEmpty ? [] : Clipper.offset(group.flatMap { raws[$0].strayLines }, delta: 0.01, join: .round, end: .round)
+        let outlines = fills.isEmpty ? [] : Clipper.union(fills + strips).filter { $0.signedArea > 0 }
+        let largest = group.max { raws[$0].area < raws[$1].area || (raws[$0].area == raws[$1].area && $0 > $1) }!
+        return Part(id: n, name: raws[largest].name, pieces: group.map { raws[$0].piece }, outlines: outlines,
+                    openLines: fills.isEmpty ? group.flatMap { raws[$0].open } : [],
+                    area: outlines.reduce(0) { $0 + $1.area }, reach: 0, reachToolpath: nil, sheet: raws[group[0]].sheet)
     }
 
     /// An imported shape's vectors grouped by outermost closed outline: each group is an outline and every vector

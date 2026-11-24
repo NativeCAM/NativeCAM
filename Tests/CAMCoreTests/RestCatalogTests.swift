@@ -121,6 +121,43 @@ struct RestCatalogTests {
         p.operations[k].kind = .finish3D(fp)
     }
 
+    /// #108: a 1/4" ball rest pass with its references picked automatically, after a tapered-ball finish. The finish's
+    /// tip is smaller than the ball, so there's nothing to rest from; it says that plainly, as picking the same reference
+    /// by hand is refused, cuts nothing and posts nothing.
+    @Test func automaticReferencesAfterASmallerBitSayWhy() throws {
+        let p = try Self.edgeCase("automatic-reference-smaller") {
+            Self.valley { p in
+                p.operations[0].tool = RestFinishingTests.tapered
+                p.operations[1].tool = RestFinishingTests.ball
+            }
+        }
+        let message = "The earlier finishes on this model use smaller bits than this one, so there's nothing for it to rest from. "
+            + "A rest pass needs a smaller bit than the finish it follows."
+        let refs = RestMachining.references(for: p.operations[1], in: p)
+        #expect(refs.isAutomatic && refs.operations.isEmpty && refs.refusal == nil)
+        #expect(refs.warnings == [message])
+        let job = CAMEngine.generate(p)
+        let rest = try #require(job.toolpaths.first { $0.id == RestFinishingTests.id(3) })
+        #expect(rest.isEmpty)
+        #expect(job.issues.contains { $0.operation == "Rest valley" && $0.message == message }, "\(job.issues.map(\.message))")
+        let gcode = String(decoding: GoldenPostTests.post(p, job.toolpaths), as: UTF8.self)
+        #expect(!gcode.contains("Rest valley"))
+        // Picked by hand, the same reference is refused for the same reason.
+        var byHand = p
+        Self.setReferences(&byHand, [RestFinishingTests.id(2)])
+        let refused = RestMachining.references(for: byHand.operations[1], in: byHand).refusal
+        #expect(refused?.contains("A rest pass needs a smaller bit than each of its references") == true)
+        // The same size: no larger, so nothing to rest from either.
+        var same = p
+        same.operations[0].tool = RestFinishingTests.ball
+        let sameRefs = RestMachining.references(for: same.operations[1], in: same)
+        #expect(sameRefs.warnings.first?.hasPrefix("The earlier finishes on this model use bits no larger than this one") == true)
+        // With no earlier finish at all, the message is the one it was.
+        var alone = p
+        alone.operations.removeFirst()
+        #expect(RestMachining.references(for: alone.operations[0], in: alone).warnings.first?.contains("No enabled 3D finishing toolpath") == true)
+    }
+
     /// A reference with a smaller bit than the rest pass's: refused, saying why, and nothing posted for it.
     @Test func referenceSmallerThanTheRestToolIsRefused() throws {
         let p = try Self.edgeCase("reference-smaller") {
