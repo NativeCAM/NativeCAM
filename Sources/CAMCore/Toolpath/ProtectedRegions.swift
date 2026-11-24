@@ -213,7 +213,7 @@ public struct ProtectedRegions: Sendable {
             guard r > 1e-6 else { return [] }
             return outside(Clipper.union(Clipper.offset(closed, delta: r, end: .joined, arcTolerance: tol)
                 + Clipper.offset(open, delta: r, end: .round, arcTolerance: tol)))
-        case .rough3D, .finish3D, .rounding, .rotaryFinish, .rotaryRough:
+        case .rough3D, .finish3D, .rounding, .rotaryFinish, .rotaryRough, .moulding:
             return []
         }
     }

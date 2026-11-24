@@ -22,7 +22,7 @@ public extension OperationKind {
             }
         }
         switch self {
-        case .profile, .rough3D, .finish3D, .rotaryFinish, .rotaryRough, .fluting, .edgeProfile:
+        case .profile, .rough3D, .finish3D, .rotaryFinish, .rotaryRough, .fluting, .edgeProfile, .moulding:
             return nil
         case .pocket:
             return "Pockets need an end mill: \(bit), \(a), would leave a ridged floor and sloping walls. Use it for 3D carving."
@@ -85,6 +85,10 @@ public extension CAMOperation {
     /// Why this operation can't cut with its bit or its clearance tool (`OperationKind.refusal(for:)`), or nil.
     var toolRefusal: String? {
         if let why = kind.refusal(for: tool) { return why }
+        if case let .moulding(p) = kind, let r = p.roughing {
+            // Roughing takes what 3D roughing takes.
+            return OperationKind.rough3D(r.rough3D).refusal(for: r.tool).map { "The roughing bit: " + $0 }
+        }
         let clearing: Tool?
         switch kind {
         case let .pocket(p): clearing = p.clearanceTool

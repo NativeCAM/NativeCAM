@@ -72,6 +72,17 @@ public enum ArcFitter {
 
     /// The drop-cutter surface a 3D finishing operation's toolpath must stay on or above; nil for every other kind.
     static func surface(for operation: CAMOperation, tool: Tool, project: Project) -> Surface? {
+        // A moulding's swept surface, for its finish (and its roughing, which leaves its own allowance on it).
+        if case let .moulding(m) = operation.kind {
+            guard case let .success(s) = MouldingGenerator.surface(op: operation, params: m, shapes: project.shapes(for: operation)) else {
+                return nil
+            }
+            let roughing = m.roughing.flatMap { $0.tool == tool && tool != operation.tool ? $0 : nil }
+            let allowance = roughing?.allowance ?? m.finish.allowance
+            guard let cutter = TriangleDropCutter(tool: tool, allowance: allowance, triangles: Model3DGenerator.triangles(of: [s.shape]))
+            else { return nil }
+            return Surface(cutter)
+        }
         guard case let .finish3D(p) = operation.kind else { return nil }
         let models = project.shapes(for: operation).filter { !$0.isKeepOut && $0.modelSpec != nil }
         guard !models.isEmpty,

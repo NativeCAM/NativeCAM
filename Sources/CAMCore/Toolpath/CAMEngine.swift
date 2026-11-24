@@ -711,6 +711,8 @@ public enum CAMEngine {
             return [PrismGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         case let .edgeProfile(p):
             return [EdgeProfileGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
+        case let .moulding(p):
+            return MouldingGenerator.generate(op: op, params: p, shapes: shapes, context: context)
         }
     }
 

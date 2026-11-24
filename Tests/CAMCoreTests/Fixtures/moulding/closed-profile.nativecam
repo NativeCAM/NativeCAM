@@ -1,0 +1,170 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 22,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Closed profile",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "87A00000-0000-4000-8000-000000000031",
+      "kind" : {
+        "moulding" : {
+          "_0" : {
+            "finish" : {
+              "allowance" : 0,
+              "boundary" : "model",
+              "rasterAngle" : 0,
+              "smoothLinks" : true,
+              "stepoverFraction" : 0.1
+            },
+            "flipped" : false,
+            "mirrored" : false,
+            "profileID" : "87A00000-0000-4000-8000-000000000006",
+            "side" : "left"
+          }
+        }
+      },
+      "name" : "Closed profile",
+      "shapeIDs" : [
+        "87A00000-0000-4000-8000-000000000006",
+        "87A00000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 6350,
+          "plungeRate" : 1016,
+          "spindleRPM" : 15000,
+          "stepdown" : 3.175,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 19.049999999999997,
+        "id" : "4E415449-5645-4341-4D00-000000000007",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Ball Nose",
+        "notes" : "",
+        "number" : 7,
+        "shankDiameter" : 6.35,
+        "shape" : "ballNose",
+        "stickout" : 31.749999999999996,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "87A00000-0000-4000-8000-000000000001",
+      "kind" : {
+        "paths" : {
+          "_0" : [
+            {
+              "isClosed" : true,
+              "points" : [
+                {
+                  "x" : -152.39999999999995,
+                  "y" : 126.99999999999994
+                },
+                {
+                  "x" : 152.39999999999998,
+                  "y" : 126.99999999999994
+                },
+                {
+                  "x" : 152.39999999999998,
+                  "y" : -127
+                },
+                {
+                  "x" : -152.39999999999995,
+                  "y" : -127
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer" : "Default",
+      "name" : "FrameRail",
+      "position" : {
+        "x" : 177.79999999999995,
+        "y" : 152.4
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "87A00000-0000-4000-8000-000000000006",
+      "kind" : {
+        "paths" : {
+          "_0" : [
+            {
+              "isClosed" : true,
+              "points" : [
+                {
+                  "x" : -19.05000000000001,
+                  "y" : 6.350000000000023
+                },
+                {
+                  "x" : 19.05000000000001,
+                  "y" : 6.350000000000023
+                },
+                {
+                  "x" : 19.05000000000001,
+                  "y" : -6.350000000000023
+                },
+                {
+                  "x" : -19.05000000000001,
+                  "y" : -6.350000000000023
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer" : "Default",
+      "name" : "ClosedProfile",
+      "position" : {
+        "x" : 177.79999999999998,
+        "y" : 152.39999999999998
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 304.79999999999995,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 5.08,
+    "thickness" : 19.049999999999997,
+    "width" : 355.59999999999997,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

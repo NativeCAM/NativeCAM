@@ -162,6 +162,7 @@ struct SidebarView: View {
         case .fluting: "line.diagonal"
         case .prism: "triangle"
         case .edgeProfile: "rectangle.roundedtop"
+        case .moulding: "photo.artframe"
         }
     }
 
@@ -263,6 +264,8 @@ struct AddOperationMenu: View {
             if project.stock.rotary == nil {
                 Button("3D Roughing") { add(.rough3D) }
                 Button("3D Finishing") { add(.finish3D) }
+                Button("Moulding") { add(.moulding) }
+                    .help("Sweep an open profile vector along a rail, open or closed, into a 3D surface (picture frames, trim, raised panels), mitred at sharp corners, then rough and finish it. The smallest open vector selected is the profile; the rest are rails")
             } else {
                 Button("3D Rotary Roughing") { add(.rotaryRough) }
                     .help("Clear the stock round a 3D model on the blank in layers with an end mill, from a square bar or a round blank, leaving an allowance for the finish")
@@ -282,7 +285,7 @@ struct AddOperationMenu: View {
         }
     }
 
-    enum Kind { case profile, edgeProfile, pocket, drill, vcarve, chamfer, fluting, prism, rough3D, finish3D, rounding, rotaryFinish, rotaryRough }
+    enum Kind { case profile, edgeProfile, pocket, drill, vcarve, chamfer, fluting, prism, rough3D, finish3D, moulding, rounding, rotaryFinish, rotaryRough }
 
     private func add(_ kind: Kind) {
         let shapes = kind == .rounding ? [] : workspace.selectedShapeIDs
@@ -400,6 +403,9 @@ enum ShapeFactory {
             let ball = pick({ $0.shape == .ballNose }, 7)
             let (ids, boundary) = modelBoundary(shapes, project: project)
             return CAMOperation(name: "3D Finishing", kind: .finish3D(Finish3DParams(boundary: boundary)), shapeIDs: ids, tool: ball)
+        case .moulding:
+            let ball = pick({ $0.shape == .ballNose }, 7)
+            return moulding(shapes, project: project, ball: ball, endMill: endMill)
         case .rounding:
             return CAMOperation(name: "Rounding", kind: .rounding(RoundingParams()), shapeIDs: [], tool: endMill)
         case .rotaryFinish:
@@ -412,6 +418,23 @@ enum ShapeFactory {
             return CAMOperation(name: "3D Rotary Roughing", kind: .rotaryRough(RotaryRoughParams()),
                                 shapeIDs: models.isEmpty ? shapes : models, tool: endMill)
         }
+    }
+
+    /// A moulding on the selection: the smallest open vector is the profile (the one drawn as a cross-section), the other
+    /// vectors are rails. It roughs with an end mill and finishes with a ball nose, along the rail where it can.
+    static func moulding(_ selected: [UUID], project: Project, ball: Tool, endMill: Tool) -> CAMOperation {
+        let vectors = selected.compactMap { project.shape(id: $0) }.filter { $0.modelSpec == nil }
+        let open = vectors.filter { s in
+            let lines = s.polylines(tolerance: 0.05)
+            return lines.count == 1 && !lines[0].isClosed
+        }
+        func size(_ s: DesignShape) -> Double { let b = s.bounds; return b.width * b.width + b.height * b.height }
+        let profile = vectors.count > 1 ? open.min { size($0) < size($1) } : nil
+        let rails = vectors.filter { $0.id != profile?.id }
+        let finish = MouldingParams.suggestedFinish(rails: rails.flatMap { $0.polylines(tolerance: 0.05) })
+        let params = MouldingParams(profileID: profile?.id ?? UUID(), finish: finish, roughing: MouldingRoughing(tool: endMill))
+        return CAMOperation(name: "Moulding", kind: .moulding(params),
+                            shapeIDs: (profile.map { [$0.id] } ?? []) + rails.map(\.id), tool: ball)
     }
 
     /// Picks the 3D machining boundary: vectors selected with the model, or else the cut-out (an outside profile's

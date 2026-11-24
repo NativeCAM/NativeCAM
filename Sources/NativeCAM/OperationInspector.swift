@@ -179,111 +179,16 @@ struct OperationInspector: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         case let .finish3D(p):
-            let set: (Finish3DParams) -> Void = { op.kind = .finish3D($0) }
-            let stepover = p.stepoverInUse(tool: op.tool)
-            Section("3D Finishing") {
-                Picker("Strategy", selection: Binding(get: { p.strategy }, set: {
-                    var q = p
-                    q.strategy = $0
-                    // A rest pass starts from the defaults in the job's units.
-                    if $0 == .rest, q.rest == nil { q.rest = .defaults(for: units) }
-                    set(q)
-                })) {
-                    ForEach(Finish3DStrategy.allCases) { Text($0.label).tag($0) }
-                }
-                Picker("Machine", selection: Binding(get: { p.boundary }, set: { var q = p; q.boundary = $0; set(q) })) {
-                    ForEach(ModelBoundary.allCases) { Text($0.label).tag($0) }
-                }
-                if p.boundary == .vectors {
-                    LengthField(title: "Boundary margin", mm: Binding(get: { p.boundaryMargin ?? Finish3DParams.autoMargin(tool: op.tool) },
-                                                                    set: { var q = p; q.boundaryMargin = max(0, $0); set(q) }), units: units,
-                                help: "How far past the selected vectors the tool centre may go. Automatic: tool radius + 0.5 mm")
-                    BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
-                }
-                if p.strategy.usesScallopTarget {
-                    Picker("Spacing", selection: Binding(get: { p.scallopHeight != nil }, set: { byScallop in
-                        var q = p
-                        // Start from the scallop the stepover leaves now, so switching changes nothing until it's edited.
-                        q.scallopHeight = byScallop ? max(0.001, op.tool.scallopHeight(stepover: stepover)) : nil
-                        set(q)
-                    })) {
-                        Text("Stepover").tag(false)
-                        Text("Scallop height").tag(true)
-                    }
-                    .help("Set the passes' spacing by the stepover, or by the scallop height to leave between them (from the bit's rounded tip)")
-                }
-                if p.strategy.usesScallopTarget, let h = p.scallopHeight {
-                    LengthField(title: "Scallop height", mm: Binding(get: { h }, set: { var q = p; q.scallopHeight = max(0.001, $0); set(q) }),
-                                units: units, help: "Height of the ridges left between passes")
-                    LabeledContent("Stepover", value: "\(units.format(stepover)) \(units.symbol)")
-                    if op.tool.scallopRadius == nil {
-                        Text("This bit has no rounded tip to hold a scallop with, so the stepover sets the spacing.")
-                            .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                    }
-                } else {
-                    PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction }, set: { var q = p; q.stepoverFraction = $0; set(q) }))
-                    if p.strategy != .pencil {
-                        LabeledContent("Scallop height", value: "\(units.format(scallop(tool: op.tool, stepover: stepover), decimals: 4)) \(units.symbol)")
-                    }
-                }
-                if p.strategy.usesCentre {
-                    Toggle("Centre on the boundary", isOn: Binding(get: { p.centre == nil }, set: { auto in
-                        var q = p
-                        q.centre = auto ? nil : project.shapes(for: op).map(\.bounds).reduce(Rect2.empty) { $0.union($1) }.center
-                        set(q)
-                    }))
-                    .help("Work out from the centroid of the boundary, or turn off to pick the centre")
-                    if let c = p.centre {
-                        LengthField(title: "Centre X", mm: Binding(get: { c.x }, set: { var q = p; q.centre = Vec2($0, c.y); set(q) }), units: units)
-                        LengthField(title: "Centre Y", mm: Binding(get: { c.y }, set: { var q = p; q.centre = Vec2(c.x, $0); set(q) }), units: units,
-                                    help: "From the material's lower-left corner. A centre outside the boundary moves to the nearest point on it")
-                    }
-                }
-                if p.strategy == .spiral {
-                    Toggle("Hold scallop on slopes", isOn: Binding(get: { p.spiralHoldsScallop }, set: { var q = p; q.spiralHoldsScallop = $0; set(q) }))
-                        .help("Close the turns up where the surface slopes across them, so they're a stepover apart along the surface rather than in plan")
-                }
-                if p.strategy == .radial {
-                    NumberField(title: "Angular step", value: Binding(get: { p.radialStep ?? 0 }, set: { var q = p; q.radialStep = $0 > 0 ? min(45, max(0.1, $0)) : nil; set(q) }),
-                                suffix: "°", decimals: 2)
-                        .help("Angle between spokes. 0 = automatic: a stepover apart where each spoke meets the boundary")
-                    LengthField(title: "Minimum spacing", mm: Binding(get: { p.radialMinSpacing ?? stepover / 2 }, set: { var q = p; q.radialMinSpacing = max(0.01, $0); set(q) }),
-                                units: units, help: "Near the centre, spokes stop short rather than come closer than this. Automatic: half the stepover")
-                    if p.radialMinSpacing != nil {
-                        Button("Automatic spacing") { var q = p; q.radialMinSpacing = nil; set(q) }.controlSize(.small)
-                    }
-                }
-                if p.strategy.usesRaster {
-                    NumberField(title: "Raster angle", value: Binding(get: { p.rasterAngle }, set: { var q = p; q.rasterAngle = $0; set(q) }), suffix: "°", decimals: 1)
-                    Toggle("Cross-hatch", isOn: Binding(get: { p.crossHatch }, set: { var q = p; q.crossHatch = $0; set(q) }))
-                        .help("A second raster at the raster angle + 90° in the same toolpath: smoother where slopes run along the rows, about twice the time")
-                }
-                if p.strategy.usesWaterline {
-                    NumberField(title: "Steep angle", value: Binding(get: { p.steepAngleInUse }, set: { var q = p; q.steepAngle = $0; set(q) }),
-                                suffix: "°", decimals: 0, range: 5...85)
-                        .help(p.strategy == .steepShallow
-                              ? "Slope from horizontal above which waterline loops take over from the raster. It also sets the Z step"
-                              : "Sets the Z step: on a slope this steep the loops are a stepover apart, closer on steeper walls")
-                    LabeledContent("Z step", value: "\(units.format(p.waterlineStep(tool: op.tool), decimals: 4)) \(units.symbol)")
-                }
-                if p.strategy == .steepShallow {
-                    LabeledContent("Scallop at the seam",
-                                   value: "\(units.format(scallop(tool: op.tool, stepover: stepover / cos(p.steepAngleInUse * .pi / 180)), decimals: 4)) \(units.symbol)")
-                    LengthField(title: "Overlap", mm: Binding(get: { p.overlapInUse(tool: op.tool) }, set: { var q = p; q.overlap = max(0, $0); set(q) }),
-                                units: units, help: "How far each strategy runs past the seam into the other's area. Automatic: a quarter of the tool diameter")
-                    if p.overlap != nil {
-                        Button("Automatic overlap") { var q = p; q.overlap = nil; set(q) }.controlSize(.small)
-                    }
-                }
-                LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units)
-                Toggle("Smooth links", isOn: Binding(get: { p.smoothLinks }, set: { var q = p; q.smoothLinks = $0; set(q) }))
-                    .help("Turn between raster rows on an arc, and start passes off the model (ramping in, or coming onto a waterline loop from the open side) instead of plunging onto it")
-                Text(finishingNote(p.strategy))
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            if p.strategy == .rest {
-                RestFinishSection(params: p, op: op, project: project, units: units,
-                                  areas: workspace.job?.toolpaths.first { $0.sourceOperationID == op.id }?.restAreas, set: set)
+            Finish3DSection(params: p, op: op, project: project, workspace: workspace, units: units) { op.kind = .finish3D($0) }
+        case let .moulding(p):
+            let set: (MouldingParams) -> Void = { op.kind = .moulding($0) }
+            MouldingSection(params: p, op: $op, project: project, units: units, set: set)
+            MouldingRoughingSection(params: p, units: units, set: set)
+            Finish3DSection(params: p.finish, op: op, project: project, workspace: workspace, units: units, title: "Finish",
+                            strategies: MouldingSection.finishStrategies, showsBoundary: false) { f in
+                var q = p
+                q.finish = f
+                set(q)
             }
         case let .vcarve(p):
             let set: (VCarveParams) -> Void = { op.kind = .vcarve($0) }
@@ -373,6 +278,248 @@ struct OperationInspector: View {
                      ? "Turns the blank round in layers, each a spiral along it: smooth, and best when the rotary is quick."
                      : "Turns the blank round in layers of passes along it, stepping round between them; on a square bar it skips the faces until the layers reach them.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// A 3D finish's settings: its strategy (one of `strategies`), where it machines (unless `showsBoundary` is off, as on a
+/// moulding, whose boundary is its swept surface), its spacing and each strategy's own settings.
+struct Finish3DSection: View {
+    let params: Finish3DParams
+    let op: CAMOperation
+    let project: Project
+    let workspace: Workspace
+    let units: LengthUnit
+    var title = "3D Finishing"
+    var strategies: [Finish3DStrategy] = Finish3DStrategy.allCases
+    var showsBoundary = true
+    let set: (Finish3DParams) -> Void
+
+    var body: some View {
+        let p = params
+        let stepover = p.stepoverInUse(tool: op.tool)
+        Section(title) {
+            Picker("Strategy", selection: Binding(get: { p.strategy }, set: {
+                var q = p
+                q.strategy = $0
+                // A rest pass starts from the defaults in the job's units.
+                if $0 == .rest, q.rest == nil { q.rest = .defaults(for: units) }
+                set(q)
+            })) {
+                ForEach(strategies) { Text($0.label).tag($0) }
+            }
+            if showsBoundary {
+                Picker("Machine", selection: Binding(get: { p.boundary }, set: { var q = p; q.boundary = $0; set(q) })) {
+                    ForEach(ModelBoundary.allCases) { Text($0.label).tag($0) }
+                }
+            }
+            if showsBoundary, p.boundary == .vectors {
+                LengthField(title: "Boundary margin", mm: Binding(get: { p.boundaryMargin ?? Finish3DParams.autoMargin(tool: op.tool) },
+                                                                set: { var q = p; q.boundaryMargin = max(0, $0); set(q) }), units: units,
+                            help: "How far past the selected vectors the tool centre may go. Automatic: tool radius + 0.5 mm")
+                BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
+            }
+            if p.strategy.usesScallopTarget {
+                Picker("Spacing", selection: Binding(get: { p.scallopHeight != nil }, set: { byScallop in
+                    var q = p
+                    // Start from the scallop the stepover leaves now, so switching changes nothing until it's edited.
+                    q.scallopHeight = byScallop ? max(0.001, op.tool.scallopHeight(stepover: stepover)) : nil
+                    set(q)
+                })) {
+                    Text("Stepover").tag(false)
+                    Text("Scallop height").tag(true)
+                }
+                .help("Set the passes' spacing by the stepover, or by the scallop height to leave between them (from the bit's rounded tip)")
+            }
+            if p.strategy.usesScallopTarget, let h = p.scallopHeight {
+                LengthField(title: "Scallop height", mm: Binding(get: { h }, set: { var q = p; q.scallopHeight = max(0.001, $0); set(q) }),
+                            units: units, help: "Height of the ridges left between passes")
+                LabeledContent("Stepover", value: "\(units.format(stepover)) \(units.symbol)")
+                if op.tool.scallopRadius == nil {
+                    Text("This bit has no rounded tip to hold a scallop with, so the stepover sets the spacing.")
+                        .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction }, set: { var q = p; q.stepoverFraction = $0; set(q) }))
+                if p.strategy != .pencil {
+                    LabeledContent("Scallop height", value: "\(units.format(scallop(tool: op.tool, stepover: stepover), decimals: 4)) \(units.symbol)")
+                }
+            }
+            if p.strategy.usesCentre {
+                Toggle("Centre on the boundary", isOn: Binding(get: { p.centre == nil }, set: { auto in
+                    var q = p
+                    q.centre = auto ? nil : project.shapes(for: op).map(\.bounds).reduce(Rect2.empty) { $0.union($1) }.center
+                    set(q)
+                }))
+                .help("Work out from the centroid of the boundary, or turn off to pick the centre")
+                if let c = p.centre {
+                    LengthField(title: "Centre X", mm: Binding(get: { c.x }, set: { var q = p; q.centre = Vec2($0, c.y); set(q) }), units: units)
+                    LengthField(title: "Centre Y", mm: Binding(get: { c.y }, set: { var q = p; q.centre = Vec2(c.x, $0); set(q) }), units: units,
+                                help: "From the material's lower-left corner. A centre outside the boundary moves to the nearest point on it")
+                }
+            }
+            if p.strategy == .spiral {
+                Toggle("Hold scallop on slopes", isOn: Binding(get: { p.spiralHoldsScallop }, set: { var q = p; q.spiralHoldsScallop = $0; set(q) }))
+                    .help("Close the turns up where the surface slopes across them, so they're a stepover apart along the surface rather than in plan")
+            }
+            if p.strategy == .radial {
+                NumberField(title: "Angular step", value: Binding(get: { p.radialStep ?? 0 }, set: { var q = p; q.radialStep = $0 > 0 ? min(45, max(0.1, $0)) : nil; set(q) }),
+                            suffix: "°", decimals: 2)
+                    .help("Angle between spokes. 0 = automatic: a stepover apart where each spoke meets the boundary")
+                LengthField(title: "Minimum spacing", mm: Binding(get: { p.radialMinSpacing ?? stepover / 2 }, set: { var q = p; q.radialMinSpacing = max(0.01, $0); set(q) }),
+                            units: units, help: "Near the centre, spokes stop short rather than come closer than this. Automatic: half the stepover")
+                if p.radialMinSpacing != nil {
+                    Button("Automatic spacing") { var q = p; q.radialMinSpacing = nil; set(q) }.controlSize(.small)
+                }
+            }
+            if p.strategy.usesRaster {
+                NumberField(title: "Raster angle", value: Binding(get: { p.rasterAngle }, set: { var q = p; q.rasterAngle = $0; set(q) }), suffix: "°", decimals: 1)
+                Toggle("Cross-hatch", isOn: Binding(get: { p.crossHatch }, set: { var q = p; q.crossHatch = $0; set(q) }))
+                    .help("A second raster at the raster angle + 90° in the same toolpath: smoother where slopes run along the rows, about twice the time")
+            }
+            if p.strategy.usesWaterline {
+                NumberField(title: "Steep angle", value: Binding(get: { p.steepAngleInUse }, set: { var q = p; q.steepAngle = $0; set(q) }),
+                            suffix: "°", decimals: 0, range: 5...85)
+                    .help(p.strategy == .steepShallow
+                          ? "Slope from horizontal above which waterline loops take over from the raster. It also sets the Z step"
+                          : "Sets the Z step: on a slope this steep the loops are a stepover apart, closer on steeper walls")
+                LabeledContent("Z step", value: "\(units.format(p.waterlineStep(tool: op.tool), decimals: 4)) \(units.symbol)")
+            }
+            if p.strategy == .steepShallow {
+                LabeledContent("Scallop at the seam",
+                               value: "\(units.format(scallop(tool: op.tool, stepover: stepover / cos(p.steepAngleInUse * .pi / 180)), decimals: 4)) \(units.symbol)")
+                LengthField(title: "Overlap", mm: Binding(get: { p.overlapInUse(tool: op.tool) }, set: { var q = p; q.overlap = max(0, $0); set(q) }),
+                            units: units, help: "How far each strategy runs past the seam into the other's area. Automatic: a quarter of the tool diameter")
+                if p.overlap != nil {
+                    Button("Automatic overlap") { var q = p; q.overlap = nil; set(q) }.controlSize(.small)
+                }
+            }
+            LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units)
+            Toggle("Smooth links", isOn: Binding(get: { p.smoothLinks }, set: { var q = p; q.smoothLinks = $0; set(q) }))
+                .help("Turn between raster rows on an arc, and start passes off the model (ramping in, or coming onto a waterline loop from the open side) instead of plunging onto it")
+            Text(finishingNote(p.strategy))
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        if p.strategy == .rest {
+            RestFinishSection(params: p, op: op, project: project, units: units,
+                              areas: workspace.job?.toolpaths.first { $0.sourceOperationID == op.id }?.restAreas, set: set)
+        }
+    }
+}
+
+/// A moulding's profile and rails: which vector is the profile, which side of the rail it lies on, flipped or mirrored,
+/// and the swept surface's size, or why it can't be swept.
+struct MouldingSection: View {
+    let params: MouldingParams
+    @Binding var op: CAMOperation
+    let project: Project
+    let units: LengthUnit
+    let set: (MouldingParams) -> Void
+
+    /// The 3D finishing strategies a moulding offers (rest finishing follows other 3D finishes, which a moulding has none
+    /// of).
+    static let finishStrategies: [Finish3DStrategy] = [.raster, .waterline, .steepShallow, .constantScallop, .spiral, .radial, .pencil]
+
+    /// Open vectors in the project, any of which can be the profile.
+    private var openVectors: [DesignShape] {
+        project.shapes.filter { s in
+            guard s.modelSpec == nil, !s.isKeepOut else { return false }
+            let lines = s.polylines(tolerance: 0.05)
+            return lines.count == 1 && !lines[0].isClosed
+        }
+    }
+
+    var body: some View {
+        let p = params
+        let shapes = project.shapes(for: op)
+        let rails = shapes.filter { $0.id != p.profileID && $0.modelSpec == nil }
+        let closed = !rails.isEmpty && rails.allSatisfy { $0.polylines(tolerance: 0.05).allSatisfy(\.isClosed) }
+        Section("Moulding") {
+            Picker("Profile", selection: Binding(get: { p.profileID }, set: { id in
+                var q = p
+                q.profileID = id
+                // The profile is one of the toolpath's shapes; the one it replaces stays on as a rail only if it was one.
+                var ids = op.shapeIDs.filter { $0 != p.profileID }
+                if !ids.contains(id) { ids.insert(id, at: 0) }
+                op.shapeIDs = ids
+                op.kind = .moulding(q)
+            })) {
+                if !openVectors.contains(where: { $0.id == p.profileID }) { Text("Choose…").tag(p.profileID) }
+                ForEach(openVectors) { s in Text(s.name).tag(s.id) }
+            }
+            .help("The open vector drawn as the cross-section: across along X, up along Y, its start on the rail")
+            Picker(closed ? "Profile lies" : "Side of rail", selection: Binding(get: { p.side }, set: { var q = p; q.side = $0; set(q) })) {
+                ForEach(MouldingParams.Side.allCases) { Text($0.label(closed: closed)).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .help(closed ? "Inside or outside the closed rail" : "Left or right of the rail, looking along it from its start")
+            Toggle("Flip upside down", isOn: Binding(get: { p.flipped }, set: { var q = p; q.flipped = $0; set(q) }))
+            Toggle("Mirror (its end on the rail)", isOn: Binding(get: { p.mirrored }, set: { var q = p; q.mirrored = $0; set(q) }))
+            switch MouldingGenerator.surface(op: op, params: p, shapes: shapes, units: units) {
+            case let .success(s):
+                LabeledContent("Rails", value: "\(rails.count)")
+                LabeledContent("Profile width", value: "\(units.format(s.sweep.profileWidth)) \(units.symbol)")
+                LabeledContent("Depth", value: "\(units.format(s.sweep.depth)) \(units.symbol)")
+                if s.sweep.depth > project.stock.thickness + 1e-6 {
+                    Label("Deeper than the material.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange).font(.caption)
+                }
+                ForEach(s.warnings, id: \.self) { w in
+                    Label(w, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+                }
+                Text("The profile's start sits on the rail and its highest point at the material top; sharp rail corners are mitred.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            case let .failure(why):
+                Label(why.message, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// A moulding's optional roughing pass: an end mill clearing the swept surface in layers, leaving an allowance for the
+/// finish.
+struct MouldingRoughingSection: View {
+    let params: MouldingParams
+    let units: LengthUnit
+    let set: (MouldingParams) -> Void
+    @Environment(ToolLibraryStore.self) private var library
+
+    /// Bits that can rough: anything 3D roughing takes.
+    private var tools: [Tool] { library.tools.filter { OperationKind.rough3D(Rough3DParams()).refusal(for: $0) == nil && $0.shape != .drill } }
+
+    var body: some View {
+        let p = params
+        Section("Roughing") {
+            Toggle("Rough first", isOn: Binding(get: { p.roughing != nil }, set: { on in
+                var q = p
+                q.roughing = on ? MouldingRoughing(tool: tools.first { $0.shape == .flatEndMill } ?? tools.first ?? ToolLibrary.starter.tool(number: 1)!) : nil
+                set(q)
+            }))
+            if let r = p.roughing {
+                let inLibrary = tools.contains { $0.id == r.tool.id }
+                Picker("Roughing bit", selection: Binding(get: { r.tool.id }, set: { id in
+                    guard let t = library.tool(id: id) else { return }
+                    var q = p
+                    q.roughing?.tool = t
+                    set(q)
+                })) {
+                    if !inLibrary { Text("T\(r.tool.number) \(r.tool.name) (project copy)").tag(r.tool.id) }
+                    ForEach(tools) { t in Text("T\(t.number) \(t.name)").tag(t.id) }
+                }
+                LengthField(title: "Allowance", mm: Binding(get: { r.allowance }, set: { var q = p; q.roughing?.allowance = max(0, $0); set(q) }),
+                            units: units, help: "Material left on the surface for the finish")
+                LengthField(title: "Layer depth", mm: Binding(get: { r.passDepth ?? r.tool.cutting.stepdown },
+                                                              set: { var q = p; q.roughing?.passDepth = max(0.05, $0); set(q) }), units: units)
+                PercentField(title: "Stepover", fraction: Binding(get: { r.stepoverFraction ?? r.tool.cutting.stepoverFraction },
+                                                                 set: { var q = p; q.roughing?.stepoverFraction = $0; set(q) }))
+                Text("Clears the moulding in layers with \(r.tool.name), with its own feeds, before the finish.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Without roughing, the finishing bit cuts the whole depth in its first passes.")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
     }

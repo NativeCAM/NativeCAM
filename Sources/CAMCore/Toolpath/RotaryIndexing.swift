@@ -120,7 +120,7 @@ public enum RotaryIndex {
         issues += roundingIssues(project)
         for op in ops {
             switch op.kind {
-            case .rough3D, .finish3D:
+            case .rough3D, .finish3D, .moulding:
                 issues.append(JobIssue(.error, "3D Roughing and 3D Finishing cut flat sheets: on rotary stock, use 3D Rotary "
                     + "Roughing and Finishing.", operation: op.name))
             case .rounding, .rotaryFinish, .rotaryRough: continue
@@ -221,7 +221,7 @@ public enum RotaryIndex {
                     + "angle it's cut at. Clear the angles.", operation: op.name))
             }
             switch op.kind {
-            case .rough3D, .finish3D:
+            case .rough3D, .finish3D, .moulding:
                 issues.append(JobIssue(.error, "3D Roughing and 3D Finishing cut flat sheets: on rotary stock, use 3D Rotary "
                     + "Roughing and Finishing.", operation: op.name))
             default: break
