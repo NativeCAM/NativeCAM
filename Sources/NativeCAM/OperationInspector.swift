@@ -180,7 +180,7 @@ struct OperationInspector: View {
             }
         case let .finish3D(p):
             let set: (Finish3DParams) -> Void = { op.kind = .finish3D($0) }
-            let stepover = op.tool.stepoverBasis * p.stepoverFraction
+            let stepover = p.stepoverInUse(tool: op.tool)
             Section("3D Finishing") {
                 Picker("Strategy", selection: Binding(get: { p.strategy }, set: {
                     var q = p
@@ -200,9 +200,58 @@ struct OperationInspector: View {
                                 help: "How far past the selected vectors the tool centre may go. Automatic: tool radius + 0.5 mm")
                     BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
                 }
-                PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction }, set: { var q = p; q.stepoverFraction = $0; set(q) }))
-                if p.strategy != .pencil {
-                    LabeledContent("Scallop height", value: "\(units.format(scallop(tool: op.tool, stepover: stepover), decimals: 4)) \(units.symbol)")
+                if p.strategy.usesScallopTarget {
+                    Picker("Spacing", selection: Binding(get: { p.scallopHeight != nil }, set: { byScallop in
+                        var q = p
+                        // Start from the scallop the stepover leaves now, so switching changes nothing until it's edited.
+                        q.scallopHeight = byScallop ? max(0.001, op.tool.scallopHeight(stepover: stepover)) : nil
+                        set(q)
+                    })) {
+                        Text("Stepover").tag(false)
+                        Text("Scallop height").tag(true)
+                    }
+                    .help("Set the passes' spacing by the stepover, or by the scallop height to leave between them (from the bit's rounded tip)")
+                }
+                if p.strategy.usesScallopTarget, let h = p.scallopHeight {
+                    LengthField(title: "Scallop height", mm: Binding(get: { h }, set: { var q = p; q.scallopHeight = max(0.001, $0); set(q) }),
+                                units: units, help: "Height of the ridges left between passes")
+                    LabeledContent("Stepover", value: "\(units.format(stepover)) \(units.symbol)")
+                    if op.tool.scallopRadius == nil {
+                        Text("This bit has no rounded tip to hold a scallop with, so the stepover sets the spacing.")
+                            .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction }, set: { var q = p; q.stepoverFraction = $0; set(q) }))
+                    if p.strategy != .pencil {
+                        LabeledContent("Scallop height", value: "\(units.format(scallop(tool: op.tool, stepover: stepover), decimals: 4)) \(units.symbol)")
+                    }
+                }
+                if p.strategy.usesCentre {
+                    Toggle("Centre on the boundary", isOn: Binding(get: { p.centre == nil }, set: { auto in
+                        var q = p
+                        q.centre = auto ? nil : project.shapes(for: op).map(\.bounds).reduce(Rect2.empty) { $0.union($1) }.center
+                        set(q)
+                    }))
+                    .help("Work out from the centroid of the boundary, or turn off to pick the centre")
+                    if let c = p.centre {
+                        LengthField(title: "Centre X", mm: Binding(get: { c.x }, set: { var q = p; q.centre = Vec2($0, c.y); set(q) }), units: units)
+                        LengthField(title: "Centre Y", mm: Binding(get: { c.y }, set: { var q = p; q.centre = Vec2(c.x, $0); set(q) }), units: units,
+                                    help: "From the material's lower-left corner. A centre outside the boundary moves to the nearest point on it")
+                    }
+                }
+                if p.strategy == .spiral {
+                    Toggle("Hold scallop on slopes", isOn: Binding(get: { p.spiralHoldsScallop }, set: { var q = p; q.spiralHoldsScallop = $0; set(q) }))
+                        .help("Close the turns up where the surface slopes across them, so they're a stepover apart along the surface rather than in plan")
+                }
+                if p.strategy == .radial {
+                    NumberField(title: "Angular step", value: Binding(get: { p.radialStep ?? 0 }, set: { var q = p; q.radialStep = $0 > 0 ? min(45, max(0.1, $0)) : nil; set(q) }),
+                                suffix: "°", decimals: 2)
+                        .help("Angle between spokes. 0 = automatic: a stepover apart at the boundary's farthest point")
+                    LengthField(title: "Minimum spacing", mm: Binding(get: { p.radialMinSpacing ?? stepover / 2 }, set: { var q = p; q.radialMinSpacing = max(0.01, $0); set(q) }),
+                                units: units, help: "Near the centre, spokes stop short rather than come closer than this. Automatic: half the stepover")
+                    if p.radialMinSpacing != nil {
+                        Button("Automatic spacing") { var q = p; q.radialMinSpacing = nil; set(q) }.controlSize(.small)
+                    }
                 }
                 if p.strategy.usesRaster {
                     NumberField(title: "Raster angle", value: Binding(get: { p.rasterAngle }, set: { var q = p; q.rasterAngle = $0; set(q) }), suffix: "°", decimals: 1)
@@ -986,16 +1035,17 @@ func finishingNote(_ strategy: Finish3DStrategy) -> String {
         "One pass along each concave crease, where the bit touches two faces at once. Run it with a smaller ball nose after the main finish."
     case .rest:
         "Finishes only where the larger bits of the toolpaths it follows couldn't reach: crevices, serifs and tight valleys. Use a smaller ball or tapered ball nose after the main finish."
+    case .constantScallop:
+        "Passes the same distance apart along the surface, from the boundary inward, so the scallop stays even on steep and shallow ground alike. Best on reliefs with mixed slopes."
+    case .spiral:
+        "One continuous spiral from the centre out to the boundary. Suits round, shallow work: coins, domes, rosettes and clock faces."
+    case .radial:
+        "Spokes from the centre out to the boundary, every other one stopping short near the centre so they don't crowd. Suits round work with features that radiate from the middle."
     }
 }
 
 /// Theoretical scallop (cusp) height left between parallel passes of a ball-ended tool on a flat surface.
-func scallop(tool: Tool, stepover: Double) -> Double {
-    let R = tool.shape == .ballNose ? tool.radius : (tool.shape == .bullNose ? tool.cornerRadius
-        : (tool.shape == .taperedBallNose ? tool.tipDiameter / 2 : 0))
-    guard R > 0, stepover < 2 * R else { return 0 }
-    return R - (R * R - stepover * stepover / 4).squareRoot()
-}
+func scallop(tool: Tool, stepover: Double) -> Double { tool.scallopHeight(stepover: stepover) }
 
 func formatDuration(_ seconds: Double) -> String {
     let s = Int(seconds.rounded())

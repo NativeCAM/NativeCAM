@@ -782,7 +782,8 @@ public struct Finish3DParams: Hashable, Sendable {
     public var spiralHoldsScallop: Bool
     /// Radial: the angle between spokes, degrees; nil = the stepover apart at the boundary's farthest point.
     public var radialStep: Double?
-    /// Radial: how close spokes may come near the centre before every other one stops short, mm; nil = the stepover.
+    /// Radial: how close spokes may come near the centre before every other one stops short, mm; nil = half the stepover
+    /// (so between the centre and the boundary neighbouring spokes are between half a stepover and a stepover apart).
     public var radialMinSpacing: Double?
 
     public init(stepoverFraction: Double = 0.1, rasterAngle: Double = 0, allowance: Double = 0, boundary: ModelBoundary = .model,
@@ -1499,6 +1500,15 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .rough3D, .finish3D, .rotaryFinish, .rotaryRough: true
         default: false
         }
+    }
+
+    /// Whether the posted moves may be fitted with arcs. Constant scallop, spiral and radial passes curve in plan while
+    /// following the surface: an arc fitted to them (Z linear in angle, within the fitting tolerance in plan and at
+    /// its points) can dip into the surface by about the tolerance on a slope, and side into a vertical edge the
+    /// passes run beside. They post as the straight moves along the exact drop-cutter path that raster rows are.
+    public var fitsArcs: Bool {
+        if case let .finish3D(p) = self, p.strategy.isFormat21 { return false }
+        return true
     }
 
     /// Deepest point the operation is asked to reach, mm below the material top (nil for unlimited V-carve).

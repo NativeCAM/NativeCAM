@@ -18,7 +18,9 @@ extension Model3DGenerator {
     static func pattern(_ f: Finishing, _ b: inout ToolpathBuilder, warnings: inout [String]) -> Bool {
         let map = f.buildMap()
         let inside = regionMask(f.setup.boundary, f.setup.surface)
-        var hop = f.linkLimit
+        // Hops up to a bit width stay down, along the surface: where a spiral turn grazes the boundary it leaves and
+        // comes back in a little way along.
+        var hop = max(f.linkLimit, f.tool.diameter)
         let passes: [Pass]
         switch f.params.strategy {
         case .constantScallop:
@@ -26,9 +28,10 @@ extension Model3DGenerator {
         case .spiral:
             passes = spiralPasses(f, warnings: &warnings)
         case .radial:
-            let (spokes, spacing) = radialPasses(f, warnings: &warnings)
-            passes = spokes
-            hop = max(hop, 4 * spacing)
+            // Spokes start at different distances from the centre, so the hop between one's inner end and the next's
+            // can be long; it's still along the surface, over ground the spokes around it cut.
+            passes = radialPasses(f, warnings: &warnings)
+            hop = .infinity
         default:
             return false
         }
@@ -253,27 +256,16 @@ extension Model3DGenerator {
     /// Spokes from the centre at the angular step, alternately out and back in, clipped to the boundary. Near the
     /// centre, where the spokes crowd together, each stops where it would come closer than the minimum spacing to one
     /// cut further in (every other spoke first, then every other of those, and so on), so only a few reach the
-    /// middle. Returns the passes and the minimum spacing in use.
-    static func radialPasses(_ f: Finishing, warnings: inout [String]) -> ([Pass], Double) {
+    /// middle.
+    static func radialPasses(_ f: Finishing, warnings: inout [String]) -> [Pass] {
         let centre = patternCentre(f, warnings: &warnings)
         let s = f.stepover
         let far = reach(from: centre, f)
-        let spacing = max(f.cell, f.params.radialMinSpacing ?? s)
+        let spacing = max(f.cell, f.params.radialMinSpacing ?? s / 2)
         let wanted = f.params.radialStep ?? (far > 1e-6 ? s / far * 180 / Double.pi : 45)
         let n = max(4, min(3600, Int((360 / min(45, max(0.1, wanted))).rounded())))
         let step = 2 * Double.pi / Double(n)
-        // Spokes in the order they reach in: 0 first, then by how many times 2 divides their number.
-        func rank(_ k: Int) -> Int { k == 0 ? Int.max : k.trailingZeroBitCount }
-        let order = (0..<n).sorted { rank($0) != rank($1) ? rank($0) > rank($1) : $0 < $1 }
-        var start = [Double](repeating: 0, count: n)
-        var placed: [Int] = []
-        for k in order {
-            if !placed.isEmpty {
-                let gap = placed.map { j -> Int in let d = abs(j - k) % n; return min(d, n - d) }.min()!
-                start[k] = spacing / (2 * sin(Double(gap) * step / 2))
-            }
-            placed.append(k)
-        }
+        let start = spokeStarts(count: n, spacing: spacing)
         var lines: [[Vec2]] = []
         var spoke = 0
         for k in 0..<n where start[k] < far {
@@ -289,8 +281,30 @@ extension Model3DGenerator {
         }
         let dropped = ParallelResults<[Vec3]>(count: lines.count, initial: [])
         DispatchQueue.concurrentPerform(iterations: lines.count) { i in dropped[i] = drop(lines[i], f) }
-        let passes = dropped.array.enumerated().compactMap { i, p in p.count >= 2 ? Pass(points: p, closed: false, group: i) : nil }
-        return (passes, spacing)
+        return dropped.array.enumerated().compactMap { i, p in p.count >= 2 ? Pass(points: p, closed: false, group: i) : nil }
+    }
+
+    /// How far from the centre each of `n` evenly spaced spokes starts so that no two come closer than `spacing`
+    /// (chord between them at the same radius). Spokes are placed in turn, spoke 0 first (it reaches the centre),
+    /// then by how many times 2 divides their number (every other spoke, then every other of the rest, ...), each
+    /// starting where it's `spacing` from the nearest spoke placed before it.
+    static func spokeStarts(count n: Int, spacing: Double) -> [Double] {
+        let step = 2 * Double.pi / Double(n)
+        func rank(_ k: Int) -> Int { k == 0 ? Int.max : k.trailingZeroBitCount }
+        let order = (0..<n).sorted { rank($0) != rank($1) ? rank($0) > rank($1) : $0 < $1 }
+        var start = [Double](repeating: 0, count: n)
+        var placed: [Int] = []
+        placed.reserveCapacity(n)
+        for k in order {
+            var gap = Int.max
+            for j in placed {
+                let d = abs(j - k) % n
+                gap = min(gap, min(d, n - d))
+            }
+            if gap != Int.max { start[k] = spacing / (2 * sin(Double(gap) * step / 2)) }
+            placed.append(k)
+        }
+        return start
     }
 
     // MARK: Linking
