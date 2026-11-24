@@ -44,10 +44,12 @@ import Foundation
 //   nativecam-cli template save <project.nativecam> -o <out.nativecamtemplate> [--no-setup]
 //                                                      save the project's toolpaths (and job setup) as a template
 //   nativecam-cli template apply <template.nativecamtemplate> <project.nativecam> [-o out.nativecam | --in-place]
-//                     [--setup] [--tools library.json]
+//                     [--setup] [--tools library.json] [--create-layers | --skip-missing]
 //                                                      add a template's toolpaths to a project, matching tools to the
 //                                                      library (the starter library unless --tools), and print what
 //                                                      each toolpath found; --setup uses the template's job setup.
+//                                                      Layers the design lacks are refused unless --create-layers makes
+//                                                      them (empty) or --skip-missing leaves out their toolpaths.
 //                                                      Writes "<project> + <template>.nativecam" beside the project
 //                                                      unless -o names the file or --in-place overwrites the project
 //   nativecam-cli nest <project.nativecam> [-o out.nativecam | --in-place] [--spacing x] [--margin x] [--turns none|90|N]
@@ -380,6 +382,7 @@ case "tools":
 case "template":
     let usage = "usage: nativecam-cli template save <project> -o <out.nativecamtemplate> [--no-setup]"
         + " | template apply <template> <project> [-o out.nativecam | --in-place] [--setup] [--tools library.json]"
+        + " [--create-layers | --skip-missing]"
     switch args.count >= 3 ? args[1] : "" {
     case "save":
         guard let out = option("-o", in: args) else { fail(usage) }
@@ -388,11 +391,14 @@ case "template":
         let template = ToolpathTemplate(name: name, project: project, includeJobSetup: !args.contains("--no-setup"))
         do { try template.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
         print("Saved \(template.operations.count) toolpaths to \(out) (format \(template.formatVersion))")
-        for op in template.operations { print("  \(op.name): \(op.vectorSelection?.label ?? "no vectors needed")") }
+        for op in template.operations { print("  \(op.name): \(op.vectorSelection?.label(project.displayUnits) ?? "no vectors needed")") }
     case "apply":
         guard args.count >= 4 else { fail(usage) }
         // Bad flags are refused before anything is read, applied or printed.
         if option("-o", in: args) != nil && args.contains("--in-place") { fail("Pass -o or --in-place, not both.\n" + usage) }
+        if args.contains("--create-layers") && args.contains("--skip-missing") {
+            fail("Pass --create-layers or --skip-missing, not both.\n" + usage)
+        }
         let template: ToolpathTemplate
         do { template = try ToolpathTemplate.decode(Data(contentsOf: URL(fileURLWithPath: args[2]))) } catch {
             fail("Can't read template \(args[2]): \(error.localizedDescription)")
@@ -404,11 +410,26 @@ case "template":
                 fail("Can't read tool library \(path): \(error.localizedDescription)")
             }
         }
-        let result = template.apply(to: project, library: library, useJobSetup: args.contains("--setup"))
+        // A template never adds toolpaths for layers the design doesn't have unless told what to do about them.
+        let missing = template.missingLayers(in: project)
+        let choice: ToolpathTemplate.MissingLayers = args.contains("--create-layers") ? .create : args.contains("--skip-missing") ? .skip : .addEmpty
+        let missingList = missing.map { "“\($0)”" }.joined(separator: ", ")
+        if !missing.isEmpty && choice == .addEmpty {
+            fail("The design has no \(missing.count == 1 ? "layer" : "layers") \(missingList), which the template's toolpaths find their"
+                 + " vectors on. Pass --create-layers to make \(missing.count == 1 ? "it" : "them") (empty, so vectors can be put on"
+                 + " \(missing.count == 1 ? "it" : "them") later) or --skip-missing to leave out those toolpaths.")
+        }
+        let result = template.apply(to: project, library: library, useJobSetup: args.contains("--setup"), missingLayers: choice)
         let u = project.displayUnits
+        if !result.createdLayers.isEmpty {
+            print("Created \(result.createdLayers.count == 1 ? "layer" : "layers") \(result.createdLayers.map { "“\($0)”" }.joined(separator: ", ")) (empty)")
+        }
+        if choice == .skip && !missing.isEmpty {
+            print("Skipped \(counted(result.skippedCount, "toolpath")) on missing \(missing.count == 1 ? "layer" : "layers") \(missingList)")
+        }
         for row in result.rows {
-            let found = row.rule.map { "\($0.label): \(counted(row.shapeCount, "vector"))\(row.isEmpty ? ", added empty" : "")" }
-                ?? "needs no vectors"
+            let how = row.skipped ? ", skipped" : row.isEmpty ? ", added empty" : ""
+            let found = row.rule.map { "\($0.label(u)): \(counted(row.shapeCount, "vector"))\(how)" } ?? "needs no vectors"
             print("  \(row.name): \(found)")
         }
         for use in result.tools {
