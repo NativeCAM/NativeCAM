@@ -68,9 +68,16 @@ public struct SizeRange: Hashable, Codable, Sendable {
 
     public var isOpen: Bool { min == nil && max == nil }
 
-    /// "7.5–8.5 mm", "at least 30 mm", "up to 2 in".
+    /// The ends that are set (mm).
+    var ends: [Double] { [min, max].compactMap { $0 } }
+
+    /// "7.5–8.5 mm", "at least 30 mm", "up to 2 in". A length that's a round number in `units` is shown exactly
+    /// (to 1/64 in); any other is rounded to 0.001 in or 0.01 mm. `SizeFilter.label` picks the units a rule reads in.
     public func label(_ units: LengthUnit) -> String {
-        func f(_ v: Double) -> String { SizeFilter.trimmed(units.format(v)) }
+        func f(_ v: Double) -> String {
+            let exact = SizeFilter.isRound(v, in: units)
+            return SizeFilter.trimmed(units.format(v, decimals: exact ? (units == .inch ? 6 : 3) : (units == .inch ? 3 : 2)))
+        }
         switch (min, max) {
         case let (lo?, hi?): return abs(lo - hi) < 1e-9 ? "\(f(lo)) \(units.symbol)" : "\(f(lo))–\(f(hi)) \(units.symbol)"
         case let (lo?, nil): return "at least \(f(lo)) \(units.symbol)"
@@ -185,13 +192,32 @@ public struct SizeFilter: Hashable, Codable, Sendable {
         return true
     }
 
-    /// "circles 7.5–8.5 mm across", "at least 30 mm wide, up to 2 in tall".
+    /// "circles 7.5–8.5 mm across", "at least 30 mm wide, up to 120 mm tall", in the units the rule reads best in
+    /// (`labelUnits`): a rule made in mm keeps its mm on an inch design.
     public func label(_ units: LengthUnit) -> String {
+        let u = labelUnits(units)
         var parts: [String] = []
-        if let d = diameter, !d.isOpen { parts.append("circles \(d.label(units)) across") }
-        if let w = width, !w.isOpen { parts.append("\(w.label(units)) wide") }
-        if let h = height, !h.isOpen { parts.append("\(h.label(units)) tall") }
+        if let d = diameter, !d.isOpen { parts.append("circles \(d.label(u)) across") }
+        if let w = width, !w.isOpen { parts.append("\(w.label(u)) wide") }
+        if let h = height, !h.isOpen { parts.append("\(h.label(u)) tall") }
         return parts.isEmpty ? "any size" : parts.joined(separator: ", ")
+    }
+
+    /// The units to show the rule in: the design's when every length in it is a round number in them, else the other
+    /// units when every length is round in those (the units it was made in: 7.5 mm rather than 0.2953 in), else the
+    /// design's, rounded.
+    public func labelUnits(_ units: LengthUnit) -> LengthUnit {
+        let lengths = [diameter, width, height].compactMap { $0 }.flatMap(\.ends)
+        if lengths.allSatisfy({ Self.isRound($0, in: units) }) { return units }
+        let other: LengthUnit = units == .inch ? .mm : .inch
+        return lengths.allSatisfy { Self.isRound($0, in: other) } ? other : units
+    }
+
+    /// True when `mm` is a round number in `units`: a whole 0.01 mm, or a whole 0.001 in or 1/64 in.
+    static func isRound(_ mm: Double, in units: LengthUnit) -> Bool {
+        func whole(_ x: Double) -> Bool { abs(x - x.rounded()) < 1e-6 }
+        let v = units.fromMM(mm)
+        return units == .inch ? whole(v * 1000) || whole(v * 64) : whole(v * 100)
     }
 
     /// "8.000" → "8", "7.500" → "7.5".
@@ -253,7 +279,7 @@ public enum VectorSelection: Hashable, Sendable {
         }
         guard let size else { return base }
         if case .kind(.circles, _) = self, size.measuresDiameter, size.width == nil, size.height == nil, let d = size.diameter {
-            return "Circles \(d.label(units)) across"
+            return "Circles \(d.label(size.labelUnits(units))) across"
         }
         return "\(base) (\(size.label(units)))"
     }

@@ -208,6 +208,8 @@ public extension Calibration {
             /// A value the times did fit but that can't be applied, and why: the turn speed while the machine's rotary
             /// axis is off. Not `determined`, so Apply leaves the machine's own value.
             public var held: Held? = nil
+            /// Its sections were timed but don't pin it down (not `determined`), so it's left as it was.
+            public var timed: Bool = false
             public var id: String { field.rawValue }
 
             public struct Held: Hashable, Sendable {
@@ -218,10 +220,12 @@ public extension Calibration {
             }
 
             /// What the fit makes of the value, for display: the fitted value, the fitted value and why it isn't applied
-            /// ("5400°/min (90.0°/s) fitted, not applied: the rotary axis is off"), or "not timed, stays".
+            /// ("5400°/min (90.0°/s) fitted, not applied: the rotary axis is off"), "timed but not pinned down, stays" (as
+            /// the fit's note says), or "not timed, stays".
             public func afterText(_ u: LengthUnit) -> String {
                 if determined { return text(after, u) }
                 if let held { return "\(text(held.value, u)) fitted, not applied: \(held.reason)" }
+                if timed { return "timed but not pinned down, stays" }
                 return "not timed, stays"
             }
 
@@ -448,7 +452,10 @@ public extension Calibration {
         }
         start = params.map { $0.value(built.project.machine) }
         for (k, p) in params.enumerated() {
-            result.values.append(FitResult.Value(field: p.field, label: p.label, before: start[k], after: after[k], determined: determined[k]))
+            var value = FitResult.Value(field: p.field, label: p.label, before: start[k], after: after[k], determined: determined[k])
+            // As the note below says: sections were timed, but they leave this value open.
+            value.timed = !determined[k] && !fitted.isEmpty
+            result.values.append(value)
         }
         let undetermined = params.indices.filter { !determined[$0] }.map { params[$0].label }
         if !undetermined.isEmpty, !fitted.isEmpty {

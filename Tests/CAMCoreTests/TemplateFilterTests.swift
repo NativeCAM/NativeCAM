@@ -389,5 +389,37 @@ struct TemplateFilterTests {
         #expect(run.status == 0, "\(run.output)")
         #expect(run.output.contains("Drill 8 mm: Circles 7.5–8.5 mm across: 1 vector"), "\(run.output)")
         #expect(run.output.contains("every toolpath found its vectors"), "\(run.output)")
+
+        // On an inch design the rule still reads in the mm it was made in, not as 0.2953–0.3346 in (#123).
+        var inch = try Self.importedPanel()
+        inch.displayUnits = .inch
+        try inch.encoded().write(to: panel)
+        let onInch = try CommandLineTests.run(["template", "apply", template, panel.path, "-o", out.path])
+        #expect(onInch.status == 0, "\(onInch.output)")
+        #expect(onInch.output.contains("Drill 8 mm: Circles 7.5–8.5 mm across: 1 vector"), "\(onInch.output)")
+        #expect(!onInch.output.contains("0.2953"), "\(onInch.output)")
+    }
+
+    /// A size rule reads in the units it was made in when its lengths are round there, else in the design's, rounded (#123).
+    @Test func sizeRulesReadInTheUnitsTheyWereMadeIn() {
+        let mmCircles = SizeFilter.circles(7.5, 8.5)
+        #expect(mmCircles.label(.inch) == "circles 7.5–8.5 mm across")
+        #expect(mmCircles.label(.mm) == "circles 7.5–8.5 mm across")
+        #expect(VectorSelection.kind(.circles, size: mmCircles).label(.inch) == "Circles 7.5–8.5 mm across")
+        let wide = SizeFilter.box(width: SizeRange(min: 250), height: SizeRange(max: 120))
+        #expect(wide.label(.inch) == "at least 250 mm wide, up to 120 mm tall")
+        #expect(VectorSelection.layers(["Pockets"], size: wide).label(.inch) == "Layer “Pockets” (at least 250 mm wide, up to 120 mm tall)")
+        // Made in inches: inches on a mm design too, fractions exactly.
+        let inchBox = SizeFilter.box(width: SizeRange(min: 0.5.inch, max: 2.inch), height: SizeRange(min: (1.0 / 64).inch))
+        #expect(inchBox.label(.mm) == "0.5–2 in wide, at least 0.015625 in tall")
+        #expect(inchBox.label(.inch) == "0.5–2 in wide, at least 0.015625 in tall")
+        // A rule mixing both stays in the design's units.
+        let mixed = SizeFilter.box(width: SizeRange(min: 2.inch, max: 250), height: nil)
+        #expect(mixed.label(.inch) == "2–9.843 in wide")
+        #expect(mixed.label(.mm) == "50.8–250 mm wide")
+        // Round in neither: the design's units, rounded rather than to four places.
+        let measured = SizeFilter.circles(7.4937, 8.5063)
+        #expect(measured.label(.inch) == "circles 0.295–0.335 in across")
+        #expect(measured.label(.mm) == "circles 7.49–8.51 mm across")
     }
 }
