@@ -124,6 +124,123 @@ struct ChamferOptionsTests {
         #expect(tp.motions == without.toolpaths.first?.motions)
     }
 
+    // MARK: Overcut laps (#121)
+
+    /// The issue's sign: a 9 × 5" board chamfered 1/4" wide on its bottom edge, inside, with the starter 90° V-bit (1/8"
+    /// stepdown) and a 0.04" overcut. The bevel takes its two passes; each of the 6 laps after it shaves a 0.007" strip
+    /// and runs once, at full depth, so the chamfer takes about the plain one's time plus one pass a lap (it took 7×).
+    @Test func overcutLapsAfterTheBevelRunAtFullDepth() throws {
+        let stock = Stock(width: 10.inch, height: 6.inch, thickness: 0.75.inch, clearanceHeight: 10, plungeHeight: 2)
+        let shape = Fixture.rect(9.inch, 5.inch, at: Vec2(5.inch, 3.inch))
+        let w = 0.25.inch
+        func run(_ overcut: Double?) throws -> (tp: Toolpath, seconds: Double) {
+            let op = Self.chamfer(ChamferParams(side: .inside, edge: .bottom, width: w, overcut: overcut), [shape])
+            let job = CAMEngine.generate(Fixture.project(shapes: [shape], ops: [op], stock: stock))
+            let tp = try #require(job.toolpaths.first)
+            #expect(tp.warnings.isEmpty, "\(tp.warnings)")
+            return (tp, try #require(job.estimatedSeconds(toolpath: op.id)))
+        }
+        let plain = try run(nil), cut = try run(0.04.inch)
+        let d = w / Self.vBit90.halfAngleTangent
+        // The bevel's first pass, half way down, is the only one there: no lap is stepped.
+        let shallow = Fixture.pointsAt(z: -d / 2, cut.tp)
+        let plainShallow = Fixture.pointsAt(z: -d / 2, plain.tp)
+        #expect(!shallow.isEmpty)
+        #expect(shallow.count == plainShallow.count)
+        // The laps at full depth, out to the overcut past the vector on the right edge.
+        let deep = Fixture.pointsAt(z: -d, cut.tp).map(\.x)
+        #expect(abs((deep.max() ?? 0) - (9.5.inch + 0.04.inch)) < 0.01)
+        let bevel = ChamferGenerator.Bevel(regions: [], side: .inside, edge: .bottom, width: w, startDepth: 0, passDepth: nil,
+                                           sharpCorners: true, direction: .climb, overcut: 0.04.inch)
+        let laps = try #require(ChamferGenerator.lapSpacing(bevel, tool: Self.vBit90))
+        #expect(laps.count == 6)
+        // The plain chamfer's two passes, plus one pass each for the 6 laps (a little longer than the bevel's, further
+        // out), and the moves between them.
+        let perPass = plain.seconds / 2
+        let expected = plain.seconds + 6 * perPass
+        #expect(cut.seconds < 1.1 * expected, "\(cut.seconds) s vs \(expected) s")
+        #expect(cut.seconds > 0.9 * expected, "\(cut.seconds) s vs \(expected) s")
+    }
+
+    /// The same chamfer on a square: with its laps at full depth the bevel still rises 1 mm per mm from the vector into
+    /// the part as without the overcut, and the foot is flat at the bevel's depth all across the overcut.
+    @Test func fullDepthLapsKeepTheBevelAndTheFlat() throws {
+        let shape = Fixture.rect(40, 40, at: Vec2(100, 75))
+        let w = 0.25.inch, o = 0.04.inch
+        func grid(_ overcut: Double?) throws -> HeightGrid {
+            let op = Self.chamfer(ChamferParams(side: .inside, edge: .bottom, width: w, overcut: overcut), [shape])
+            let job = Self.job([shape], [op])
+            #expect(!job.hasErrors)
+            return Fixture.simulate(job.toolpaths, stock: Fixture.stock, cell: 0.05)
+        }
+        let cut = try grid(o), plain = try grid(nil)
+        // Mid-edge, at x = 120: inside the vector the bevel rises 1 mm per mm, as without the overcut.
+        var worst = 0.0
+        for delta in stride(from: 0.4, through: w - 0.4, by: 0.4) {
+            let h = Self.height(cut, 120 - delta, 75)
+            let want = -w + delta
+            worst = max(worst, abs(h - want), abs(h - Self.height(plain, 120 - delta, 75)))
+        }
+        #expect(worst < 0.1, "bevel off by \(worst) mm")
+        #expect(Self.height(cut, 120 - w - 0.2, 75) == 0)
+        // The flat, in the waste: the bevel's depth out to the overcut.
+        var flat = 0.0
+        for delta in stride(from: 0.1, through: o - 0.1, by: 0.05) {
+            flat = max(flat, abs(Self.height(cut, 120 + delta, 75) + w))
+        }
+        #expect(flat < VCarveParams.flatClearingRidge + 0.05, "flat off by \(flat) mm")
+        // Past it the last lap's cone rises.
+        let far = Self.height(cut, 120 + o + 1, 75)
+        #expect(abs(far + w - 1) < 0.1, "\(far)")
+    }
+
+    /// Laps are stepped only as far as their strip needs: with a 0.02" stepdown the bevel 1/4" deep takes 13 passes,
+    /// and each lap's 0.007" strip, taken in 5, stays within the V its first pass cuts. Each round of laps is cut after
+    /// the one before it, so every lap only ever shaves the strip.
+    @Test func lapsAreSteppedOnlyAsFarAsTheirStripNeeds() throws {
+        var tool = Self.vBit90
+        tool.cutting.stepdown = 0.02.inch
+        let w = 0.25.inch, o = 0.04.inch
+        let d = w / tool.halfAngleTangent
+        let bevel = ChamferGenerator.Bevel(regions: [], side: .outside, edge: .top, width: w, startDepth: 0, passDepth: nil,
+                                           sharpCorners: true, direction: .climb, overcut: o)
+        let levels = DepthSettings(startDepth: 0, cutDepth: d).passLevels(toolStepdown: tool.cutting.stepdown)
+        #expect(levels.count == 13)
+        let laps = ChamferGenerator.lapLevels(bevel, tool: tool, bevelLevels: levels)
+        #expect(laps.count == 5)
+        #expect(abs((laps.last ?? 0) + d) < 1e-9)
+        let spacing = try #require(ChamferGenerator.lapSpacing(bevel, tool: tool)).spacing
+        let p = -levels[0]
+        let firstPass = p * p * tool.halfAngleTangent
+        let slice = spacing * d / Double(laps.count)
+        #expect(slice <= firstPass + 1e-9, "\(slice) vs \(firstPass)")
+        // No overcut, or a bevel in one pass: the bevel's own levels.
+        var none = bevel
+        none.overcut = 0
+        #expect(ChamferGenerator.lapLevels(none, tool: tool, bevelLevels: levels) == levels)
+        #expect(ChamferGenerator.lapLevels(bevel, tool: tool, bevelLevels: [-d]) == [-d])
+        // Cut in rounds out from the bevel: each path between rapids reaches no less far out than the one before.
+        let shape = Fixture.rect(40, 40, at: Vec2(100, 75))
+        let op = Self.chamfer(ChamferParams(side: .outside, edge: .top, width: w, overcut: o), [shape], tool: tool)
+        let tp = try #require(Self.job([shape], [op]).toolpaths.first)
+        var reach: [Double] = []
+        var current = -Double.infinity
+        for m in tp.motions {
+            if m.kind == .rapid {
+                if current > -.infinity { reach.append(current) }
+                current = -.infinity
+            } else {
+                current = max(current, m.end.x)
+            }
+        }
+        if current > -.infinity { reach.append(current) }
+        #expect(reach.count == 7, "\(reach)")
+        let outward = zip(reach, reach.dropFirst()).allSatisfy { $1 >= $0 - 0.01 }
+        #expect(outward, "\(reach)")
+        let last = reach.last ?? 0
+        #expect(abs(last - (120 + w + o)) < 0.01)
+    }
+
     // MARK: Round-nose chamfers
 
     /// A 1/4" roundover at 3/16" wide rounds a part's top edge before its cut-out (bottom edge on the vector, inside):

@@ -139,6 +139,41 @@ struct ChamferCatalogTests {
             && $0.message.contains("The overcut reaches the next shape") }, "\(job.issues.map(\.message))")
     }
 
+    /// A 90° V-bit set to a 0.02" stepdown chamfering the board's top 1/4" wide with a 0.04" overcut: the bevel takes 13
+    /// passes, and each of its 6 laps' strips is too big for one, so each lap is stepped too, but in only 5 passes, none
+    /// taking more than the bevel's first.
+    @Test func overcutLapsThatNeedStepping() throws {
+        let p = try Self.edgeCase("overcut-laps-stepped") {
+            let board = EdgeProfileTests.board(Self.id(28))
+            var tool = Self.vBit
+            tool.cutting.stepdown = 0.02.inch
+            return Self.project("Overcut laps stepped", shapes: [board], ops: [
+                Self.chamfer(ChamferParams(side: .outside, edge: .top, width: 0.25.inch, overcut: 0.04.inch), tool: tool,
+                             shapes: [board.id], id: Self.id(29), name: "Stepped laps"),
+            ])
+        }
+        let job = CAMEngine.generate(p)
+        let tp = try #require(job.toolpaths.first)
+        #expect(!tp.isEmpty && tp.warnings.isEmpty, "\(tp.warnings)")
+        let d = 0.25.inch / Self.vBit.halfAngleTangent
+        let depths = Set(tp.motions.filter { $0.kind != .rapid && $0.end.z < -1e-6 }.map { ($0.end.z * 1e4).rounded() })
+        // The bevel's 13 levels and the laps' 5, which share the last.
+        #expect(depths.count == 17, "\(depths.sorted())")
+        // The laps' first level, a fifth of the way down, runs only outside the bevel's foot.
+        let first = Fixture.pointsAt(z: -d / 5, tp)
+        #expect(!first.isEmpty)
+        // How far each point is outside the board's rounded rectangle.
+        func outside(_ p: Vec2) -> Double {
+            let r = 0.5.inch
+            let qx = abs(p.x - 4.inch) - (3.inch - r), qy = abs(p.y - 3.inch) - (2.inch - r)
+            return Vec2(max(qx, 0), max(qy, 0)).length + min(max(qx, qy), 0) - r
+        }
+        let nearest = first.map(outside).min() ?? 0
+        #expect(nearest > 0.25.inch + 0.01, "\(nearest)")
+        let farthest = first.map(\.x).max() ?? 0
+        #expect(abs(farthest - (7.25.inch + 0.04.inch)) < 0.01)
+    }
+
     /// A 1/4" roundover asked for a chamfer 5/16" wide: more of the profile than the bit has. Refused, saying so, and
     /// nothing is posted for it.
     @Test func roundNoseWiderThanTheProfile() throws {
