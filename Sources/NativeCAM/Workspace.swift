@@ -634,7 +634,11 @@ final class Workspace {
             hatch(Rect2(min: Vec2(0, y - o), max: Vec2(s.width, y + o)))
             line(Vec2(0, y), Vec2(s.width, y), seam)
         }
-        if let reg = layout.registration {
+        // The job's holes where it has them (individual tiles' move off parts), when it's of this layout.
+        let generated = job?.tiling?.layout
+        let registration = generated.map { $0.pitch == layout.pitch && $0.tiles == layout.tiles } == true
+            ? generated?.registration : layout.registration
+        if let reg = registration {
             let hole = SIMD4<Float>(1, 0.55, 0.2, alpha)
             let points = reg.materialHoles(layout.tiles, stock: s).map(\.point) + reg.spoilboard.map { $0 + layout.tiles[0].offset }
             for c in points {

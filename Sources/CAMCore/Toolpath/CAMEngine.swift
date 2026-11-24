@@ -235,6 +235,8 @@ public enum CAMEngine {
         // a different order from the job as a whole, so generators are told the material there is still uncut.
         let layout = TileLayout(project)
         var sources: [TileSplitter.Source] = []
+        // Profiles with leads: how each comes back onto its wall where a tile line breaks it.
+        var breakLeads: [UUID: BreakLeads] = [:]
         let seamReach = layout.map { $0.overlap + 2 * TileLayout.largestToolRadius(project) + 1 }
         // Every toolpath's parts, built once for the whole pass (from all of them, so the order doesn't matter), when
         // any toolpath has leads or corner reliefs to keep clear of them.
@@ -287,6 +289,9 @@ public enum CAMEngine {
                     opContext.rotaryMaterial = { x, a, r in grid.highest(x: x, angle: a, reach: r) + between }
                 }
                 opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
+                if layout != nil, case let .profile(p) = op.kind {
+                    breakLeads[op.id] = ProfileGenerator.breakLeads(op: op, params: p, shapes: shapes, context: opContext)
+                }
                 var generated: [Toolpath]
                 if let refused = refusal(op, context: opContext) {
                     generated = [refused]
@@ -319,7 +324,9 @@ public enum CAMEngine {
                 for (position, angle) in g.angles.enumerated() where index < g.perAngle[position].count {
                     guard g.perAngle[position][index].clearing == clearing else { continue }
                     var tp = g.perAngle[position][index].tp
-                    if layout != nil { sources.append(TileSplitter.Source(toolpath: tp, operation: op)) }
+                    if layout != nil {
+                        sources.append(TileSplitter.Source(toolpath: tp, operation: op, leads: tp.id == op.id ? breakLeads[op.id] : nil))
+                    }
                     let face = faceKey(angle)
                     var model = models.removeValue(forKey: face) ?? newModel()
                     defer { models[face] = model }

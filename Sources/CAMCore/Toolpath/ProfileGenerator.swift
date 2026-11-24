@@ -5,6 +5,43 @@ import Foundation
 /// Direction convention (clockwise M3 spindle): climb milling keeps the finished wall on the tool's right.
 /// So an outside profile climbs clockwise around the part and an inside profile climbs counter-clockwise.
 enum ProfileGenerator {
+    /// The radius the tool centre is offset by: for tapered bits the cone's where it meets the surface at final depth;
+    /// a form or dovetail bit rides the line with its tip.
+    static func effectiveRadius(_ tool: Tool, cutDepth: Double) -> Double {
+        switch tool.shape {
+        case .taperedBallNose: tool.radius(atHeight: cutDepth)
+        case .form, .dovetail: tool.radius(atHeight: 0)
+        default: tool.shape.isTapered ? tool.radius(atHeight: cutDepth) : tool.radius
+        }
+    }
+
+    /// On a tiled job, the leads a profile comes back onto its wall with where a tile line breaks it: its own, kept to
+    /// the waste and clear of clamps and other toolpaths' parts as `generate` keeps them. nil without leads, on the
+    /// line, or for an undercut bit (which leaves the wall square, as it enters).
+    static func breakLeads(op: CAMOperation, params: ProfileParams, shapes: [DesignShape], context: GenerationContext) -> BreakLeads? {
+        let tool = op.tool
+        guard let leads = params.leads, params.side != .on, !tool.hasUndercut else { return nil }
+        let closed = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }.filter { $0.isClosed && $0.count >= 3 }
+        let regions = Region.build(from: closed, fill: .evenOdd)
+        guard !regions.isEmpty else { return nil }
+        let r = effectiveRadius(tool, cutDepth: params.depth.cutDepth)
+        let offset = r + params.allowance
+        let offsetRegions = regions.flatMap { $0.offset(by: params.side == .outside ? offset : -offset, arcTolerance: context.arcTolerance) }
+        var others: [ProtectedRegions.Zone] = []
+        if let parts = context.protectedRegions {
+            let reach = regions.reduce(Rect2.empty) { $0.union($1.bounds) }.insetBy(-(abs(params.allowance) + 2 * r + 2 * leads.size + 1))
+            let cut = ProtectedRegions.profileCut(regions, side: params.side, allowance: params.allowance, toolRadius: r,
+                                                  arcTolerance: context.arcTolerance)
+            others = parts.zones(toolRadius: r, cut: cut, walls: regions.flatMap(\.loops), near: reach, arcTolerance: context.arcTolerance)
+        }
+        // Near tile lines the material is taken as uncut (see `CAMEngine`), so the lead isn't checked against it.
+        let clearance = ToolCentreClearance(regions: offsetRegions, inside: params.side == .inside, stock: context.stock,
+                                            toolRadius: tool.radius, keepOuts: context.keepOuts, others: others,
+                                            materialTop: nil, topLimit: 0)
+        return BreakLeads(settings: leads, wasteOnLeft: params.direction == .climb, clearance: clearance,
+                          chordTolerance: context.arcTolerance)
+    }
+
     static func generate(op: CAMOperation, params: ProfileParams, shapes: [DesignShape], context: GenerationContext) -> Toolpath {
         let tool = op.tool
         var warnings: [String] = []
@@ -31,13 +68,7 @@ enum ProfileGenerator {
 
         // Effective radius: for tapered bits the cone radius where it meets the surface at final depth. A form or
         // dovetail bit rides the line with its tip (a form bit's pilot), so its profile is cut into the edge above it.
-        let cutDepth = params.depth.cutDepth
-        let r: Double
-        switch tool.shape {
-        case .taperedBallNose: r = tool.radius(atHeight: cutDepth)
-        case .form, .dovetail: r = tool.radius(atHeight: 0)
-        default: r = tool.shape.isTapered ? tool.radius(atHeight: cutDepth) : tool.radius
-        }
+        let r = effectiveRadius(tool, cutDepth: params.depth.cutDepth)
         let offset = r + params.allowance
 
         struct Contour { var loop: Polyline; var closed: Bool; var nesting: Int; var reliefs: [CornerRelief.Relief] = [] }

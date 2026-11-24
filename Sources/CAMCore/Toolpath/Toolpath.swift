@@ -139,7 +139,8 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// goes; what a pocket resting from earlier toolpaths has left to clear). Empty when nothing is left; nil for every
     /// other toolpath. Posts and checks don't read it.
     public var restAreas: [Polyline]?
-    /// Calibration programs (`Calibration`): the program stops (M0) once the tool is over this toolpath's start at
+    /// Calibration programs (`Calibration`), and the first toolpath of each individual tile after the first (naming its
+    /// dowels, see `TileSplitter`): the program stops (M0) once the tool is over this toolpath's start at
     /// safe Z, showing this message, and goes back to safe Z when the operator resumes. nil everywhere else. The
     /// G-code and OpenSBP posts write it for flat and indexed toolpaths; imported Vectric posts and wrapped toolpaths
     /// ignore it.

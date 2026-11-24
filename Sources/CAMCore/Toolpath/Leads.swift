@@ -122,6 +122,37 @@ struct FittedLead {
     var leadInLength: Double { zip(leadIn, leadIn.dropFirst()).reduce(0) { $0 + $1.0.distance(to: $1.1) } }
 }
 
+/// How a profile with leads comes back onto its wall, and leaves it, where a tile line breaks the cut (see
+/// `TileSplitter.assemble`): its own lead, on the waste side and clear of other parts as the profile's leads are.
+struct BreakLeads {
+    var settings: LeadSettings
+    var wasteOnLeft: Bool
+    var clearance: ToolCentreClearance
+    var chordTolerance: Double
+
+    /// A lead-in that reaches the cut at `p` going along `tangent` (or, `out`, a lead-out leaving it there), with every
+    /// point inside `bounds` (the tile's reach) and clear; smaller ones are tried as `LeadPlanner.fit` does. nil when
+    /// none fits.
+    func lead(at p: Vec2, tangent t: Vec2, out: Bool, within bounds: Rect2) -> [Vec2]? {
+        guard settings.size > 1e-6 else { return nil }
+        let minSize = max(0.5, clearance.toolRadius / 4)
+        var sizes: [Double] = [settings.size]
+        while let last = sizes.last, last / 2 >= minSize - 1e-9, sizes.count < 4 { sizes.append(last / 2) }
+        let normal = wasteOnLeft ? t.perpLeft : t.perpRight
+        for size in sizes {
+            var s = settings
+            if s.kind == .arc { s.radius = size } else { s.length = size }
+            guard let points = LeadPlanner.leadPoints(at: p, tangent: t, settings: s, wasteOnLeft: wasteOnLeft, out: out,
+                                                      chordTolerance: chordTolerance) else { continue }
+            if points.allSatisfy({ bounds.contains($0) }), clearance.isClear(path: points),
+               clearance.keepsAway(points, from: p, normal: normal) {
+                return points
+            }
+        }
+        return nil
+    }
+}
+
 enum LeadPlanner {
     /// Fits leads to a loop, entering as close to `near` as possible. `loop` is the tool-centre loop as cut (without
     /// reliefs); `relieved` is the same loop with any corner reliefs added, which is what gets cut. Tries entry points
