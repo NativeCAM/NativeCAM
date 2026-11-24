@@ -151,6 +151,13 @@ public struct AvidMach4Post: Sendable {
                 turned = true
             }
             if let a = state.a, tp.motions.contains(where: { $0.kind != .rapid && $0.kind != .dwell }) { cuts(a...a) }
+            // A calibration program's section: stop over its start with Mach4's on-screen message, then restate safe Z
+            // (which also brings the tool back if Z was jogged during the stop).
+            if let message = tp.stopMessage {
+                w.comment("MSG,\(message)")
+                w.line("M00")
+                w.line("G00 Z\(num(safe, isZ: true))")
+            }
             emitMotions(tp, frame: frame, writer: &w, state: &state)
         }
 

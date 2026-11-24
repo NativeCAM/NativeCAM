@@ -171,6 +171,12 @@ public struct OpenSBPPost: PostProcessor {
                 line("J2,\(f(round(start.x))),\(f(round(start.y)))")
                 state = (round(start.x), round(start.y), round(safe))
             }
+            // A calibration program's section: stop over its start with its message, then restate safe Z.
+            if let message = tp.stopMessage {
+                comment(message)
+                line("PAUSE")
+                line("JZ,\(f(round(safe)))")
+            }
 
             var position = tp.start
             for m in tp.motions {

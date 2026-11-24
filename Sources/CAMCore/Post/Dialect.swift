@@ -190,6 +190,9 @@ public struct Dialect: Hashable, Sendable {
     /// everywhere, and along Y where Avid's "Wrap X2A" mounting is written and checked (Avid Mach4, LinuxCNC and
     /// grblHAL).
     public var rotaryAlignments: Set<RotaryAxis.Alignment> = [.x]
+    /// A `(MSG,…)` comment shows its text on the controller's screen, as at a program stop (Mach4 and LinuxCNC);
+    /// elsewhere a stop's message is an ordinary comment the operator reads on the line display.
+    public var showsMessages: Bool = false
 
     public var hasAAxis: Bool { rotaryAxes.contains("A") }
 
@@ -217,7 +220,7 @@ public struct Dialect: Hashable, Sendable {
         dwell: .secondsWithDecimal, arcCheck: .absolute(0.0127), maxToolNumber: nil, maxLineNumber: nil, m6: .macro,
         coordinateDecimals: [.inch: 4, .mm: 3], feedDecimals: [.inch: 1, .mm: 0], verified: true,
         cannedCycles: CannedCycles(expanded: [74, 76, 84, 87, 88]), rotaryAxes: Set("ABC"), inverseTime: true,
-        rotaryAlignments: [.x, .y])
+        rotaryAlignments: [.x, .y], showsMessages: true)
 
     /// The dialect a machine's post writes; nil when NativeCAM has no post for its controller yet.
     public static func `for`(_ machine: MachineProfile) -> Dialect? {
@@ -302,6 +305,8 @@ public struct Dialect: Hashable, Sendable {
         d.rotaryFeed = .linearAxesOnly
         d.inverseTime = true
         d.rotaryAlignments = [.x, .y]
+        // "(MSG,…) displays the message" (G-code overview, Messages).
+        d.showsMessages = true
         // G74 and G84 tap with a floating holder (since 2.8) and feed out to the retract height; G76 threads on a lathe,
         // and G87 and G88 are "accepted, but the behavior is undefined".
         d.cannedCycles = CannedCycles(expanded: [74, 84],
