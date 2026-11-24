@@ -1445,6 +1445,9 @@ public enum OperationKind: Hashable, Codable, Sendable {
     case prism(PrismParams)
     /// A form bit's profile cut into the top edge of parts, round their outside or their holes. Format 18.
     case edgeProfile(EdgeProfileParams)
+    /// A profile vector swept along rail vectors into a 3D surface, roughed and finished with the 3D strategies.
+    /// Format 22.
+    case moulding(MouldingParams)
 
     public var label: String {
         switch self {
@@ -1461,6 +1464,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .fluting: "Fluting"
         case .prism: "Prism"
         case .edgeProfile: "Edge Profile"
+        case .moulding: "Moulding"
         }
     }
 
@@ -1497,7 +1501,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
 
     public var is3D: Bool {
         switch self {
-        case .rough3D, .finish3D, .rotaryFinish, .rotaryRough: true
+        case .rough3D, .finish3D, .rotaryFinish, .rotaryRough, .moulding: true
         default: false
         }
     }
@@ -1508,6 +1512,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
     /// passes run beside. They post as the straight moves along the exact drop-cutter path that raster rows are.
     public var fitsArcs: Bool {
         if case let .finish3D(p) = self, p.strategy.isFormat21 { return false }
+        if case let .moulding(p) = self, p.finish.strategy.isFormat21 { return false }
         return true
     }
 
@@ -1523,7 +1528,7 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case let .prism(p): p.depth.map { p.startDepth + $0 }
         // nil: the bit's whole profile, as the chip-load chart reads a form bit with no depth.
         case let .edgeProfile(p): p.depth
-        case .rough3D, .finish3D, .rounding, .rotaryFinish, .rotaryRough, .chamfer: nil
+        case .rough3D, .finish3D, .rounding, .rotaryFinish, .rotaryRough, .chamfer, .moulding: nil
         }
     }
 }
@@ -1577,6 +1582,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         switch kind {
         case let .pocket(p): p.clearanceTool
         case let .vcarve(p): (p.carveFlatDepth ?? 0) > 0 ? p.clearanceTool : nil
+        case let .moulding(p): p.roughing?.tool
         default: nil
         }
     }
@@ -1590,12 +1596,13 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`). 3D rest finishing
     /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`). Edge
     /// profiles are format 18. A chamfer with an overcut or a form bit is format 19. Constant scallop, spiral and radial
-    /// 3D finishing are format 21.
+    /// 3D finishing are format 21. Mouldings are format 22.
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {
         case let .pocket(p): bits = max(bits, p.clearanceTool?.shape.requiredFormatVersion ?? 1)
         case let .vcarve(p): bits = max(bits, p.clearanceTool?.shape.requiredFormatVersion ?? 1)
+        case let .moulding(p): bits = max(bits, p.roughing?.tool.shape.requiredFormatVersion ?? 1)
         default: break
         }
         let own: Int
@@ -1609,6 +1616,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case .edgeProfile: own = 18
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion
+        case .moulding: own = MouldingParams.formatVersion
         default: own = 1
         }
         return max(own, indexAngles == nil ? 1 : 3, bits)
