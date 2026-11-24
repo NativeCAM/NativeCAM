@@ -211,7 +211,8 @@ public enum RotaryWrap {
     /// Readies a toolpath generated on the unrolled sheet for wrapping around `diameter`:
     /// - arcs become lines within the context's flattening tolerance, since no controller can arc in X and A;
     /// - runs of short lines that lie within half the tolerance of one straight line become that line, so the
-    ///   controller isn't fed thousands of tiny inverse-time moves;
+    ///   controller isn't fed thousands of tiny inverse-time moves (within `mergeTolerance` instead when it's given:
+    ///   flutes that follow a model have already been joined so they never dip below their depth, and keep that);
     /// - a rapid that would turn the blank below `clearanceZ` goes up, across and back down, because the blank only
     ///   turns with the tool clear of it;
     /// - a feed that would need the blank to turn faster than the machine's turn speed comes down to what it can keep
@@ -219,7 +220,7 @@ public enum RotaryWrap {
     ///   own feeds and says so);
     /// - a move that turns the blank more than `maxTurnPerMove` is split into equal pieces.
     static func prepare(_ tp: Toolpath, diameter: Double, clearanceZ: Double, context ctx: GenerationContext,
-                        warns: Bool = true) -> Toolpath {
+                        warns: Bool = true, mergeTolerance: Double? = nil) -> Toolpath {
         let tolerance = ctx.flattenTolerance
         var lines: [Motion] = []
         var p = tp.start
@@ -238,7 +239,7 @@ public enum RotaryWrap {
         }
         var t = tp
         let maxSpan = maxTurnPerMove / 360 * .pi * diameter
-        var motions = merged(lines, start: tp.start, tolerance: tolerance / 2)
+        var motions = merged(lines, start: tp.start, tolerance: mergeTolerance ?? tolerance / 2)
         let slowest = limitTurnRate(&motions, start: tp.start, diameter: diameter, maxSpan: maxSpan, turnSpeed: turnSpeed(ctx.machine))
         t.motions = split(motions, start: tp.start, maxSpan: maxSpan)
         t.wrapDiameter = diameter
