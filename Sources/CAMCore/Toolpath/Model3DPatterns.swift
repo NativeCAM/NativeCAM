@@ -31,9 +31,20 @@ extension Model3DGenerator {
             passes = spiralPasses(f, warnings: &warnings)
         case .radial:
             // Spokes start at different distances from the centre, so the hop between one's inner end and the next's
-            // can be long; it's still along the surface, over ground the spokes around it cut.
-            passes = radialPasses(f, warnings: &warnings)
+            // can be long; it's still along the surface, over ground the spokes around it cut. Of the two orders the
+            // spokes can go in, the one the planner times quicker is cut (#131).
             hop = .infinity
+            var best: (passes: [Pass], builder: ToolpathBuilder, seconds: Double)?
+            for order in radialPasses(f, warnings: &warnings) where order.contains(where: { $0.points.count >= 2 }) {
+                var trial = b
+                cutPasses(order, f, &trial, hop: hop)
+                let t = estimatedSeconds(trial, f)
+                if t < best?.seconds ?? .infinity { best = (order, trial, t) }
+            }
+            guard let best else { return false }
+            b = best.builder
+            warnings += coverageWarnings(best.passes.map(\.points), map: map, inside: inside, f)
+            return true
         default:
             return false
         }
@@ -262,8 +273,15 @@ extension Model3DGenerator {
     /// Spokes from the centre at the angular step, alternately out and back in, clipped to the boundary. Near the
     /// centre, where the spokes crowd together, each stops where it would come closer than the minimum spacing to one
     /// cut further in (every other spoke first, then every other of those, and so on), so only a few reach the
-    /// middle.
-    static func radialPasses(_ f: Finishing, warnings: inout [String]) -> [Pass] {
+    /// middle. The same spokes in two orders, for `pattern` to cut the quicker:
+    /// - whole, one after another round the centre, alternately out and back in (on a round boundary, with or
+    ///   without a hole, each spoke's ends are beside the next's);
+    /// - in rings from the centre out (#127). Each round of thinning starts its spokes about the same distance from
+    ///   the centre, so the rings lie between those distances; in each, every spoke that runs through it, nearest
+    ///   first from whichever end is nearer. On an oval, cut whole, each spoke's inner end would link along the
+    ///   surface to the next's, often half the boundary's reach away; but each ring adds an end to every spoke
+    ///   through it, and round a hole a ring can run out of near spokes and lift across it (#131).
+    static func radialPasses(_ f: Finishing, warnings: inout [String]) -> [[Pass]] {
         let centre = patternCentre(f, warnings: &warnings)
         let s = f.stepover
         let far = reach(from: centre, f)
@@ -277,32 +295,82 @@ extension Model3DGenerator {
         }
         let n = angles.count
         let start = spokeStarts(angles: angles, spacing: spacing)
-        // Each round of thinning (every other spoke, every other of those, ...) starts its spokes about the same
-        // distance from the centre, so they're cut in rings between those distances, from the centre out: in each
-        // ring every spoke that runs through it, alternately out and back in, each starting beside where the last
-        // ended. (Cut whole, spoke after spoke, each one's inner end would link along the surface to the next's,
-        // often half the boundary's reach away.)
+        // Each spoke's runs inside the boundary, outwards, dropped once for both orders.
+        var runs: [(spoke: Int, points: [Vec2])] = []
+        for k in 0..<n where start[k] < far {
+            let u = Vec2.fromAngle(angles[k])
+            let a = centre + u * start[k], z = centre + u * (far + s)
+            let count = max(1, Int((a.distance(to: z) / f.ds).rounded(.up)))
+            let samples = (0...count).map { a.lerp(to: z, Double($0) / Double(count)) }
+            runs += runsInside(samples, f).map { (k, $0) }
+        }
+        let dropped = ParallelResults<[Vec3]>(count: runs.count, initial: [])
+        DispatchQueue.concurrentPerform(iterations: runs.count) { i in dropped[i] = drop(runs[i].points, f) }
+        let spokes = dropped.array
+
+        // Whole: the spokes in turn, every other one coming back in (its runs reversed), in that order.
+        var whole: [Pass] = []
+        var i = 0, spoke = 0
+        while i < runs.count {
+            var j = i
+            while j < runs.count, runs[j].spoke == runs[i].spoke { j += 1 }
+            var own = spokes[i..<j].filter { $0.count >= 2 }
+            if spoke % 2 == 1 { own = own.reversed().map { Array($0.reversed()) } }
+            for p in own { whole.append(Pass(points: p, closed: false, group: whole.count)) }
+            spoke += 1
+            i = j
+        }
+
+        // Rings: each spoke's runs cut at the ring edges.
         func rank(_ k: Int) -> Int { k == 0 ? Int.max : k.trailingZeroBitCount }
         var firstStart: [Int: Double] = [:]
         for k in 0..<n where start[k] < far { firstStart[rank(k)] = min(firstStart[rank(k)] ?? .infinity, start[k]) }
         var edges = Array(Set(firstStart.values)).sorted()
         edges.append(far + s)
-        var lines: [(points: [Vec2], ring: Int)] = []
+        var rings: [Pass] = []
         for ring in 0..<(edges.count - 1) {
-            let lo = edges[ring], hi = edges[ring + 1]
-            for k in 0..<n where start[k] < hi {
-                let u = Vec2.fromAngle(angles[k])
-                let a = centre + u * max(lo, start[k]), z = centre + u * hi
-                let count = max(1, Int((a.distance(to: z) / f.ds).rounded(.up)))
-                let samples = (0...count).map { a.lerp(to: z, Double($0) / Double(count)) }
-                lines += runsInside(samples, f).map { ($0, ring) }
+            for p in spokes where p.count >= 2 {
+                guard let piece = slice(p, from: edges[ring], to: edges[ring + 1], centre: centre, f) else { continue }
+                rings.append(Pass(points: piece, closed: false, group: ring, reversible: true))
             }
         }
-        let dropped = ParallelResults<[Vec3]>(count: lines.count, initial: [])
-        DispatchQueue.concurrentPerform(iterations: lines.count) { i in dropped[i] = drop(lines[i].points, f) }
-        return dropped.array.enumerated().compactMap { i, p in
-            p.count >= 2 ? Pass(points: p, closed: false, group: lines[i].ring, reversible: true) : nil
+        return [whole, rings]
+    }
+
+    /// The part of a pass running outwards from `centre` (its distance in plan never falling) that lies between
+    /// `r0` and `r1` from it; nil when under two points remain. A new end is dropped onto the surface where the pass
+    /// crosses that distance (a simplified move can run a little under the surface between its ends, and the link
+    /// to or from the end comes at it from elsewhere), and the moves to it are refined.
+    static func slice(_ p: [Vec3], from r0: Double, to r1: Double, centre: Vec2, _ f: Finishing) -> [Vec3]? {
+        let r = p.map { $0.xy.distance(to: centre) }
+        guard let last = r.last, last > r0, r[0] < r1 else { return nil }
+        var hint: Int32 = -1
+        var cut = false
+        func at(_ k: Int, _ radius: Double) -> Vec3 {
+            let t = (radius - r[k]) / max(1e-12, r[k + 1] - r[k])
+            let q = p[k].xy.lerp(to: p[k + 1].xy, min(1, max(0, t)))
+            cut = true
+            return Vec3(q, f.z(q, hint: &hint))
         }
+        var out: [Vec3] = []
+        for k in p.indices {
+            if r[k] >= r0, r[k] <= r1 {
+                out.append(p[k])
+            } else if r[k] > r1 {
+                if k > 0, r[k - 1] < r1 { out.append(at(k - 1, r1)) }
+                break
+            }
+            if k + 1 < p.count, r[k] < r0, r[k + 1] > r0 { out.append(at(k, r0)) }
+        }
+        guard out.count >= 2 else { return nil }
+        return cut ? f.refined(out, hint: &hint) : out
+    }
+
+    /// The planner's time for a builder's moves so far, on the job's machine.
+    static func estimatedSeconds(_ b: ToolpathBuilder, _ f: Finishing) -> Double {
+        let tp = b.build(id: UUID(), name: "", tool: f.tool, rpm: f.tool.cutting.spindleRPM, warnings: [])
+        let p = Project(stock: f.context.stock, machine: f.context.machine)
+        return CycleTimeEstimator.estimate([tp], project: p).toolpathSeconds.first ?? .infinity
     }
 
     /// How far from the centre each of `n` evenly spaced spokes starts so that no two come closer than `spacing`

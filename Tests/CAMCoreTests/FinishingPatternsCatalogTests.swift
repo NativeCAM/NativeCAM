@@ -237,6 +237,30 @@ struct FinishingPatternsCatalogTests {
         #expect(edge < FinishingPatternsTests.ball.radius + 0.1, "\(plunges)")
     }
 
+    /// Radial spokes go whole, one after another, or in rings from the centre out, whichever the planner times
+    /// quicker (#131). On the ring round the hole, rings lifted across the hole and ran 0:19; whole spokes run 0:14,
+    /// as before #129, coming out of the hole once. On the demo relief's oval, rings keep its 8:24 (whole: 8:34).
+    @Test func radialCutsTheQuickerOrderOnTheRingAndTheOval() throws {
+        let p = try Self.edgeCase("boundary-with-hole") { Project() }
+        let job = CAMEngine.generate(p)
+        let tp = job.toolpaths[2]
+        #expect(p.operations[2].name == "Radial")
+        let ring = try #require(job.estimatedSeconds(toolpath: tp.id))
+        #expect(ring < 14.5, "radial on the ring: \(ring) s")
+        let plunges = FinishingPatternsTests.plunges(tp)
+        #expect(plunges.count == 1, "\(plunges)")
+        let gouge = RestFinishingTests.pathGouge(tp, project: p)
+        #expect(gouge < 0.002, "cuts \(gouge) mm into the coin")
+
+        var relief = Project.demoRelief()
+        let id = relief.operations[1].id
+        guard case var .finish3D(fp) = relief.operations[1].kind else { Issue.record("not a finish"); return }
+        fp.strategy = .radial
+        relief.operations[1].kind = .finish3D(fp)
+        let oval = try #require(CAMEngine.generate(relief).estimatedSeconds(toolpath: id))
+        #expect(oval <= 504.5, "radial on the oval: \(oval) s")
+    }
+
     /// A round boss with a vertical wall 6 mm tall, finished by constant scallop: the drop-cutter can only put the
     /// tool at the wall's top edge or its foot, so the passes don't pile up there (slopes past 75° count as 75°), and
     /// none cuts into the boss.
