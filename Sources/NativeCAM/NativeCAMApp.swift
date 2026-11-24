@@ -103,6 +103,10 @@ struct AppCommands: Commands {
                 .disabled(actions == nil)
             Button("Export Setup Sheet…") { actions?.exportSetupSheet() }
                 .disabled(actions == nil)
+            Divider()
+            Button("Calibration Programs…") { actions?.calibrate() }
+                .disabled(actions == nil)
+                .help("Optional programs that time the machine and test its rotary axis and feeds, and fit the times into its settings")
         }
         CommandMenu("Toolpaths") {
             Button("Recalculate All") { actions?.regenerate() }
@@ -154,6 +158,7 @@ struct WorkspaceActions {
     var exportGCode: () -> Void
     var exportAirCut: () -> Void
     var exportSetupSheet: () -> Void
+    var calibrate: () -> Void
     var regenerate: () -> Void
     var simulate: () -> Void
     var stopSimulation: () -> Void

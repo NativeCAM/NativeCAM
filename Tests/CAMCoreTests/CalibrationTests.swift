@@ -154,6 +154,21 @@ struct CalibrationTests {
         }
     }
 
+    /// Every controller NativeCAM posts for gets a timing suite and a ladder that pass their checks.
+    @Test func everyControllerGetsProgramsThatPassTheirChecks() throws {
+        let tool = try #require(ToolLibrary.starter.tool(number: 1))
+        let small = Calibration.TimingOptions(window: Vec2(8.inch, 8.inch), airHeight: 1.inch, sectionSeconds: 3)
+        for family in [ControllerFamily.grbl, .grblHAL, .fluidNC, .carbideMotion, .linuxCNC, .masso, .centroid, .buildbotics, .openSBP, .richAuto] {
+            for units in [LengthUnit.inch, .mm] {
+                let machine = Self.controller(family, units: units)
+                let timing = try Calibration.timing(machine: machine, options: small)
+                #expect(timing.issues.isEmpty, "\(family.label) \(units): \(timing.issues.map(\.text))")
+                let ladder = try Calibration.ladder(machine: machine, options: .init(tool: tool, material: .plywood))
+                #expect(ladder.issues.isEmpty, "\(family.label) \(units) ladder: \(ladder.issues.map(\.text))")
+            }
+        }
+    }
+
     @Test func applyingAFitDoesNotChangeTheProgram() throws {
         let plain = try Calibration.timingPlan(machine: MachineProfile(), options: .defaults(.inch))
         let fitted = try Calibration.timingPlan(machine: Self.known(), options: .defaults(.inch))

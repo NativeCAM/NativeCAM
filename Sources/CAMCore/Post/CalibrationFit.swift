@@ -166,6 +166,34 @@ public extension Calibration {
         return times
     }
 
+    /// The sections `times` are for, with NativeCAM's estimates on `machine`: the timing suite rebuilt from its plan, or the
+    /// rotary check's three turns.
+    static func sections(_ times: Times, machine: MachineProfile) -> [Section] {
+        switch times.kind {
+        case .timing: return times.plan.map { timingSections(plan: $0, machine: machine).sections } ?? []
+        case .rotary:
+            let axis = machine.rotary ?? RotaryAxis()
+            return rotarySections(axis, letter: times.axisLetter ?? axis.letter.rawValue)
+        case .ladder: return []
+        }
+    }
+
+    /// Blank times for the programs `machine` would get with `options`: the timing suite's, and the rotary check's where
+    /// the controller drives the axis.
+    static func blankTimes(machine: MachineProfile, options: TimingOptions) -> [Times] {
+        var out: [Times] = []
+        var m = machine
+        m.customPost = nil
+        guard let dialect = Dialect.for(m) else { return [] }
+        if let plan = try? timingPlan(machine: machine, options: options) {
+            out.append(Times(kind: .timing, controller: plan.controller, plan: plan))
+        }
+        if rotaryRefusal(machine) == nil {
+            out.append(Times(kind: .rotary, controller: dialect.id, axisLetter: machine.rotary?.letter.rawValue ?? "A"))
+        }
+        return out
+    }
+
     // MARK: Fitting
 
     /// What a fit found: each value before and after, each section's error before and after, and the verdicts.

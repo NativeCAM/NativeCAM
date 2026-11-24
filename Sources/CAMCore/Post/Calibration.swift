@@ -487,8 +487,8 @@ public enum Calibration {
         planning.junctionDeviation = nil
         let project = timingProject(machine: planning, plan: plan)
         for kind in TimingKind.allCases {
-            let one = sectionSeconds(toolpath(kind, plan: plan, count: 1, index: 0), project: project)
-            let two = sectionSeconds(toolpath(kind, plan: plan, count: 2, index: 0), project: project)
+            let one = sectionSeconds(posted(toolpath(kind, plan: plan, count: 1, index: 0), project: project), project: project)
+            let two = sectionSeconds(posted(toolpath(kind, plan: plan, count: 2, index: 0), project: project), project: project)
             let each = max(1e-3, two - one), fixed = max(0, one - each)
             plan.counts[kind.id] = max(1, Int(((max(1, options.sectionSeconds) - fixed) / each).rounded(.up)))
         }
@@ -522,6 +522,15 @@ public enum Calibration {
                         start: Vec3(0, 0, plan.airHeight), motions: motions(kind, plan, count: count))
     }
 
+    /// A toolpath as the machine's post writes it: helical arcs as lines for ShopBot, every arc as lines where the
+    /// controller's arcs aren't documented (RichAuto), so the estimates and the checks see the moves the file holds.
+    static func posted(_ toolpath: Toolpath, project: Project) -> Toolpath {
+        guard let dialect = Dialect.for(project.machine) else { return toolpath }
+        if dialect.language == .openSBP { return OpenSBPPost(project: project).prepared([toolpath])[0] }
+        if !dialect.writesArcs { return GenericGCodePost(project: project, dialect: dialect).prepared([toolpath])[0] }
+        return toolpath
+    }
+
     /// Seconds for one section on its own, from rest at its start to rest at its end, as `CycleTimeEstimator` plans it.
     static func sectionSeconds(_ toolpath: Toolpath, project: Project) -> Double {
         CycleTimeEstimator.estimate([toolpath], project: project).toolpathSeconds.first ?? 0
@@ -553,7 +562,7 @@ public enum Calibration {
         var sections: [Section] = []
         let kinds = TimingKind.allCases
         for (i, kind) in kinds.enumerated() {
-            var tp = toolpath(kind, plan: plan, count: plan.counts[kind.id] ?? 1, index: i)
+            var tp = posted(toolpath(kind, plan: plan, count: plan.counts[kind.id] ?? 1, index: i), project: project)
             tp.spindleRPM = rpm
             let estimate = sectionSeconds(tp, project: project)
             let title = name(kind, plan)
@@ -832,8 +841,11 @@ public enum Calibration {
                 rungs[best].recommended = true
             }
         }
-        let width = x - pitch + tool.diameter / 2 + margin
-        let height = slot + margin
+        // The scrap's size, rounded up to an eighth of an inch (5 mm).
+        let round = u == .inch ? 0.125.inch : 5
+        func tidy(_ v: Double) -> Double { (v / round - 1e-6).rounded(.up) * round }
+        let width = tidy(x - pitch + tool.diameter / 2 + margin)
+        let height = tidy(slot + margin)
         let thickness = max(depth + (u == .inch ? 0.25.inch : 6), u == .inch ? 0.75.inch : 18)
         let window = Vec2(width, height)
         if width > m.travel.x + 1e-6 || height > m.travel.y + 1e-6 {
@@ -904,10 +916,14 @@ public enum Calibration {
     public static func verify(_ program: Program) -> [GCodeCheck.Issue] {
         guard program.dialect.readsBack else { return [] }
         let program0: GCodeProgram
-        do {
-            program0 = try GCodeParser.parse(program.gcode, dwellUnit: program.dialect.dwell.parserUnit)
-        } catch {
-            return [GCodeCheck.Issue(.error, "The file can't be read back: \(error.localizedDescription)")]
+        if program.dialect.language == .openSBP {
+            program0 = OpenSBPParser.parse(program.gcode, units: program.project.machine.outputUnits)
+        } else {
+            do {
+                program0 = try GCodeParser.parse(program.gcode, dwellUnit: program.dialect.dwell.parserUnit)
+            } catch {
+                return [GCodeCheck.Issue(.error, "The file can't be read back: \(error.localizedDescription)")]
+            }
         }
         var issues: [GCodeCheck.Issue] = []
         let stock = program.project.stock
@@ -961,8 +977,13 @@ public enum Calibration {
             if window.x > travel.x + 1e-6 || window.y > travel.y + 1e-6 {
                 issues.append(GCodeCheck.Issue(.error, "The \(size(window, program.project.displayUnits)) window is bigger than the machine's travel."))
             }
-            if program.kind == .timing, program0.pauses.count != program.sections.count {
-                issues.append(GCodeCheck.Issue(.error, "Has \(program0.pauses.count) stops for \(program.sections.count) sections."))
+            // ShopBot's reader doesn't keep its stops: count the bare PAUSEs before the program's END.
+            let stops = program.dialect.language == .openSBP
+                ? program.gcode.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
+                    .prefix { $0 != "END" }.filter { $0 == "PAUSE" }.count
+                : program0.pauses.count
+            if program.kind == .timing, stops != program.sections.count {
+                issues.append(GCodeCheck.Issue(.error, "Has \(stops) stops for \(program.sections.count) sections."))
             }
         }
         return issues

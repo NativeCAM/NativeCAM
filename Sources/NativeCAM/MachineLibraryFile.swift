@@ -78,6 +78,18 @@ enum MachineLibraryFile {
         save(lib)
     }
 
+    /// Replaces one entry's profile, bumping its revision (Calibration Programs' Apply). Returns the entry as saved.
+    @discardableResult
+    static func update(_ id: String, profile: MachineProfile) -> MachineSetup? {
+        var (lib, writable) = load()
+        guard writable, lib.update(id, profile: profile), let saved = lib.machine(id: id) else { return nil }
+        save(lib)
+        if lib.defaultID == id {
+            UserDefaults.standard.set(try? JSONEncoder().encode(saved.profile.unstampedForOlderBuilds), forKey: legacyDefaultsKey)
+        }
+        return saved
+    }
+
     static func setDefault(_ id: String) {
         var (lib, writable) = load()
         guard writable, let setup = lib.machine(id: id) else { return }

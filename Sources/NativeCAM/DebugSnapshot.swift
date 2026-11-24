@@ -26,6 +26,11 @@ import UniformTypeIdentifiers
 /// clearing the flats in raster lines. It draws the dialog for each boundary (inlay-sheet-*.png), logs the pair and its
 /// checks, draws the plug's inspector with its pocket depth changed so the offer to update the pocket shows
 /// (inspector-inlay-mismatch.png), then snapshots the project with the pair added.
+///
+/// With `-NativeCAMSnapshotCalibration YES` it saves the calibration programs for the project's machine as File ▸
+/// Calibration Programs… does (to `calibration/` in the output folder), logs their checks, draws the sheet's Programs tab
+/// (calibration-programs.png), fits times made up from slower settings and draws the Enter Times tab with the fit
+/// (calibration-fit.png).
 enum DebugSnapshot {
     static var requested: (project: String, outDir: String)? {
         let d = UserDefaults.standard
@@ -71,6 +76,9 @@ enum DebugSnapshot {
         }
         if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotInlay") {
             project = inlay(project, out: out, log: log, spin: spin)
+        }
+        if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotCalibration") {
+            calibration(project, out: out, log: log, spin: spin)
         }
 
         // 1. The whole window (sidebar, viewport, inspector) hosted offscreen.
@@ -324,6 +332,64 @@ enum DebugSnapshot {
                 + "\(files.count) files (\(files.compactMap(\.suffix).joined(separator: ",")))\(inTravel ? ", each in travel" : ", one past the travel")")
         }
         return applied.project
+    }
+
+    /// File ▸ Calibration Programs… for the project's machine: saves the programs as the sheet does (to `out/calibration`),
+    /// logs each one's sections and checks, draws the Programs tab (calibration-programs.png), then fits times made up
+    /// from slower settings than the machine's (60% of its accelerations, three quarters of its Z rapid, 40% of its corner
+    /// tolerance, a 60°/s rotary axis) and draws the Enter Times tab with the result (calibration-fit.png).
+    @MainActor
+    private static func calibration(_ project: Project, out: URL, log: (String) -> Void, spin: (Double) -> Void) {
+        let machine = project.machine
+        let tools = ToolLibraryStore.shared.tools
+        let options = Calibration.TimingOptions.defaults(machine.outputUnits)
+        let ladderTool = CalibrationSheet.ladderTools(tools).first { $0.shape == .flatEndMill } ?? CalibrationSheet.ladderTools(tools)[0]
+        let folder = out.appendingPathComponent("calibration", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let saved = CalibrationSheet.save(machine: machine, timing: options, rotary: Calibration.rotaryRefusal(machine) == nil,
+                                          ladder: .init(tool: ladderTool, material: project.stock.material), to: folder)
+        log("calibration saved: \(saved.written.joined(separator: ", "))")
+        for problem in saved.problems { log("calibration problem: \(problem)") }
+        if let refused = Calibration.rotaryRefusal(machine) { log("calibration rotary refused: \(refused.reason)") }
+        for build in [{ try Calibration.timing(machine: machine, options: options) }, { try Calibration.rotary(machine: machine) },
+                      { try Calibration.ladder(machine: machine, options: .init(tool: ladderTool, material: project.stock.material)) }] {
+            guard let program = try? build() else { continue }
+            log("calibration \(program.kind.rawValue): \(program.sections.count) sections, \(program.rungs.count) rungs, "
+                + "moves \(Int(program.estimatedSeconds.rounded())) s, check \(program.passedChecks ? "PASS" : "FAIL")"
+                + (program.issues.isEmpty ? "" : ": " + program.issues.map(\.text).joined(separator: "; ")))
+        }
+        render(CalibrationSheet(project: project, tools: tools, height: 1000) { _, _ in },
+               size: NSSize(width: 640, height: 1000), out: out, name: "calibration-programs.png", spin: spin)
+
+        var truth = machine
+        truth.accelerationXY = machine.axisAcceleration.x * 0.6
+        truth.accelerationZ = machine.axisAcceleration.z * 0.6
+        truth.rapidRateZ = machine.axisRapid.z * 0.75
+        truth.junctionDeviation = machine.cornerDeviation * 0.4
+        if truth.rotary != nil { truth.rotary?.turnSpeed = 3600 }
+        var entries: [String: String] = [:]
+        var times: [Calibration.Times] = []
+        for blank in Calibration.blankTimes(machine: machine, options: options) {
+            var t = blank
+            for s in Calibration.sections(blank, machine: truth) {
+                let seconds = s.id == "rotary-g93" ? 6.1 : (s.estimate * 10).rounded() / 10
+                t.measured[s.id] = seconds
+                entries["\(blank.kind.rawValue):\(s.id)"] = Calibration.number(seconds)
+            }
+            times.append(t)
+        }
+        do {
+            let fit = try Calibration.fit(times, machine: machine)
+            for v in fit.values {
+                log("calibration fit \(v.label): \(v.text(v.before, machine.outputUnits)) -> \(v.determined ? v.text(v.after, machine.outputUnits) : "stays")")
+            }
+            if let v = fit.fChange { log("calibration F-change \(v.passed ? "PASS" : "FAIL"): \(v.text)") }
+            if let v = fit.g93 { log("calibration G93 \(v.passed ? "PASS" : "FAIL"): \(v.text)") }
+            render(CalibrationSheet(project: project, tools: tools, tab: .times, entries: entries, fit: fit, height: 2200) { _, _ in },
+                   size: NSSize(width: 640, height: 2200), out: out, name: "calibration-fit.png", spin: spin)
+        } catch {
+            log("calibration fit refused: \(error.localizedDescription)")
+        }
     }
 
     /// Add Toolpath ▸ Inlay… on every closed vector (see the type's notes), returning the project with the pair added.
