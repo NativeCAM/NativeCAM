@@ -21,6 +21,18 @@ import Foundation
 /// another edge is nearer (past a prism's ridge, or where the cone would reach into another shape's bevel). A top-edge
 /// bevel's valleys are on the inside of a turn; a bottom-edge bevel's are on the outside, where it rises from the
 /// vector's corner into the material.
+///
+/// Overcut (V-bits). Further laps at the bevel's depth run the tip out past the bevel's foot, to the overcut: away from
+/// the vector on a top-edge bevel, across it into the waste on a bottom-edge one, stepped so the ridges between them
+/// stay within V-carve flat clearing's (`VCarveParams.flatClearingRidge`). Each is an offset of the vectors like the
+/// first lap's, so its cone's near side lies beyond the bevel's face and never touches it: the bevel keeps its width and
+/// angle, and its foot is a flat the overcut wide (plus the tip's width) instead of the bottom of a V.
+///
+/// Round-nose chamfers (form bits). A roundover, cove, ogee or custom form bit is placed as an edge profile places it
+/// (`EdgeProfileParams.formDepth`, `EdgeProfilePlan.fewestPasses`): its tip runs deep enough for the profile to meet
+/// the surface the width from the bevel's foot, its pilot on the foot (the vector for a bottom-edge chamfer, the width
+/// from it for a top-edge one), in one pass unless the router-bit chart's cross-section rule asks for more. Corners
+/// roll round as a bearing would.
 enum ChamferGenerator {
     /// What to bevel and how.
     struct Bevel {
@@ -32,6 +44,8 @@ enum ChamferGenerator {
         var passDepth: Double?
         var sharpCorners: Bool
         var direction: CutDirection
+        /// How far past the bevel's foot a second lap runs the tip, mm (0: none).
+        var overcut: Double = 0
     }
 
     /// One closed tip path, at the bevel's full depth except where it rises into a corner.
@@ -56,8 +70,9 @@ enum ChamferGenerator {
             ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
                 .build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: w)
         }
-        guard tool.shape.isTapered else {
-            return empty(["Chamfers need a V-bit or engraving bit; '\(tool.name)' is a \(tool.shape.label)."])
+        guard tool.shape.isTapered || tool.shape == .form else {
+            return empty(["Chamfers need a V-bit, an engraving bit or a form bit (a roundover, cove or ogee); '\(tool.name)' is a "
+                + "\(tool.shape.label.lowercased())."])
         }
         let polys = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }
         let open = polys.filter { !$0.isClosed && $0.count >= 2 }.count
@@ -68,15 +83,160 @@ enum ChamferGenerator {
         let regions = Region.build(from: polys.filter { $0.isClosed && $0.count >= 3 }, fill: .evenOdd)
         guard !regions.isEmpty else { return empty(warnings + ["Chamfers need closed shapes; none were selected."]) }
         guard params.width > 1e-6 else { return empty(warnings + ["The chamfer's width must be more than 0."]) }
+        if tool.shape == .form { return roundNose(op: op, params: params, regions: regions, context: context, warnings: warnings) }
         let depth = params.depth(with: tool)
         let reach = min(tool.taperHeight, tool.fluteLength)
         if params.startDepth + depth > reach + 1e-6 {
             warnings.append("The bevel reaches \(context.length(params.startDepth + depth)) deep, but '\(tool.name)' only cuts "
                 + "\(context.length(reach)) down its V, so its top comes out as a step instead. Use a narrower chamfer or a larger V-bit.")
         }
+        if (params.overcut ?? 0) > 1e-9, params.edge == .bottom, params.side == .both {
+            warnings.append("The overcut is ignored: a bottom-edge chamfer on both sides has a bevel on each side of the vector, "
+                + "so there's no foot to run past.")
+        }
         let bevel = Bevel(regions: regions, side: params.side, edge: params.edge, width: params.width, startDepth: params.startDepth,
-                          passDepth: params.passDepth, sharpCorners: params.sharpCorners, direction: params.direction)
+                          passDepth: params.passDepth, sharpCorners: params.sharpCorners, direction: params.direction,
+                          overcut: params.overcut(with: tool))
+        if bevel.overcut > 1e-9, let reach = overcutCrowding(bevel, tool: tool) {
+            warnings.append("The overcut reaches the next shape (or the shape's own other side) where they're closer than "
+                + "\(context.length(2 * reach)) apart: there the flat comes out narrower than \(context.length(params.flatWidth(with: tool))) "
+                + "and the bit cuts toward the other shape. Make the overcut smaller, or move the shapes apart.")
+        }
         return toolpath(bevel, op: op, context: context, warnings: warnings)
+    }
+
+    /// How far from the vector the overcut's flat reaches at the foot, when somewhere that's nearer another edge (another
+    /// shape, or the far side of the same one) than to its own: the overcut runs into the next bevel there. nil when it
+    /// fits everywhere the bevel's own flat does.
+    static func overcutCrowding(_ bevel: Bevel, tool: Tool) -> Double? {
+        let rt = max(0, tool.tipDiameter / 2), o = bevel.overcut, w = bevel.width
+        let top = bevel.edge == .top
+        // The far edge of the flat from the vector, with the overcut and without it, on the side it lies.
+        let reach = top ? w + o + 2 * rt : o + 2 * rt
+        let plain = top ? w + 2 * rt : 2 * rt
+        let directions: [Double]
+        switch bevel.side {
+        case .outside: directions = [top ? 1 : -1]
+        case .inside: directions = [top ? -1 : 1]
+        case .both: directions = [1, -1]
+        }
+        let loops = bevel.regions.flatMap(\.loops)
+        var segments: [(Vec2, Vec2)] = []
+        var owner: [(loop: Int, along: Double)] = []
+        var lengths: [Double] = []
+        for (l, loop) in loops.enumerated() {
+            var along = 0.0
+            for i in 0..<loop.segmentCount {
+                let seg = loop.segment(i)
+                segments.append(seg)
+                owner.append((l, along))
+                along += seg.0.distance(to: seg.1)
+            }
+            lengths.append(along)
+        }
+        guard !segments.isEmpty else { return nil }
+        let grid = VCarveGenerator.SegmentGrid(segments: segments, cell: max(2 * reach, 1))
+        var scratch = VCarveGenerator.SegmentGrid.Scratch(count: segments.count)
+        // The nearest edge to `p` other than the stretch of the same loop near the sample (whose own curve the flat
+        // follows), mm.
+        func nearestOther(_ p: Vec2, radius: Double, from k: Int, at s: Double) -> Double {
+            var best = Double.infinity
+            for j in grid.query(p, radius: radius, scratch: &scratch) {
+                if owner[j].loop == owner[k].loop {
+                    // How far along the loop, either way round, the segment is from the sample.
+                    let a0 = owner[j].along, span = segments[j].0.distance(to: segments[j].1), a1 = a0 + span
+                    let gap = s < a0 ? a0 - s : (s > a1 ? s - a1 : 0)
+                    if min(gap, lengths[owner[k].loop] - span - gap) < 3 * radius { continue }
+                }
+                best = min(best, distancePointSegment(p, segments[j].0, segments[j].1))
+            }
+            return best
+        }
+        for (k, seg) in segments.enumerated() {
+            let v = seg.1 - seg.0
+            let len = v.length
+            guard len > 1e-9 else { continue }
+            // Outward: to the right of an outline, which runs anticlockwise, and into a hole, which runs clockwise.
+            let n = Vec2(v.y, -v.x) * (1 / len)
+            let samples = max(1, Int(len.rounded(.up)))
+            for i in 0..<samples {
+                let t = (Double(i) + 0.5) / Double(samples)
+                let p = seg.0 + v * t
+                let s = owner[k].along + len * t
+                for side in directions {
+                    let far = p + n * (side * reach)
+                    guard nearestOther(far, radius: reach, from: k, at: s) < reach - tolerance else { continue }
+                    let near = p + n * (side * plain)
+                    if plain < tolerance || nearestOther(near, radius: plain, from: k, at: s) >= plain - tolerance { return reach }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// A round-nose chamfer: `op`'s form bit placed so its profile meets the surface `params.width` from the bevel's foot.
+    static func roundNose(op: CAMOperation, params: ChamferParams, regions: [Region], context: GenerationContext,
+                          warnings: [String]) -> Toolpath {
+        let tool = op.tool
+        var warnings = warnings
+        let bitName = tool.name.isEmpty ? "T\(tool.number)" : "'\(tool.name)'"
+        func empty(_ why: String) -> Toolpath {
+            ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
+                .build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings + [why])
+        }
+        let top = params.edge == .top
+        if !top, params.side == .both {
+            return empty("A form bit can't rise on both sides of one vector: set Side to Inside or Outside, or Vector to Top edge.")
+        }
+        guard let depth = EdgeProfileParams.formDepth(reaching: params.width, tool: tool) else {
+            return empty("\(bitName)'s profile reaches \(context.length(EdgeProfileParams.profileReach(tool))) into the edge at most, "
+                + "so a chamfer \(context.length(params.width)) wide needs more of the profile than the bit has. Make the chamfer "
+                + "narrower, or use a larger bit.")
+        }
+        let tipZ = -(params.startDepth + depth)
+        if params.startDepth + depth > tool.fluteLength + 1e-6 {
+            warnings.append("The profile reaches \(context.length(params.startDepth + depth)) deep, past \(bitName)'s "
+                + "\(context.length(tool.fluteLength)) of flute.")
+        }
+        let plan = EdgeProfilePlan.fewestPasses(tool: tool, depth: depth, thickness: max(0.01, context.stock.thickness - params.startDepth))
+        let c = plan.centreOffset
+        let sides: [Double]
+        switch params.side {
+        case .outside: sides = [1]
+        case .inside: sides = [-1]
+        case .both: sides = [1, -1]
+        }
+        let loops = regions.flatMap(\.loops)
+        let entry = ProfileParams(side: .outside, direction: params.direction,
+                                  depth: DepthSettings(startDepth: params.startDepth, cutDepth: params.startDepth + depth),
+                                  tabs: TabSettings(enabled: false), entry: EdgeProfileParams.defaultEntry, leads: nil)
+        var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
+        var any = false
+        // Each pass from the outside in, round every edge before the next steps in.
+        for pass in plan.passes {
+            var laps: [Polyline] = []
+            for sigma in sides {
+                // The bit's axis from the vector toward the bevel: the foot (the vector, or the width out from it) plus the
+                // pilot and the pass's standoff, on the waste side.
+                let axis = top ? params.width + c + pass.standoff : -(c + pass.standoff)
+                let finishedLeft = top == (sigma > 0)
+                let reverse = (params.direction == .climb) == finishedLeft
+                for loop in Clipper.offset(loops, delta: sigma * axis, join: .round, arcTolerance: context.arcTolerance) {
+                    laps.append(reverse ? loop.reversed : loop)
+                }
+            }
+            while !laps.isEmpty {
+                let here = b.position.xy
+                let n = laps.indices.min { laps[$0].closestPoint(to: here).distance < laps[$1].closestPoint(to: here).distance }!
+                let lap = laps.remove(at: n).startingNearest(here)
+                b.retract()
+                ProfileGenerator.cutClosed(lap, levels: [tipZ], params: entry, tool: tool, builder: &b, warnings: &warnings)
+                any = true
+            }
+        }
+        b.retract()
+        if !any { warnings.append("The chamfer has nowhere to go: the shapes are too small for \(bitName).") }
+        return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
     }
 
     /// Cuts `bevel` with the operation's tool: each tip path in turn, nearest first, every pass on one before the next.
@@ -221,6 +381,22 @@ enum ChamferGenerator {
             for i in points.indices where points[i].count >= 3 {
                 out.append(reverse ? TipPath(points: points[i].reversed(), startable: startable[i].reversed())
                                    : TipPath(points: points[i], startable: startable[i]))
+            }
+            // The overcut's laps: the same offset run further past the foot, at the bevel's depth, out to the overcut, close
+            // enough that the ridges between them stay within V-carve flat clearing's.
+            if bevel.overcut > 1e-9, sigma != 0 {
+                let spacing = max(0.02, tool.tipDiameter + 2 * VCarveParams.flatClearingRidge * t)
+                let n = max(1, Int((bevel.overcut / spacing - 1e-9).rounded(.up)))
+                for k in 1...n {
+                    let o = bevel.overcut * Double(k) / Double(n)
+                    let past = sigma * (oFinal + (top ? o : -o))
+                    let lap = Clipper.offset(loops, delta: past, join: bevel.sharpCorners ? .miter : .round, miterLimit: miterLimit,
+                                             arcTolerance: arcTolerance)
+                    for loop in lap where loop.count >= 3 {
+                        let pts = loop.points.map { Vec3($0, -(start + d)) }
+                        out.append(TipPath(points: reverse ? pts.reversed() : pts, startable: [Bool](repeating: true, count: pts.count)))
+                    }
+                }
             }
         }
         return out

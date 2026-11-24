@@ -19,6 +19,11 @@ extension CAMEngine {
         var passArea: Double?
         if case let .edgeProfile(p)? = operation?.kind {
             passArea = p.plan(tool: tool, thickness: project.stock.thickness).largestLap
+        } else if case let .chamfer(c)? = operation?.kind, tool.shape == .form,
+                  let d = EdgeProfileParams.formDepth(reaching: c.width, tool: tool) {
+            // A round-nose chamfer's passes, as an edge profile's are.
+            passArea = EdgeProfilePlan.fewestPasses(tool: tool, depth: d, thickness: max(0.01, project.stock.thickness - c.startDepth))
+                .largestLap
         }
         let reading = ChipLoad.reading(tool, material: material, depth: depth, crossSection: passArea)
         let r = reading.range

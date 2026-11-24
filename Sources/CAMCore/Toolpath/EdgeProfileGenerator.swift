@@ -50,6 +50,10 @@ public struct EdgeProfilePlan: Hashable, Sendable {
     public var largestLap: Double { passes.map(\.largestLap).max() ?? 0 }
     /// The pass (from 0) whose lap takes the most.
     public var largestPass: Int? { passes.indices.max { passes[$0].largestLap < passes[$1].largestLap } }
+
+    /// The most a finishing pass takes, as a share of the heaviest pass before it: its band is narrowed to keep within
+    /// this (`EdgeProfileParams.finish` is the widest it may be), so it stays the lightest cut.
+    public static let finishShare = 0.25
 }
 
 public extension EdgeProfileParams {
@@ -79,7 +83,47 @@ public extension EdgeProfileParams {
         var plan = EdgeProfilePlan(passes: [], depth: d, reach: reach, centreOffset: c, reveal: reveal(for: tool),
                                    crossSection: area(d, 0))
         guard reach > 0.01 else { return plan }
-        let f = min(max(0, finish), reach)
+        let levels = DepthSettings(startDepth: 0, cutDepth: d, passDepth: passDepth)
+            .passLevels(toolStepdown: tool.cutting.stepdown).map { -$0 }
+        // The heaviest lap the passes before a finish `f` wide take, mm².
+        func heaviestRough(_ f: Double) -> Double {
+            let rough = reach - f
+            guard rough > 0.01 else { return 0 }
+            switch passes {
+            case .horizontal:
+                if let band = bandWidth, band > 1e-6 {
+                    let n = max(1, Int((rough / band - 1e-9).rounded(.up)))
+                    var before = 0.0, most = 0.0
+                    for k in 1...n {
+                        let now = area(d, f + rough * Double(n - k) / Double(n))
+                        most = max(most, now - before)
+                        before = now
+                    }
+                    return most
+                }
+                return area(d, f) / Double(max(1, passCount))
+            case .vertical:
+                var before = 0.0, most = 0.0
+                for level in levels {
+                    let now = area(level, f)
+                    most = max(most, now - before)
+                    before = now
+                }
+                return most
+            }
+        }
+        // The finish is the band asked for, narrowed until its lap takes no more than `finishShare` of the heaviest pass
+        // before it: a band of the same width takes far more of a profile that's steep at the edge (a roundover's,
+        // upright there) than of the passes' share (#118).
+        var f = min(max(0, finish), reach)
+        if f > 1e-6, area(d, 0) - area(d, f) > EdgeProfilePlan.finishShare * heaviestRough(f) {
+            var lo = 0.0, hi = f
+            for _ in 0..<40 {
+                let mid = (lo + hi) / 2
+                if area(d, 0) - area(d, mid) > EdgeProfilePlan.finishShare * heaviestRough(mid) { hi = mid } else { lo = mid }
+            }
+            f = lo
+        }
         let rough = reach - f
         // The final position: the finish's, or the last rough pass's when there's no finish (or nothing left for one).
         let finishing = f > 1e-6 && rough > 0.01
@@ -118,8 +162,6 @@ public extension EdgeProfileParams {
             }
         case .vertical:
             let s = finishing ? f : 0
-            let levels = DepthSettings(startDepth: 0, cutDepth: d, passDepth: passDepth)
-                .passLevels(toolStepdown: tool.cutting.stepdown).map { -$0 }
             var taken = 0.0
             var laps: [Double] = []
             for level in levels {
@@ -133,6 +175,55 @@ public extension EdgeProfileParams {
             }
         }
         return plan
+    }
+}
+
+/// Placing a form bit by where its profile meets the surface (a round-nose chamfer, `ChamferGenerator`).
+public extension EdgeProfileParams {
+    /// The widest `tool`'s profile reaches into the edge, mm: its cutting edge's radius at the top of the profile less
+    /// its radius at the tip (its pilot). 0 for a bit with no form.
+    static func profileReach(_ tool: Tool) -> Double {
+        guard tool.shape == .form, let f = tool.form else { return 0 }
+        let edge = tool.cuttingEdge
+        let top = min(f.profileHeight, tool.fluteLength)
+        let c = ToolProfile.radius(edge, atHeight: 0)
+        var reach = 0.0
+        for i in 0...400 { reach = max(reach, ToolProfile.radius(edge, atHeight: top * Double(i) / 400) - c) }
+        return reach
+    }
+
+    /// How deep `tool`'s tip runs, with its pilot on the edge, for its profile to meet the surface `width` in from the
+    /// edge, mm: the lowest height on its cutting edge whose radius is the pilot's plus the width. nil when the width needs
+    /// more of the profile than the bit has (or the bit has no form).
+    static func formDepth(reaching width: Double, tool: Tool) -> Double? {
+        guard tool.shape == .form, let f = tool.form, width > 1e-9 else { return nil }
+        let reach = profileReach(tool)
+        guard width <= reach + 1e-6 else { return nil }
+        let edge = tool.cuttingEdge
+        let c = ToolProfile.radius(edge, atHeight: 0)
+        // The edge only widens going up on the bits this takes (no undercut), so the first height that reaches is found
+        // by bisection.
+        var lo = 0.0, hi = min(f.profileHeight, tool.fluteLength)
+        for _ in 0..<60 {
+            let mid = (lo + hi) / 2
+            if ToolProfile.radius(edge, atHeight: mid) - c >= width - 1e-9 { hi = mid } else { lo = mid }
+        }
+        return hi
+    }
+}
+
+public extension EdgeProfilePlan {
+    /// The horizontal passes `tool` takes to cut its profile `depth` deep into an edge `thickness` tall, with its pilot
+    /// on the edge: one, unless the router-bit chart's cross-section rule (`ChipLoad.crossSectionShare`) asks for more,
+    /// when there are as many of equal cross-section as keep each within a slot as wide and as deep as the shank. No
+    /// finishing pass.
+    static func fewestPasses(tool: Tool, depth: Double, thickness: Double) -> EdgeProfilePlan {
+        var params = EdgeProfileParams(depth: depth, offset: 0, passes: .horizontal, passCount: 1, finish: 0)
+        let one = params.plan(tool: tool, thickness: thickness)
+        let shank = tool.shankDiameter > 1e-6 ? tool.shankDiameter : tool.diameter
+        guard shank > 1e-6, one.crossSection > shank * shank + 1e-9 else { return one }
+        params.passCount = Int((one.crossSection / (shank * shank) - 1e-9).rounded(.up))
+        return params.plan(tool: tool, thickness: thickness)
     }
 }
 
