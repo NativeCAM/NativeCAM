@@ -27,7 +27,8 @@ struct OperationInspector: View {
             }
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
                         kind: op.kind, loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
-                        wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad, loopFeedLimit: adaptiveLoopLimit)
+                        wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad, loopFeedLimit: adaptiveLoopLimit,
+                        thickness: project.stock.thickness)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
@@ -291,6 +292,11 @@ struct OperationInspector: View {
             FlutingSection(params: p, tool: op.tool, units: units) { op.kind = .fluting($0) }
         case let .prism(p):
             PrismSection(params: p, op: op, project: project, units: units) { op.kind = .prism($0) }
+        case let .edgeProfile(p):
+            let set: (EdgeProfileParams) -> Void = { op.kind = .edgeProfile($0) }
+            EdgeProfileSection(params: p, tool: op.tool, project: project, units: units, set: set)
+            EntrySection(entry: Binding(get: { p.entry }, set: { var q = p; q.entry = $0; set(q) }), units: units)
+            LeadsSection(leads: Binding(get: { p.leads }, set: { var q = p; q.leads = $0; set(q) }), side: .outside, tool: op.tool, units: units)
         case let .rounding(p):
             let set: (RoundingParams) -> Void = { op.kind = .rounding($0) }
             let blank = project.stock.rotary
@@ -351,6 +357,90 @@ private struct PassDepthRows: View {
                     units: units, help: "Deepest cut per pass; defaults to the tool's stepdown")
         let step = max(0.05, passDepth ?? tool.cutting.stepdown)
         LabeledContent("Passes", value: "\(max(1, Int((depth / step - 1e-9).rounded(.up))))")
+    }
+}
+
+/// An edge profile: which edges, how much of the profile (its depth, with the step left above a deeper cut, and an
+/// offset off the edge), and the passes, each with its band, cross-section and the feed the router-bit chart gives it.
+struct EdgeProfileSection: View {
+    let params: EdgeProfileParams
+    let tool: Tool
+    let project: Project
+    let units: LengthUnit
+    let set: (EdgeProfileParams) -> Void
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+    private func prompt(_ mm: Double) -> String { units.fromMM(mm).formatted(.number.precision(.fractionLength(0...units.displayDecimals))) }
+    /// An area in the job's units: in² or mm².
+    private func area(_ mm2: Double) -> String {
+        units == .inch ? String(format: "%.4f in²", mm2 / (LengthUnit.mmPerInch * LengthUnit.mmPerInch)) : String(format: "%.1f mm²", mm2)
+    }
+
+    var body: some View {
+        let p = params
+        let plan = p.plan(tool: tool, thickness: project.stock.thickness)
+        let profile = tool.form?.profileHeight
+        Section("Edge Profile") {
+            Picker("Edges", selection: Binding(get: { p.edges }, set: { var q = p; q.edges = $0; set(q) })) {
+                ForEach(EdgeProfileParams.Edges.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .help("The parts' outside edges, the edges of their holes (shapes inside shapes), or both")
+            OptionalLengthField(title: "Profile depth", mm: Binding(get: { p.depth }, set: { var q = p; q.depth = $0.map { max(0.01, $0) }; set(q) }),
+                                units: units, prompt: profile.map(prompt) ?? "",
+                                help: "How far below the top the bit's tip runs; empty cuts the bit's whole profile")
+            if plan.reveal > 1e-6 {
+                SectionNote(text: "\(len(plan.reveal)) deeper than the profile: that leaves a step of \(len(plan.reveal)) above it (a reveal), as raising the bit on a router table does.")
+            }
+            LengthField(title: "Offset", mm: Binding(get: { p.offset }, set: { var q = p; q.offset = max(0, $0); set(q) }), units: units,
+                        help: "Stands the bit off the edge, so it cuts only the inner part of its profile", minimum: 0)
+            if plan.passes.isEmpty {
+                SectionNote(text: "Stood off this far, the bit doesn't reach the edge at this depth.", warning: true)
+            } else {
+                LabeledContent("Profile width", value: len(plan.reach))
+                    .help("How far into the part the profile reaches at the top")
+            }
+            Picker("Direction", selection: Binding(get: { p.direction }, set: { var q = p; q.direction = $0; set(q) })) {
+                ForEach(CutDirection.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            SectionNote(text: "The bit's pilot rides the edge with its tip at the profile depth, so the profile is cut into the part's top edge. Outside corners come out rounded, as a bearing rolls round them.")
+        }
+        Section("Passes") {
+            Picker("Passes", selection: Binding(get: { p.passes }, set: { var q = p; q.passes = $0; set(q) })) {
+                ForEach(EdgeProfileParams.Passes.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if p.passes == .horizontal {
+                IntField(title: "Passes", value: Binding(get: { p.passCount }, set: { var q = p; q.passCount = max(1, $0); set(q) }), range: 1...20)
+                    .disabled(p.bandWidth != nil)
+                    .help("Passes before the finishing pass, each taking an equal share of the profile's cross-section")
+                OptionalLengthField(title: "Widest band", mm: Binding(get: { p.bandWidth }, set: { var q = p; q.bandWidth = $0.map { max(0.05, $0) }; set(q) }),
+                                    units: units,
+                                    help: "Set: the passes step in evenly, as few as keep each step within it. Empty: the pass count, in equal cross-sections")
+                SectionNote(text: "The bit starts stood off the edge and steps in toward it, each pass at full depth taking a band of the profile.")
+            } else {
+                LengthField(title: "Pass depth", mm: Binding(get: { p.passDepth ?? tool.cutting.stepdown }, set: { var q = p; q.passDepth = max(0.05, $0); set(q) }),
+                            units: units, help: "Deepest cut per pass; defaults to the tool's stepdown")
+                SectionNote(text: "Steps down at the final position, as a Profile toolpath does: for profiles that only widen going up.")
+            }
+            LengthField(title: "Finishing pass", mm: Binding(get: { p.finish }, set: { var q = p; q.finish = max(0, $0); set(q) }), units: units,
+                        help: "The band the last, light pass takes; 0 for none", minimum: 0)
+            let material = project.stock.material
+            ForEach(Array(plan.passes.enumerated()), id: \.offset) { k, pass in
+                let rec = ChipLoad.recommendation(for: tool, material: material, machine: project.machine, depth: plan.depth,
+                                                  crossSection: pass.largestLap)
+                let name = pass.isFinish ? "Finish" : "Pass \(k + 1)"
+                let laps = pass.depths.count > 1 ? " in \(pass.depths.count) laps" : ""
+                LabeledContent(name, value: "\(len(pass.band)) band, \(area(pass.crossSection))\(laps)")
+                    .help("Recommended for this pass's cross-section: \(units.format(rec.feed, decimals: 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM")
+                Text("Recommended for its cross-section: \(units.format(rec.feed, decimals: 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !plan.passes.isEmpty {
+                SectionNote(text: "Every pass cuts at the tool's feed. The Chip load row's recommendation is for the heaviest pass (\(area(plan.largestLap)) of the profile's \(area(plan.crossSection))).")
+            }
+        }
     }
 }
 
@@ -1265,6 +1355,15 @@ struct ToolSection: View {
     var radialLoad: Double? = nil
     /// An adaptive pocket's loop feed limit, mm/min.
     var loopFeedLimit: Double? = nil
+    /// The material's thickness: an edge profile's passes are worked out against an edge that tall.
+    var thickness: Double = 0
+
+    /// An edge profile's heaviest pass, mm²: its cross-section sets the recommended feed rather than a full pass's.
+    private var passCrossSection: Double? {
+        guard case let .edgeProfile(p)? = kind else { return nil }
+        let lap = p.plan(tool: tool, thickness: thickness).largestLap
+        return lap > 1e-9 ? lap : nil
+    }
 
     var body: some View {
         Section("Tool") {
@@ -1307,7 +1406,7 @@ struct ToolSection: View {
             PercentField(title: tool.shape == .taperedBallNose ? "Stepover (of tip)" : "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
                 ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad,
-                            loopFeedLimit: loopFeedLimit, depth: kind?.requestedDepth)
+                            loopFeedLimit: loopFeedLimit, depth: kind?.requestedDepth, crossSection: passCrossSection)
             }
         }
     }
@@ -1326,11 +1425,13 @@ struct ChipLoadRow: View {
     /// The toolpath's depth, which sets the chart's diameter for a bit whose width changes with depth and a form bit's
     /// cross-section (`ChipLoad.reading`); nil reads the bit at its full diameter.
     var depth: Double? = nil
+    /// An edge profile's heaviest pass, mm²: the cross-section rule reads it instead of a full pass at the depth.
+    var crossSection: Double? = nil
 
     var body: some View {
         let thin = radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         let rec = ChipLoad.recommendation(for: tool, material: material, machine: machine, thinning: thin, feedLimit: loopFeedLimit,
-                                          depth: depth)
+                                          depth: depth, crossSection: crossSection)
         let reading = rec.reading
         let r = reading.range
         let source = reading.source(units)

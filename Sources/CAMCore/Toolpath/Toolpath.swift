@@ -144,6 +144,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// G-code and OpenSBP posts write it for flat and indexed toolpaths; imported Vectric posts and wrapped toolpaths
     /// ignore it.
     public var stopMessage: String?
+    /// What Checks notes about the toolpath as information rather than a warning (an edge profile's inside corners
+    /// sharper than its bit). nil for none.
+    public var notes: [String]?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

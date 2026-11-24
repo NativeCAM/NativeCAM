@@ -340,6 +340,7 @@ public enum CAMEngine {
                     if layout != nil {
                         // Checked and kept tile by tile instead.
                         issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
+                        issues.append(contentsOf: (tp.notes ?? []).map { JobIssue(.info, $0, operation: tp.name) })
                         if tp.cuttingExtents == nil, !tp.motions.isEmpty || tp.warnings.isEmpty {
                             issues.append(JobIssue(.warning, "Toolpath is empty.", operation: tp.name))
                         }
@@ -358,6 +359,7 @@ public enum CAMEngine {
                     tp = scheduled
                     issues.append(contentsOf: notes)
                     issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
+                    issues.append(contentsOf: (tp.notes ?? []).map { JobIssue(.info, $0, operation: tp.name) })
                     issues.append(contentsOf: validate(tp, operation: op, project: project))
                     toolpaths.append(tp)
                 }
@@ -388,6 +390,7 @@ public enum CAMEngine {
         issues.append(contentsOf: checkModelBoundaries(project))
         issues.append(contentsOf: inlayIssues(project, toolpaths: toolpaths))
         issues.append(contentsOf: chamferIssues(project))
+        issues.append(contentsOf: edgeProfileIssues(project))
         issues.append(contentsOf: sharedToolNumberIssues(toolpaths, machine: project.machine))
         if let reason = PostProcessors.unavailableReason(for: project.machine) { issues.append(JobIssue(.error, reason)) }
         issues.append(contentsOf: RotaryIndex.issues(project, toolpaths: toolpaths))
@@ -421,6 +424,15 @@ public enum CAMEngine {
                 if early.kind.is3D && later.kind.is3D {
                     issues.append(JobIssue(.warning, "Runs before its roughing (“\(early.name)”). "
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))
+                } else if case let .edgeProfile(ep) = early.kind, case let .profile(pp) = later.kind, pp.tabs.enabled {
+                    // Left on tabs it reaches down to: it would cut into them.
+                    let u = project.displayUnits
+                    func fmt(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
+                    let top = OperationScheduler.tabTop(pp)
+                    issues.append(JobIssue(.warning, "Runs after “\(later.name)” cuts its part out, and at \(fmt(ep.depth(for: early.tool))) "
+                        + "deep its profile reaches the tabs holding the part (their tops are \(fmt(max(0, top))) below the material "
+                        + "top), so it cuts into them and can free the part. Use Toolpaths ▸ Optimize Run Order to run it first, or "
+                        + "make the profile shallower than the tabs' tops.", operation: early.name))
                 } else if !early.kind.needsShapes {
                     issues.append(JobIssue(.warning, "Runs before the blank is rounded (“\(early.name)”), so it cuts the blank "
                         + "before it's round. Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))
@@ -634,6 +646,33 @@ public enum CAMEngine {
         return issues
     }
 
+    /// Edge profiles that reach the tabs of a cut-out that runs after them, on the same shapes: before the part is cut
+    /// out they take the top off the tabs along the edge, leaving them thinner than set (or cutting through them). Run
+    /// after the cut-out, the run-order check says so instead (`schedulingIssues`).
+    static func edgeProfileIssues(_ project: Project) -> [JobIssue] {
+        let u = project.displayUnits
+        func fmt(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
+        var issues: [JobIssue] = []
+        let ops = project.operations.filter(\.enabled)
+        for (i, edge) in ops.enumerated() {
+            guard case let .edgeProfile(e) = edge.kind else { continue }
+            let depth = e.depth(for: edge.tool)
+            for cutOut in ops[(i + 1)...] {
+                guard case let .profile(p) = cutOut.kind, p.side != .on, p.tabs.enabled, p.tabs.count > 0,
+                      project.stock.rotary == nil, p.depth.cutDepth >= project.stock.thickness - 0.01,
+                      !Set(cutOut.shapeIDs).isDisjoint(with: edge.shapeIDs), !OperationScheduler.clearsTabs(depth, of: cutOut) else { continue }
+                let top = max(0, OperationScheduler.tabTop(p))
+                let left = p.depth.cutDepth - depth
+                let what = left > 1e-6 ? "takes the top off them along the edge, leaving them \(fmt(left)) thick there instead of "
+                    + "\(fmt(p.tabs.thickness))" : "cuts through them along the edge, so they won't hold the part"
+                issues.append(JobIssue(.warning, "At \(fmt(depth)) deep, its profile reaches below the tops of the tabs “\(cutOut.name)” "
+                    + "leaves (\(fmt(top)) below the material top), so it \(what). Make the profile shallower than the tabs' tops, "
+                    + "or the tabs thinner.", operation: edge.name))
+            }
+        }
+        return issues
+    }
+
     /// An empty toolpath saying why, when the operation's bit is one its kind of toolpath can't cut with
     /// (`CAMOperation.toolRefusal`).
     static func refusal(_ op: CAMOperation, context: GenerationContext) -> Toolpath? {
@@ -669,6 +708,8 @@ public enum CAMEngine {
             return [FlutingGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         case let .prism(p):
             return [PrismGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
+        case let .edgeProfile(p):
+            return [EdgeProfileGenerator.generate(op: op, params: p, shapes: shapes, context: context)]
         }
     }
 

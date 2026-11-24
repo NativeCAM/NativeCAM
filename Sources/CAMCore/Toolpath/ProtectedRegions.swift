@@ -13,7 +13,8 @@ import Foundation
 /// clipped to the material: a pocket's edge on the material's edge isn't a wall.
 ///
 /// Built once per generation pass, from every toolpath in the project, turned on or not (one that's turned off is
-/// usually cut in another run). 3D toolpaths, roundings and 3D rotary finishes leave no band.
+/// usually cut in another run). 3D toolpaths, roundings and 3D rotary finishes leave no band; an edge profile leaves the
+/// band inside its part, as a prism does.
 public struct ProtectedRegions: Sendable {
     /// Width of each band, mm.
     static let bandWidth = 0.1
@@ -70,6 +71,7 @@ public struct ProtectedRegions: Sendable {
             switch op.kind {
             case let .profile(p): p.side != .on && (p.leads != nil || p.cornerRelief != nil)
             case let .pocket(p): p.cornerRelief != nil
+            case let .edgeProfile(p): p.leads != nil
             default: false
             }
         }
@@ -199,8 +201,9 @@ public struct ProtectedRegions: Sendable {
                 let grown = offset(regions, p.width).flatMap(\.loops), shrunk = offset(regions, -p.width).flatMap(\.loops)
                 return inside(Clipper.difference(grown, minus: shrunk))
             }
-        case .prism:
-            // The prism's base is the drawn shape, as an outside profile's part is.
+        case .prism, .edgeProfile:
+            // The prism's base is the drawn shape, as an outside profile's part is; an edge profile shapes the part's
+            // own edge, the drawn shape too.
             return inside(closedRegions().flatMap(\.loops))
         case let .fluting(p):
             // Both walls of the groove, at their widest.

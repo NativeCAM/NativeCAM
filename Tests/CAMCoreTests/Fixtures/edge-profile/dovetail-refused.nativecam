@@ -1,0 +1,120 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 18,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Dovetail refused",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "ED6E0000-0000-4000-8084-000000000127",
+      "kind" : {
+        "edgeProfile" : {
+          "_0" : {
+            "depth" : 9.524999999999999,
+            "direction" : "climb",
+            "edges" : "outside",
+            "entry" : {
+              "kind" : "ramp",
+              "rampLength" : 50.8
+            },
+            "finish" : 0.508,
+            "leads" : {
+              "angle" : 45,
+              "kind" : "arc",
+              "leadOut" : true,
+              "length" : 6.35,
+              "overlap" : 0,
+              "radius" : 6.35,
+              "sweep" : 90
+            },
+            "offset" : 0,
+            "passCount" : 3,
+            "passes" : "horizontal"
+          }
+        }
+      },
+      "name" : "Dovetail edge",
+      "shapeIDs" : [
+        "ED6E0000-0000-4000-8084-000000000125"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 3048,
+          "plungeRate" : 762,
+          "spindleRPM" : 16000,
+          "stepdown" : 6.35,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 12.7,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 12.7,
+        "id" : "ED6E0000-0000-4000-8084-000000000126",
+        "includedAngle" : 28,
+        "name" : "1\/2\" dovetail",
+        "notes" : "",
+        "number" : 8,
+        "shankDiameter" : 6.35,
+        "shape" : "dovetail",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "ED6E0000-0000-4000-8084-000000000125",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 12.7,
+          "height" : 101.6,
+          "width" : 152.39999999999998
+        }
+      },
+      "layer" : "Default",
+      "name" : "Board",
+      "position" : {
+        "x" : 101.6,
+        "y" : 76.19999999999999
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 152.39999999999998,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 203.2,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

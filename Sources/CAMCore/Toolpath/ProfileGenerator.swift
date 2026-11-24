@@ -289,8 +289,9 @@ enum ProfileGenerator {
         return toolpath
     }
 
-    private static func cutClosed(_ loop: Polyline, levels: [Double], params: ProfileParams, tool: Tool,
-                                  builder b: inout ToolpathBuilder, warnings: inout [String]) {
+    /// A closed loop without leads: entered at its first point (plunging, or ramping along the wall), cut at each level.
+    static func cutClosed(_ loop: Polyline, levels: [Double], params: ProfileParams, tool: Tool,
+                          builder b: inout ToolpathBuilder, warnings: inout [String]) {
         let walker = LoopWalker(loop)
         let L = walker.length
         guard L > 1e-6 else { return }
@@ -340,8 +341,8 @@ enum ProfileGenerator {
     /// When the link back isn't clear, the tool lifts and drops in at A instead (the link optimiser lowers the lift):
     /// with a plunge entry it plunges one pass in the waste; with a ramp it drops to the floor already cut at A and the
     /// next ramp starts from there (steeper, but each point still cuts at most one pass deeper).
-    private static func cutClosedWithLeads(_ lead: FittedLead, levels: [Double], params: ProfileParams, tool: Tool,
-                                           builder b: inout ToolpathBuilder, warnings: inout [String]) {
+    static func cutClosedWithLeads(_ lead: FittedLead, levels: [Double], params: ProfileParams, tool: Tool,
+                                   builder b: inout ToolpathBuilder, warnings: inout [String]) {
         let walker = LoopWalker(lead.loop)
         let L = walker.length
         guard L > 1e-6, let deepest = levels.last else { return }

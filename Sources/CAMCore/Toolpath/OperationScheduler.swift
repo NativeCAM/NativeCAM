@@ -5,7 +5,9 @@ import Foundation
 /// On a manual-change machine every tool change is a stop for a collet swap and a touch-off, minutes that dwarf any
 /// air-time saving, so the fewest changes win and the user's order breaks ties. An operation stays after:
 /// - everything inside the outline it cuts through (parts are cut free last, never finished while held by tabs; a
-///   chamfer, flute or prism on the outline itself counts as inside it),
+///   chamfer, flute, prism or edge profile on the outline itself counts as inside it). An edge profile that stays above
+///   the tabs a cut-out leaves may run after it, the tabs still holding the part, so there the user's order stands,
+///   and a new one is put before the cut-out,
 /// - 3D roughing of the same model (when it's the finish; 3D rotary roughing before 3D rotary finishing),
 /// - the toolpaths a rest toolpath rests on (`RestMachining.dependencies`), and
 /// - any earlier operation whose area overlaps its own (the user's order may carry intent there).
@@ -62,6 +64,12 @@ public enum OperationScheduler {
             if flat, case let .profile(p) = op.kind { return p.depth.cutDepth >= thickness - 0.01 }
             return false
         }
+        /// An edge profile on a part a cut-out leaves on tabs, clear of them: the tabs still hold the part after the
+        /// cut-out, so the edge profile may run on either side of it (the user's order stands).
+        func heldByTabs(_ edge: CAMOperation, _ cutOut: CAMOperation) -> Bool {
+            guard case let .edgeProfile(e) = edge.kind else { return false }
+            return Self.clearsTabs(e.depth(for: edge.tool), of: cutOut)
+        }
         func inside(_ inner: [Area], _ outer: [Area]) -> Bool {
             !inner.isEmpty && inner.allSatisfy { r in
                 outer.contains { $0.sheet == r.sheet && $0.rect.contains(r.rect.min, tolerance: 1e-6) && $0.rect.contains(r.rect.max, tolerance: 1e-6) }
@@ -87,9 +95,9 @@ public enum OperationScheduler {
         for j in 0..<m {
             for i in 0..<m where i != j {
                 let a = ops[enabled[i]], b = ops[enabled[j]]
-                let aFreesB = cutsThrough(a) && inside(parts[j], boxes[i])
+                let aFreesB = cutsThrough(a) && inside(parts[j], boxes[i]) && !heldByTabs(b, a)
                 var hard = false
-                if cutsThrough(b), inside(parts[i], boxes[j]), !aFreesB {
+                if cutsThrough(b), inside(parts[i], boxes[j]), !aFreesB, !heldByTabs(a, b) {
                     hard = true
                 } else if roughs(a, before: b) {
                     hard = true
@@ -130,6 +138,17 @@ public enum OperationScheduler {
         return Result(order: order, toolChangesBefore: changesBefore,
                       toolChangesAfter: better ? changesAfter : changesBefore, outOfOrder: late)
     }
+
+    /// Whether an edge profile `depth` deep (its tip below the material top) stays above the tabs `cutOut` leaves: a
+    /// profile with tabs whose tops are at least that deep. Tabs are at the bottom of the cut, so a top-edge profile
+    /// normally clears them.
+    public static func clearsTabs(_ depth: Double, of cutOut: CAMOperation) -> Bool {
+        guard case let .profile(p) = cutOut.kind, p.side != .on, p.tabs.enabled, p.tabs.count > 0 else { return false }
+        return depth <= tabTop(p) + 1e-6
+    }
+
+    /// How far below the material top a profile's tabs reach up to, mm.
+    public static func tabTop(_ p: ProfileParams) -> Double { p.depth.cutDepth - p.tabs.thickness }
 
     /// A box on one sheet of the job.
     struct Area {
@@ -237,6 +256,22 @@ public enum OperationScheduler {
 }
 
 public extension Project {
+    /// Adds a new operation to the run order: at the end, except an edge profile, which goes just before the first
+    /// profile that cuts one of its parts out (inside or outside, on the same shapes), so the part is still held while
+    /// its edge is shaped. Returns where it went.
+    @discardableResult
+    mutating func addOperation(_ op: CAMOperation) -> Int {
+        if op.kind.isEdgeProfile, let k = operations.firstIndex(where: { other in
+            guard case let .profile(p) = other.kind, p.side != .on else { return false }
+            return !Set(other.shapeIDs).isDisjoint(with: op.shapeIDs)
+        }) {
+            operations.insert(op, at: k)
+            return k
+        }
+        operations.append(op)
+        return operations.count - 1
+    }
+
     /// Puts the operations in the given order (ids not listed keep their relative order at the end).
     mutating func applyRunOrder(_ ids: [UUID]) {
         let rank = Dictionary(ids.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })

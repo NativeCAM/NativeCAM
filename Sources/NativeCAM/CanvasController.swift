@@ -320,8 +320,8 @@ final class CanvasController: ViewportInteractionDelegate {
             let isModel = p.shape(id: hit)?.modelSpec != nil
             let kinds: [(String, AddOperationMenu.Kind)] = isModel
                 ? [("3D Roughing", .rough3D), ("3D Finishing", .finish3D)]
-                : [("Profile", .profile), ("Pocket", .pocket), ("Drill", .drill), ("V-carve", .vcarve), ("Chamfer", .chamfer),
-                   ("Fluting", .fluting), ("Prism", .prism)]
+                : [("Profile", .profile), ("Edge Profile", .edgeProfile), ("Pocket", .pocket), ("Drill", .drill), ("V-carve", .vcarve),
+                   ("Chamfer", .chamfer), ("Fluting", .fluting), ("Prism", .prism)]
             for (title, kind) in kinds {
                 sub.addItem(ClosureMenuItem(title) { [weak self] in self?.addOperation(kind) })
                 if kind == .vcarve {
@@ -361,7 +361,7 @@ final class CanvasController: ViewportInteractionDelegate {
         let ids = workspace.selectedShapeIDs
         guard !ids.isEmpty else { return }
         let op = ShapeFactory.operation(kind, shapes: ids, project: p, library: ToolLibraryStore.shared.tools)
-        project.wrappedValue.operations.append(op)
+        project.wrappedValue.addOperation(op)
         workspace.selection = [.operation(op.id)]
     }
 

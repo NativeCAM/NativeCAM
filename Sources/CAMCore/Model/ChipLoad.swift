@@ -238,8 +238,9 @@ public enum ChipLoad {
     }
 
     /// Reads the chart for `tool` cutting `depth` deep (nil: at its full diameter and, for a form bit, the whole profile)
-    /// in `material`.
-    public static func reading(_ tool: Tool, material: MaterialKind, depth: Double?) -> Reading {
+    /// in `material`. `crossSection` is what one pass of a form bit takes when that's less than a full pass at the depth
+    /// (an edge profile's passes, `EdgeProfilePlan`), mm²; nil = a full pass.
+    public static func reading(_ tool: Tool, material: MaterialKind, depth: Double?, crossSection passArea: Double? = nil) -> Reading {
         let d = chartDiameter(tool, depth: depth)
         let full = max(tool.diameter, tool.shape.cutsEdgesOnly ? 2 * (tool.cuttingEdge.map(\.x).max() ?? 0) : 0)
         let inches = d / LengthUnit.mmPerInch
@@ -250,7 +251,7 @@ public enum ChipLoad {
             var area: Double?
             var share = 1.0
             if tool.shape == .form {
-                let a = crossSection(tool, depth: depth)
+                let a = passArea ?? crossSection(tool, depth: depth)
                 area = a
                 share = crossSectionShare(area: a, shank: tool.shankDiameter > 1e-6 ? tool.shankDiameter : tool.diameter)
             }
@@ -352,14 +353,16 @@ public enum ChipLoad {
     /// to the same way. Never below the spindle's slowest speed: there, the feed stays at the cap and the chip may
     /// come out thinner than the chart. `depth` is the toolpath's depth, which sets the chart's diameter for a bit whose
     /// width changes with depth (`chartDiameter`) and a form bit's cross-section; nil reads the bit at its full diameter.
+    /// `crossSection` is the most one pass of a form bit takes (mm²) when its passes take less than a full pass at the
+    /// depth (an edge profile's horizontal passes); nil = a full pass.
     ///
     /// Form and dovetail bits (the router-bit chart) also never turn faster than their speed limit (`Reading.maxRPM`),
     /// even below the spindle's slowest; a form bit whose cut is bigger than a slot as wide and as deep as its shank has
     /// its feed cut in proportion (`crossSectionShare`); and a bit outside every chart takes the thin end of the widest
     /// row, the speed limit, and at most half the machine's cutting feed.
     public static func recommendation(for tool: Tool, material: MaterialKind, machine: MachineProfile, thinning: Double = 1,
-                                      feedLimit: Double? = nil, depth: Double? = nil) -> Recommendation {
-        let reading = Self.reading(tool, material: material, depth: depth)
+                                      feedLimit: Double? = nil, depth: Double? = nil, crossSection: Double? = nil) -> Recommendation {
+        let reading = Self.reading(tool, material: material, depth: depth, crossSection: crossSection)
         let target = reading.target
         let z = Double(max(1, tool.fluteCount))
         let k = min(1, max(0.05, thinning))
@@ -381,10 +384,12 @@ public enum ChipLoad {
         return Recommendation(rpm: rpm, feed: feed, reading: reading, heldBy: held, belowSpindleMinimum: below)
     }
 
-    /// The recommended spindle speed and feed (`recommendation(for:material:machine:thinning:feedLimit:depth:)`).
+    /// The recommended spindle speed and feed (`recommendation(for:material:machine:thinning:feedLimit:depth:crossSection:)`).
     public static func recommend(for tool: Tool, material: MaterialKind, machine: MachineProfile,
-                                 thinning: Double = 1, feedLimit: Double? = nil, depth: Double? = nil) -> (rpm: Double, feed: Double) {
-        let r = recommendation(for: tool, material: material, machine: machine, thinning: thinning, feedLimit: feedLimit, depth: depth)
+                                 thinning: Double = 1, feedLimit: Double? = nil, depth: Double? = nil,
+                                 crossSection: Double? = nil) -> (rpm: Double, feed: Double) {
+        let r = recommendation(for: tool, material: material, machine: machine, thinning: thinning, feedLimit: feedLimit, depth: depth,
+                               crossSection: crossSection)
         return (r.rpm, r.feed)
     }
 
