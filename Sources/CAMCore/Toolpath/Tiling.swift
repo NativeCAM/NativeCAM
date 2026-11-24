@@ -96,7 +96,7 @@ enum TileSplitter {
                     tp.forEachMotion { s, m in model.apply(m, from: s, tool: tp.tool) }
                 }
                 issues.append(contentsOf: CAMEngine.keepOutIssues(tp, keepOuts: keepOuts, clearanceZ: clearanceZ))
-                if machine.outputArcs, op?.kind.fitsArcs != false { tp = ArcFitter.fit(tp, tolerance: machine.arcFitTolerance) }
+                if machine.outputArcs, op?.kind.fitsArcs != false { tp = ArcFitter.fit(tp, for: op, project: project) }
                 if let op {
                     let (scheduled, notes) = FeedScheduler.apply(tp, operation: op, uncut: uncut, wrapped: false, project: project)
                     tp = scheduled

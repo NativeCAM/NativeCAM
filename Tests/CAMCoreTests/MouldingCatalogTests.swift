@@ -223,6 +223,60 @@ struct MouldingCatalogTests {
         #expect(right.positions.allSatisfy { $0.y <= 1e-9 })
     }
 
+    /// The deepest any cutting move of `tp` goes below `cutter`'s surface, sampled every 0.05 mm along lines and arcs.
+    static func deepestDip(_ tp: Toolpath, _ cutter: TriangleDropCutter) -> (dip: Double, arcs: Int) {
+        var points: [Vec3] = []
+        var arcs = 0
+        tp.forEachMotion { s, m in
+            guard m.kind != .rapid else { return }
+            if m.kind.isArc {
+                arcs += 1
+                let r = s.xy.distance(to: m.center), sweep = m.arcSweep(from: s), a0 = (s.xy - m.center).angle
+                let n = max(2, Int(abs(sweep) * r / 0.05))
+                for k in 0...n {
+                    let t = Double(k) / Double(n)
+                    points.append(Vec3(m.center + Vec2.fromAngle(a0 + sweep * t, length: r), s.z + (m.end.z - s.z) * t))
+                }
+            } else {
+                let n = max(2, Int(s.xy.distance(to: m.end.xy) / 0.05))
+                for k in 0...n { points.append(s + (m.end - s) * (Double(k) / Double(n))) }
+            }
+        }
+        var worst = 0.0
+        for q in points { worst = max(worst, cutter.z(at: q.xy) - q.z) }
+        return (worst, arcs)
+    }
+
+    /// Arcs fitted to a moulding's toolpaths are checked against its swept surface, as 3D finishing's are (#125): the
+    /// curved trim's waterline finish, posted with arcs, goes no deeper below the drop-cutter surface than the same
+    /// finish posted as straight moves.
+    @Test func mouldingArcsAreCheckedAgainstTheSurface() throws {
+        var p = Self.trimProject()
+        guard case var .moulding(params) = p.operations[0].kind else { return }
+        params.finish = Finish3DParams(stepoverFraction: 0.3, boundary: .model, strategy: .waterline)
+        p.operations[0].kind = .moulding(params)
+        #expect(p.machine.outputArcs)
+        let op = p.operations[0]
+        let finishSurface = ArcFitter.surface(for: op, tool: op.tool, project: p)
+        #expect(finishSurface != nil)
+        var rough = p
+        if case var .moulding(q) = rough.operations[0].kind {
+            q.roughing = MouldingRoughing(tool: Self.endMill)
+            rough.operations[0].kind = .moulding(q)
+        }
+        let roughSurface = ArcFitter.surface(for: rough.operations[0], tool: Self.endMill, project: rough)
+        #expect(roughSurface != nil)
+        let cutter = try #require(TriangleDropCutter(tool: op.tool, allowance: 0,
+                                                     triangles: Model3DGenerator.triangles(of: [try Self.surface(p).shape])))
+        let fitted = try #require(CAMEngine.generate(p).toolpaths.first { $0.id == op.id })
+        var straight = p
+        straight.machine.outputArcs = false
+        let unfitted = try #require(CAMEngine.generate(straight).toolpaths.first { $0.id == op.id })
+        let withArcs = Self.deepestDip(fitted, cutter), without = Self.deepestDip(unfitted, cutter)
+        #expect(withArcs.arcs > 0)
+        #expect(withArcs.dip <= without.dip + 0.001, "arcs dip \(withArcs.dip) mm, straight moves \(without.dip) mm")
+    }
+
     // MARK: File format
 
     @Test func mouldingsAreFormat22() throws {

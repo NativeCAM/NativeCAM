@@ -352,7 +352,8 @@ public enum CAMEngine {
                         let own = op.kind.is3D && op.kind.turnsWholeBlank
                         tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !own)
                     } else if project.machine.outputArcs, op.kind.fitsArcs {
-                        tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
+                        // 3D finishing keeps only the arcs that stay on its drop-cutter surface.
+                        tp = ArcFitter.fit(tp, for: op, project: project)
                     }
                     // After arc fitting, so an arc keeps one feed.
                     let (scheduled, notes) = FeedScheduler.apply(tp, operation: op, uncut: uncut, wrapped: wrap != nil, project: project)
