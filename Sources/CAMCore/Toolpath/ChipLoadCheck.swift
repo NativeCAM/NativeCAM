@@ -9,10 +9,13 @@ extension CAMEngine {
     /// An adaptive toolpath's chip is thinned by its light radial cut (`Toolpath.radialLoad`), and the feed it's
     /// recommended keeps to what its loops can hold (`AdaptiveSettings.loopFeedLimit`, from `operation`'s settings).
     /// Each message names the chart and how it was read (`ChipLoad.Reading.source`).
-    static func chipLoadIssues(_ tp: Toolpath, project: Project, operation: CAMOperation? = nil) -> [JobIssue] {
+    /// How the chart is read for `tp`: the depth that sets a changing bit's diameter (its deepest cut), the most one
+    /// pass of a form bit takes when that's less than a full pass (an edge profile's or round-nose chamfer's heaviest
+    /// lap), the deepest single pass for the depth derate (`OperationKind.deepestPass`, for the operation's own bit at a
+    /// full-width cut), and the radial thinning of an adaptive toolpath's light cut.
+    static func chipReadingInputs(_ tp: Toolpath, project: Project, operation: CAMOperation?)
+        -> (depth: Double?, passArea: Double?, passDepth: Double?, thinning: Double) {
         let tool = tp.tool
-        guard ChipLoad.applies(to: tool), tp.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
-        let material = project.stock.material
         // A bit whose width changes with depth is read at the widest it cuts with (the toolpath's deepest cut).
         let depth = tp.cuttingExtents.map { max(0, -$0.min.z) }
         // An edge profile's passes each take a band of the profile: its heaviest lap's cross-section sets the feed.
@@ -25,11 +28,45 @@ extension CAMEngine {
             passArea = EdgeProfilePlan.fewestPasses(tool: tool, depth: d, thickness: max(0.01, project.stock.thickness - c.startDepth))
                 .largestLap
         }
-        let reading = ChipLoad.reading(tool, material: material, depth: depth, crossSection: passArea)
+        let own = operation.map { $0.tool == tool } ?? false
+        let passDepth = own && tp.radialLoad == nil ? operation?.kind.deepestPass(tool) : nil
+        let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
+        return (depth, passArea, passDepth, thin)
+    }
+
+    /// Spindle ▸ Automatic (`CAMOperation.spindleSpeed`): `tp` with the speed that puts its chip at the chart's target
+    /// at its feed (`ChipLoad.automaticSpindle`), and a warning when no speed the spindle and bit allow keeps the chip
+    /// in range. A bit no chart covers keeps its tool's speed, with a note. Unchanged when the operation uses the
+    /// tool's RPM.
+    static func applyAutomaticSpindle(_ tp: Toolpath, operation op: CAMOperation, project: Project) -> Toolpath {
+        guard op.usesAutomaticSpindle, !tp.isEmpty else { return tp }
+        var tp = tp
+        let inputs = chipReadingInputs(tp, project: project, operation: op)
+        guard let auto = ChipLoad.automaticSpindle(for: tp.tool, material: project.stock.material, machine: project.machine,
+                                                   feed: tp.tool.cutting.feedRate, thinning: inputs.thinning, depth: inputs.depth,
+                                                   crossSection: inputs.passArea, passDepth: inputs.passDepth) else {
+            tp.notes = (tp.notes ?? []) + ["Automatic spindle speed: no chip-load chart covers a \(tp.tool.shape.label.lowercased()), "
+                + "so this toolpath runs at its tool's \(Int(tp.spindleRPM.rounded()).formatted()) RPM."]
+            return tp
+        }
+        tp.spindleRPM = auto.rpm
+        tp.automaticSpindle = auto
+        if let warning = auto.warning(project.displayUnits) { tp.warnings.append(warning) }
+        return tp
+    }
+
+    static func chipLoadIssues(_ tp: Toolpath, project: Project, operation: CAMOperation? = nil) -> [JobIssue] {
+        let tool = tp.tool
+        guard ChipLoad.applies(to: tool), tp.spindleRPM > 0, tool.fluteCount > 0 else { return [] }
+        let material = project.stock.material
+        let (depth, passArea, passDepth, thin) = chipReadingInputs(tp, project: project, operation: operation)
+        let reading = ChipLoad.reading(tool, material: material, depth: depth, crossSection: passArea, passDepth: passDepth)
         let r = reading.range
         let z = Double(tool.fluteCount)
-        let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
-        let set = tool.cutting.feedRate
+        // Automatic spindle speed works the chip out at the feed the machine reaches, and has warned already when it
+        // can't keep it in range.
+        let set = tp.automaticSpindle?.feed ?? tool.cutting.feedRate
+        let warned = tp.automaticSpindle?.outOfRange == true
         let chip = set / (tp.spindleRPM * z) * thin
         let inch = { (mm: Double) in String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
         let units = project.displayUnits
@@ -40,7 +77,7 @@ extension CAMEngine {
             loops = p.adaptiveSettings.loopFeedLimit(tool: tool, machine: project.machine)
         }
         let rec = ChipLoad.recommendation(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops,
-                                          depth: depth, crossSection: passArea)
+                                          depth: depth, crossSection: passArea, passDepth: passDepth)
         let held = loops.map { rec.feed >= $0 - 1e-6 && $0 < project.machine.maxFeedRate } ?? false
         let notes = reading.notes(units)
         let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM"
@@ -57,6 +94,7 @@ extension CAMEngine {
         // dovetail bits too, whose chart's thin end is already half the thinnest a maker gives.
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         if chip < floor {
+            if warned { return issues }
             issues.append(JobIssue(.warning, "\(what) is below \(range); thin chips rub, burn and dull the bit. \(suggestion)",
                                    operation: tp.name))
             return issues
@@ -66,7 +104,7 @@ extension CAMEngine {
                                                                 project: project),
                                    operation: tp.name))
         }
-        if chip > r.upperBound * 1.25 {
+        if chip > r.upperBound * 1.25 && !warned {
             issues.append(JobIssue(.info, "\(what) is above \(range); expect a rougher edge. \(suggestion)",
                                    operation: tp.name))
         }

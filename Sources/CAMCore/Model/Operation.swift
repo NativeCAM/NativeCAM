@@ -1558,10 +1558,15 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// usual cut (see `FeedScheduler`). nil or false keeps the programmed feed throughout. An older build ignores it and
     /// posts the programmed feed, which the scheduler never exceeds, so it doesn't raise the file format.
     public var adjustFeedsForLoad: Bool?
+    /// Spindle ▸ Automatic: the toolpath's spindle speed is picked to put the chip in the chart's range at the feed the
+    /// machine reaches (`ChipLoad.automaticSpindle`), within the spindle's range and a router bit's speed limit; nil or
+    /// `.tool` uses the tool's RPM. An older build ignores it and posts the tool's RPM, the speed every toolpath had
+    /// before and still checked the same way, so it doesn't raise the file format (as `adjustFeedsForLoad` doesn't).
+    public var spindleSpeed: SpindleSpeedMode?
 
     public init(id: UUID = UUID(), name: String? = nil, enabled: Bool = true, kind: OperationKind,
                 shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil, vectorSelection: VectorSelection? = nil,
-                adjustFeedsForLoad: Bool? = nil) {
+                adjustFeedsForLoad: Bool? = nil, spindleSpeed: SpindleSpeedMode? = nil) {
         self.id = id
         self.name = name ?? kind.label
         self.enabled = enabled
@@ -1571,6 +1576,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         self.indexAngles = indexAngles
         self.vectorSelection = vectorSelection
         self.adjustFeedsForLoad = adjustFeedsForLoad
+        self.spindleSpeed = spindleSpeed
     }
 
     /// The angles this operation cuts at on rotary stock.
@@ -1639,4 +1645,37 @@ public extension OperationKind {
 public extension CAMOperation {
     /// True when this operation's feeds follow the load (`adjustFeedsForLoad`, on a profile or pocket).
     var adjustsFeedsForLoad: Bool { adjustFeedsForLoad == true && kind.takesLoadFeeds }
+
+    /// True when this operation's spindle speed is picked per toolpath (`spindleSpeed`, Spindle ▸ Automatic).
+    var usesAutomaticSpindle: Bool { spindleSpeed == .automatic }
+}
+
+// MARK: Pass depth
+
+public extension OperationKind {
+    /// The deepest single pass `tool` takes, mm, for the chip-load chart's depth derate (`ChipLoad.depthShare`): a
+    /// profile's or pocket's deepest step between its Z levels, or 3D roughing's layer depth. nil where passes aren't
+    /// set by a depth per pass, and for adaptive clearing, whose light cut is why it goes the bit's whole height deep
+    /// (its chip is thinned for that instead).
+    func deepestPass(_ tool: Tool) -> Double? {
+        func deepest(_ depth: DepthSettings, _ levels: [Double]) -> Double? {
+            var top = -depth.startDepth
+            var most: Double?
+            for z in levels {
+                most = max(most ?? 0, top - z)
+                top = z
+            }
+            return most
+        }
+        switch self {
+        case let .profile(p):
+            return deepest(p.depth, p.depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum))
+        case let .pocket(p):
+            return p.strategy == .adaptive ? nil : deepest(p.depth, p.passLevels(tool))
+        case let .rough3D(p):
+            return max(0.05, p.passDepth ?? tool.cutting.stepdown)
+        default:
+            return nil
+        }
+    }
 }

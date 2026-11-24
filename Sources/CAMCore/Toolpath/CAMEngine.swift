@@ -302,6 +302,11 @@ public enum CAMEngine {
                 } else {
                     generated = generate(op, shapes: shapes, context: opContext)
                 }
+                // Spindle ▸ Automatic: one speed per toolpath, set before anything reads it (feeds that follow the
+                // load hold their chip floor at it; tiles and sheets copy it).
+                if op.usesAutomaticSpindle {
+                    generated = generated.map { applyAutomaticSpindle($0, operation: op, project: project) }
+                }
                 let clearing = generated.map { $0.id != op.id }
                 if let angle {
                     for (index, tp) in generated.enumerated() {

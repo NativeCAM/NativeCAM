@@ -68,7 +68,10 @@ public struct LoadFeeds: Hashable, Codable, Sendable {
 ///   retract is at least half a diameter long: a shorter slowdown runs on, a shorter speed-up is dropped. Lines are
 ///   split where the feed changes; arcs never are. How Mach4 blends through a change of F is unmeasured.
 ///
-/// Wrapped rotary toolpaths are fed in inverse time (G93) and keep the programmed feed. Spindle speed doesn't change.
+/// Wrapped rotary toolpaths are fed in inverse time (G93) and keep the programmed feed. Spindle speed never changes
+/// within a toolpath: Spindle ▸ Automatic (`AutomaticSpindle`) picks one speed per toolpath before it's scheduled, and
+/// the chip floor here is held at that speed. Depth of cut doesn't change the feed here; the chip-load chart's depth
+/// derate (`ChipLoad.depthShare`) goes into the recommended feed and the chip-load check instead.
 public enum FeedScheduler {
     /// The shares of the programmed feed a toolpath can run at, fastest first.
     public static let levels: [Double] = [1, 0.85, 0.70, 0.55, 0.45, 0.35, 0.25]
