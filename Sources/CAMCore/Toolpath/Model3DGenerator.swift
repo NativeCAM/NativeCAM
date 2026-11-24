@@ -211,7 +211,7 @@ enum Model3DGenerator {
         let tool = op.tool
         var warnings: [String] = []
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
-        let stepover = max(0.02, tool.stepoverBasis * params.stepoverFraction)
+        let stepover = params.stepoverInUse(tool: tool)
         let cell = max(0.08, min(0.5, min(stepover / 2, tool.radius / 6)))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
                             reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
@@ -219,6 +219,9 @@ enum Model3DGenerator {
         }
         if tool.shape == .flatEndMill || tool.shape == .surfacing {
             warnings.append("A ball-nose bit gives a much smoother 3D finish than '\(tool.name)'.")
+        }
+        if params.strategy.usesScallopTarget, params.scallopHeight != nil, tool.scallopRadius == nil {
+            warnings.append("'\(tool.name)' has no rounded tip to hold a scallop height with, so the stepover sets the spacing.")
         }
         // Surface the tool must stay above: model + allowance; uncut material (0) outside the model in outline mode.
         var surface = targets(s, allowance: params.allowance)
@@ -266,6 +269,11 @@ enum Model3DGenerator {
                 return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
             }
             pencil(f.buildMap(), f, &b, warnings: &warnings)
+        case .constantScallop, .spiral, .radial:
+            if !pattern(f, &b, warnings: &warnings) {
+                warnings.append("No finishing passes fit inside the boundary.")
+                return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+            }
         case .rest:
             break // `restFinish`
         }

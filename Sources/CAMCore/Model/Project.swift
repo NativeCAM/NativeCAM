@@ -23,8 +23,9 @@ public struct Project: Hashable, Sendable {
     /// build can't read. Format 19 adds a chamfer's overcut, which an older build would ignore and cut a V-groove at the
     /// bevel's foot, and chamfers cut with a form bit, which older builds refuse. Format 20 adds size rules on how a
     /// toolpath finds its vectors (`SizeFilter`): an older build would ignore one and pick up every shape on the layer or
-    /// of the kind the next time it looks.
-    public static let currentFormatVersion = 20
+    /// of the kind the next time it looks. Format 21 adds constant scallop, spiral and radial 3D finishing, which an older
+    /// build can't read.
+    public static let currentFormatVersion = 21
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
