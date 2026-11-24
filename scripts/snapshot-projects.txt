@@ -8,3 +8,5 @@ examples/Demo Relief.nativecam
 Tests/CAMCoreTests/Fixtures/projects/inlay-joy-v1.nativecam -NativeCAMSnapshotInlay YES -NativeCAMSnapshotInlayBoundary board
 Tests/CAMCoreTests/Fixtures/projects/edge-profile-v18.nativecam
 Tests/CAMCoreTests/Fixtures/projects/chamfer-v19.nativecam
+Tests/CAMCoreTests/Fixtures/projects/template-filters-v20.nativecam
+Tests/CAMCoreTests/Fixtures/template-filters/size-finds-nothing.nativecam -NativeCAMSnapshotTemplate Tests/CAMCoreTests/Fixtures/templates/missing-layers-v1.nativecamtemplate -NativeCAMSnapshotTemplateMissing skip

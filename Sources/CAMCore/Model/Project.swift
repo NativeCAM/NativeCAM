@@ -21,13 +21,16 @@ public struct Project: Hashable, Sendable {
     /// sheet each part is on and cut them all on top of each other on the first. A job of one sheet doesn't raise it.
     /// Format 17 adds 3D rest finishing, which an older build can't read. Format 18 adds edge profiles, which an older
     /// build can't read. Format 19 adds a chamfer's overcut, which an older build would ignore and cut a V-groove at the
-    /// bevel's foot, and chamfers cut with a form bit, which older builds refuse.
-    public static let currentFormatVersion = 19
+    /// bevel's foot, and chamfers cut with a form bit, which older builds refuse. Format 20 adds size rules on how a
+    /// toolpath finds its vectors (`SizeFilter`): an older build would ignore one and pick up every shape on the layer or
+    /// of the kind the next time it looks.
+    public static let currentFormatVersion = 20
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
         let byHand = stock.rotary != nil && machine.rotary?.turnsByHand == true ? 4 : 1
         let parts = operations.map(\.requiredFormatVersion) + shapes.map(\.kind.requiredFormatVersion)
+            + operations.compactMap { $0.vectorSelection?.requiredFormatVersion }
         // Only tiling that splits the job: one tile is the same file a format-8 build writes.
         let tiled = tiling?.enabled == true && TileLayout(self) != nil ? 9 : 1
         let sheets = sheetCount > 1 ? 16 : 1
@@ -80,6 +83,10 @@ public struct Project: Hashable, Sendable {
     public var tiling: TilingSettings?
     /// The sheets after the first on a job nested onto several (each shape says which it's on); empty = one sheet.
     public var additionalSheets: [MaterialSheet] = []
+    /// Layers made by name with no shapes on them yet (applying a template whose layers the design doesn't have), so
+    /// vectors can be put on them. `layerNames` lists them after the shapes' own. An older build drops them, which
+    /// changes no cut, so they don't raise the format.
+    public var namedLayers: [String] = []
 
     public init(name: String = "Untitled", displayUnits: LengthUnit = .inch, stock: Stock = Stock(),
                 machine: MachineProfile = .avidPRO6060, shapes: [DesignShape] = [], operations: [CAMOperation] = [],
@@ -120,8 +127,12 @@ public struct Project: Hashable, Sendable {
 
     public func shape(id: UUID) -> DesignShape? { shapes.first { $0.id == id } }
 
+    /// The shapes `op` cuts. With a size rule (`VectorSelection.size`), imported vectors keep only the outlines of the
+    /// size (`SizeFilter.cutPart(of:)`).
     public func shapes(for op: CAMOperation) -> [DesignShape] {
-        op.shapeIDs.compactMap { shape(id: $0) }
+        let found = op.shapeIDs.compactMap { shape(id: $0) }
+        guard let size = op.vectorSelection?.size else { return found }
+        return found.compactMap { size.cutPart(of: $0) }
     }
 
     /// The inlay pocket a V-carve inlay plug goes into: the one sharing a shape with it (the plug mirrors the same
@@ -154,6 +165,7 @@ public struct Project: Hashable, Sendable {
 extension Project: Codable {
     private enum CodingKeys: String, CodingKey {
         case formatVersion, name, displayUnits, stock, machine, shapes, operations, notes, tiling, additionalSheets
+        case namedLayers = "layers"
     }
 
     public init(from decoder: Decoder) throws {
@@ -172,6 +184,7 @@ extension Project: Codable {
         notes = try c.decode(String.self, forKey: .notes)
         tiling = try c.decodeIfPresent(TilingSettings.self, forKey: .tiling)
         additionalSheets = try c.decodeIfPresent([MaterialSheet].self, forKey: .additionalSheets) ?? []
+        namedLayers = try c.decodeIfPresent([String].self, forKey: .namedLayers) ?? []
         fitDepthsToMaterial()
     }
 
@@ -187,5 +200,6 @@ extension Project: Codable {
         try c.encode(notes, forKey: .notes)
         try c.encodeIfPresent(tiling, forKey: .tiling)
         if !additionalSheets.isEmpty { try c.encode(additionalSheets, forKey: .additionalSheets) }
+        if !namedLayers.isEmpty { try c.encode(namedLayers, forKey: .namedLayers) }
     }
 }

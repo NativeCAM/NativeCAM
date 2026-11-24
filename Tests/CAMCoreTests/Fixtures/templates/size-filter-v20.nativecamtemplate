@@ -1,0 +1,183 @@
+{
+  "formatVersion" : 20,
+  "name" : "Panel holes",
+  "toolpaths" : [
+    {
+      "enabled" : true,
+      "id" : "1E095111-3235-40C8-A86E-0A5960486537",
+      "kind" : {
+        "drill" : {
+          "_0" : {
+            "depth" : 12,
+            "dwell" : 0,
+            "fullRetract" : true,
+            "peckDepth" : 0
+          }
+        }
+      },
+      "name" : "Drill 8 mm",
+      "shapeIDs" : [
+
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      },
+      "vectorSelection" : {
+        "kind" : "circles",
+        "size" : {
+          "diameter" : {
+            "max" : 8.5,
+            "min" : 7.5
+          },
+          "tolerance" : 0.05
+        }
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "0AC7A7CB-F2B7-4003-8F9C-2643A9D385B7",
+      "kind" : {
+        "pocket" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 6,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "rasterAngle" : 0,
+            "strategy" : "offset"
+          }
+        }
+      },
+      "name" : "Pocket 30 mm",
+      "shapeIDs" : [
+
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      },
+      "vectorSelection" : {
+        "kind" : "circles",
+        "size" : {
+          "diameter" : {
+            "max" : 31,
+            "min" : 29
+          },
+          "tolerance" : 0.05
+        }
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "4428A210-5F2E-43D4-A569-6FC369481C55",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 18.5,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Cut out panel",
+      "shapeIDs" : [
+
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      },
+      "vectorSelection" : {
+        "kind" : "closed",
+        "size" : {
+          "height" : {
+            "min" : 150
+          },
+          "tolerance" : 0.05,
+          "width" : {
+            "min" : 250
+          }
+        }
+      }
+    }
+  ],
+  "type" : "NativeCAM toolpath template"
+}

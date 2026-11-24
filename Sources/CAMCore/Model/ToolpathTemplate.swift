@@ -50,32 +50,224 @@ public enum ShapeFilter: String, Codable, Sendable, CaseIterable, Identifiable {
     static let inferenceOrder: [ShapeFilter] = [.text, .circles, .models, .open, .closed, .all]
 }
 
+/// A range of lengths (mm); a missing end is open.
+public struct SizeRange: Hashable, Codable, Sendable {
+    public var min: Double?
+    public var max: Double?
+
+    public init(min: Double? = nil, max: Double? = nil) {
+        self.min = min
+        self.max = max
+    }
+
+    public func contains(_ value: Double, tolerance: Double) -> Bool {
+        if let min, value < min - tolerance { return false }
+        if let max, value > max + tolerance { return false }
+        return true
+    }
+
+    public var isOpen: Bool { min == nil && max == nil }
+
+    /// "7.5–8.5 mm", "at least 30 mm", "up to 2 in".
+    public func label(_ units: LengthUnit) -> String {
+        func f(_ v: Double) -> String { SizeFilter.trimmed(units.format(v)) }
+        switch (min, max) {
+        case let (lo?, hi?): return abs(lo - hi) < 1e-9 ? "\(f(lo)) \(units.symbol)" : "\(f(lo))–\(f(hi)) \(units.symbol)"
+        case let (lo?, nil): return "at least \(f(lo)) \(units.symbol)"
+        case let (nil, hi?): return "up to \(f(hi)) \(units.symbol)"
+        case (nil, nil): return "any size"
+        }
+    }
+}
+
+/// A size rule a toolpath that finds its vectors by layer or kind can add (Vectric's circle-diameter filter): circles
+/// by diameter, or closed shapes by the width and height of their bounding box. Every part that's set must hold, each
+/// to within `tolerance`. Lengths in mm, in design coordinates (after the shape's scale).
+public struct SizeFilter: Hashable, Codable, Sendable {
+    public static let defaultTolerance = 0.05
+
+    /// Only circles, with a diameter in this range.
+    public var diameter: SizeRange?
+    /// Only closed shapes, with a bounding box this wide.
+    public var width: SizeRange?
+    /// Only closed shapes, with a bounding box this tall.
+    public var height: SizeRange?
+    public var tolerance: Double
+
+    public init(diameter: SizeRange? = nil, width: SizeRange? = nil, height: SizeRange? = nil,
+                tolerance: Double = SizeFilter.defaultTolerance) {
+        self.diameter = diameter
+        self.width = width
+        self.height = height
+        self.tolerance = tolerance
+    }
+
+    /// Circles from `min` to `max` mm across.
+    public static func circles(_ min: Double?, _ max: Double?, tolerance: Double = defaultTolerance) -> SizeFilter {
+        SizeFilter(diameter: SizeRange(min: min, max: max), tolerance: tolerance)
+    }
+
+    /// Closed shapes whose bounding box is in these ranges (mm).
+    public static func box(width: SizeRange?, height: SizeRange?, tolerance: Double = defaultTolerance) -> SizeFilter {
+        SizeFilter(width: width, height: height, tolerance: tolerance)
+    }
+
+    /// True when no part limits anything: the same as no filter.
+    public var isEmpty: Bool { (diameter?.isOpen ?? true) && (width?.isOpen ?? true) && (height?.isOpen ?? true) }
+
+    /// True when it measures circles' diameters (else bounding boxes, or nothing).
+    public var measuresDiameter: Bool { !(diameter?.isOpen ?? true) }
+
+    /// True when the shape is this size. Imported vectors (`ShapeKind.paths`, one shape per layer) are measured
+    /// outline by outline: the shape counts when any outline does, and the toolpath cuts only those
+    /// (`Project.shapes(for:)`), so an imported layer of holes drills just the ones of the size.
+    public func matches(_ shape: DesignShape) -> Bool {
+        guard !shape.isKeepOut, shape.modelSpec == nil else { return false }
+        if case .paths = shape.kind { return shape.polylines(tolerance: 0.01).contains(where: matches) }
+        if measuresDiameter {
+            guard case let .circle(r) = shape.kind, diameter!.contains(2 * r * abs(shape.scale), tolerance: Swift.max(0, tolerance)) else {
+                return false
+            }
+        }
+        guard boxRanges != nil else { return true }
+        let outlines = shape.polylines(tolerance: 0.01)
+        guard !outlines.isEmpty, outlines.allSatisfy(\.isClosed) else { return false }
+        return fitsBox(outlines.bounds)
+    }
+
+    /// True when one outline (in design coordinates) is this size: a circle of the diameter, a closed outline whose
+    /// bounding box fits.
+    public func matches(_ outline: Polyline) -> Bool {
+        guard outline.isClosed, outline.count >= 3 else { return false }
+        if measuresDiameter {
+            guard let d = Self.circleDiameter(outline), diameter!.contains(d, tolerance: Swift.max(0, tolerance)) else { return false }
+        }
+        return boxRanges == nil || fitsBox(outline.bounds)
+    }
+
+    /// The part of `shape` a toolpath with this rule cuts: imported vectors keep only the outlines of the size; other
+    /// shapes are cut whole. nil when nothing of it is the size.
+    public func cutPart(of shape: DesignShape) -> DesignShape? {
+        guard case let .paths(paths) = shape.kind else { return shape }
+        let t = shape.transform
+        let kept = paths.filter { matches($0.transformed(t)) }
+        guard !kept.isEmpty else { return nil }
+        guard kept.count != paths.count else { return shape }
+        var part = shape
+        part.kind = .paths(kept)
+        return part
+    }
+
+    /// The diameter of a closed outline that's a circle (every point as far from the middle of its bounding box, to
+    /// within 1% and 0.02 mm), else nil. Imported circles come in as flattened outlines.
+    public static func circleDiameter(_ outline: Polyline) -> Double? {
+        guard outline.isClosed, outline.count >= 8 else { return nil }
+        let b = outline.bounds
+        let c = Vec2((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)
+        let radii = outline.points.map { ($0 - c).length }
+        guard let lo = radii.min(), let hi = radii.max(), hi > 0 else { return nil }
+        let w = b.max.x - b.min.x, h = b.max.y - b.min.y
+        guard hi - lo <= Swift.max(0.02, 0.01 * hi), abs(w - h) <= Swift.max(0.02, 0.01 * hi) * 2 else { return nil }
+        return 2 * hi
+    }
+
+    private var boxRanges: (SizeRange?, SizeRange?)? {
+        let w = width.flatMap { $0.isOpen ? nil : $0 }
+        let h = height.flatMap { $0.isOpen ? nil : $0 }
+        return w == nil && h == nil ? nil : (w, h)
+    }
+
+    private func fitsBox(_ b: Rect2) -> Bool {
+        guard let (w, h) = boxRanges else { return true }
+        let tol = Swift.max(0, tolerance)
+        if let w, !w.contains(b.max.x - b.min.x, tolerance: tol) { return false }
+        if let h, !h.contains(b.max.y - b.min.y, tolerance: tol) { return false }
+        return true
+    }
+
+    /// "circles 7.5–8.5 mm across", "at least 30 mm wide, up to 2 in tall".
+    public func label(_ units: LengthUnit) -> String {
+        var parts: [String] = []
+        if let d = diameter, !d.isOpen { parts.append("circles \(d.label(units)) across") }
+        if let w = width, !w.isOpen { parts.append("\(w.label(units)) wide") }
+        if let h = height, !h.isOpen { parts.append("\(h.label(units)) tall") }
+        return parts.isEmpty ? "any size" : parts.joined(separator: ", ")
+    }
+
+    /// "8.000" → "8", "7.500" → "7.5".
+    static func trimmed(_ s: String) -> String {
+        guard s.contains(".") else { return s }
+        var t = s
+        while t.hasSuffix("0") { t.removeLast() }
+        if t.hasSuffix(".") { t.removeLast() }
+        return t
+    }
+}
+
 /// How a toolpath finds its shapes, so a template's toolpaths find theirs in another design (Vectric's "Automatic"
-/// vector selection, by layer or vector type).
+/// vector selection, by layer or vector type), optionally narrowed by size (`SizeFilter`).
 public enum VectorSelection: Hashable, Sendable {
-    /// The shapes on these layers (`DesignShape.layer`; letter case and surrounding spaces don't matter).
-    case layers([String])
-    /// Every shape of a kind.
-    case kind(ShapeFilter)
+    /// The shapes on these layers (`DesignShape.layer`; letter case and surrounding spaces don't matter), of this size.
+    case layers([String], size: SizeFilter? = nil)
+    /// Every shape of a kind, of this size.
+    case kind(ShapeFilter, size: SizeFilter? = nil)
     /// The shapes selected when the template is applied. In a project, the same as nil: chosen by hand.
     case selection
 
-    public var label: String {
+    /// The size rule, if any (an empty one counts as none).
+    public var size: SizeFilter? {
         switch self {
-        case let .layers(names): (names.count == 1 ? "Layer " : "Layers ") + Self.quoted(names)
-        case let .kind(filter): filter.label
-        case .selection: "Selected vectors"
+        case let .layers(_, size), let .kind(_, size): size.flatMap { $0.isEmpty ? nil : $0 }
+        case .selection: nil
         }
+    }
+
+    /// The same rule with another size rule (or none); `.selection` takes none.
+    public func sized(_ size: SizeFilter?) -> VectorSelection {
+        let s = size.flatMap { $0.isEmpty ? nil : $0 }
+        switch self {
+        case let .layers(names, _): return .layers(names, size: s)
+        case let .kind(filter, _): return .kind(filter, size: s)
+        case .selection: return .selection
+        }
+    }
+
+    /// The layers a layer rule looks on (empty for the others).
+    public var layerNames: [String] {
+        if case let .layers(names, _) = self { return names }
+        return []
+    }
+
+    /// The format a toolpath with this rule needs: one with a size rule is format 20, since an older build would
+    /// ignore it and pick up every shape on the layer or of the kind the next time it looks.
+    public var requiredFormatVersion: Int { size == nil ? 1 : 20 }
+
+    public var label: String { label(.mm) }
+
+    public func label(_ units: LengthUnit) -> String {
+        let base: String
+        switch self {
+        case let .layers(names, _): base = (names.count == 1 ? "Layer " : "Layers ") + Self.quoted(names)
+        case let .kind(filter, _): base = filter.label
+        case .selection: return "Selected vectors"
+        }
+        guard let size else { return base }
+        if case .kind(.circles, _) = self, size.measuresDiameter, size.width == nil, size.height == nil, let d = size.diameter {
+            return "Circles \(d.label(units)) across"
+        }
+        return "\(base) (\(size.label(units)))"
     }
 
     /// The warning Checks shows for a toolpath that found no shapes.
     public var emptyMessage: String {
         let fix = "then choose Toolpaths ▸ Recalculate All, or select vectors and click Use Selected Shapes."
+        let sized = size.map { " (\($0.label(.mm)))" } ?? ""
         switch self {
-        case let .layers(names):
-            return "No vectors on \(names.count == 1 ? "layer" : "layers") \(Self.quoted(names)). Put vectors on it, \(fix)"
-        case let .kind(filter):
-            return "The design has no \(filter.noun). Add some, \(fix)"
+        case let .layers(names, _):
+            return "No vectors on \(names.count == 1 ? "layer" : "layers") \(Self.quoted(names))\(sized). Put vectors on it, \(fix)"
+        case let .kind(filter, _):
+            let what = size == nil || label(.mm).hasPrefix("Circles ") == false ? "\(filter.noun)\(sized)" : label(.mm).lowercased()
+            return "The design has no \(what). Add some, \(fix)"
         case .selection:
             return "No shapes selected."
         }
@@ -83,11 +275,16 @@ public enum VectorSelection: Hashable, Sendable {
 
     public func matches(_ shape: DesignShape) -> Bool {
         guard !shape.isKeepOut else { return false }
+        let found: Bool
         switch self {
-        case let .layers(names): return names.contains { Self.sameLayer($0, shape.layer) }
-        case let .kind(filter): return filter.matches(shape)
+        case let .layers(names, _): found = names.contains { Self.sameLayer($0, shape.layer) }
+        case let .kind(filter, size):
+            // Imported circles are outlines, not circles: a diameter rule finds them among the imported vectors.
+            let importedCircles: Bool = { if case .paths = shape.kind { filter == .circles && size?.measuresDiameter == true } else { false } }()
+            found = importedCircles || filter.matches(shape)
         case .selection: return false
         }
+        return found && (size?.matches(shape) ?? true)
     }
 
     public static func sameLayer(_ a: String, _ b: String) -> Bool {
@@ -98,14 +295,15 @@ public enum VectorSelection: Hashable, Sendable {
 }
 
 extension VectorSelection: Codable {
-    private enum CodingKeys: String, CodingKey { case layers, kind, selection }
+    private enum CodingKeys: String, CodingKey { case layers, kind, selection, size }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let size = try c.decodeIfPresent(SizeFilter.self, forKey: .size)
         if let names = try c.decodeIfPresent([String].self, forKey: .layers) {
-            self = .layers(names)
+            self = .layers(names, size: size)
         } else if let filter = try c.decodeIfPresent(ShapeFilter.self, forKey: .kind) {
-            self = .kind(filter)
+            self = .kind(filter, size: size)
         } else {
             self = .selection
         }
@@ -114,19 +312,33 @@ extension VectorSelection: Codable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .layers(names): try c.encode(names, forKey: .layers)
-        case let .kind(filter): try c.encode(filter, forKey: .kind)
+        case let .layers(names, _): try c.encode(names, forKey: .layers)
+        case let .kind(filter, _): try c.encode(filter, forKey: .kind)
         case .selection: try c.encode(true, forKey: .selection)
         }
+        try c.encodeIfPresent(size, forKey: .size)
     }
 }
 
 extension Project {
-    /// The layers the design's shapes are on, in the order they first appear.
+    /// The layers the design's shapes are on, in the order they first appear, then the layers made with no shapes
+    /// on them (`namedLayers`).
     public var layerNames: [String] {
         var names: [String] = []
         for s in shapes where !names.contains(where: { VectorSelection.sameLayer($0, s.layer) }) { names.append(s.layer) }
+        for n in namedLayers where !names.contains(where: { VectorSelection.sameLayer($0, n) }) { names.append(n) }
         return names
+    }
+
+    /// True when the design has a layer of this name (letter case and surrounding spaces don't matter).
+    public func hasLayer(_ name: String) -> Bool { layerNames.contains { VectorSelection.sameLayer($0, name) } }
+
+    /// Makes empty layers with these names (those the design doesn't have yet), so vectors can be put on them.
+    public mutating func addLayers(_ names: [String]) {
+        for n in names {
+            let name = n.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty && !hasLayer(name) { namedLayers.append(name) }
+        }
     }
 
     /// The shapes a rule finds, in design order; for `.selection`, the shapes of `selection` that can be machined.
@@ -149,6 +361,14 @@ extension Project {
         for s in mine where !layers.contains(where: { VectorSelection.sameLayer($0, s.layer) }) { layers.append(s.layer) }
         if Set(shapeIDs(matching: .layers(layers))) == ids { return .layers(layers) }
         for filter in ShapeFilter.inferenceOrder where Set(shapeIDs(matching: .kind(filter))) == ids { return .kind(filter) }
+        // Circles of one size range, when they're every circle that size: on their layers, else anywhere.
+        let diameters = mine.compactMap { s -> Double? in if case let .circle(r) = s.kind { 2 * r * abs(s.scale) } else { nil } }
+        if diameters.count == mine.count, let lo = diameters.min(), let hi = diameters.max() {
+            let size = SizeFilter.circles(lo, hi)
+            for rule in [VectorSelection.layers(layers, size: size), .kind(.circles, size: size)] where Set(shapeIDs(matching: rule)) == ids {
+                return rule
+            }
+        }
         return .selection
     }
 
@@ -253,7 +473,20 @@ public struct ToolpathTemplate: Hashable, Sendable {
 
     /// The project file format this template needs: the newest its toolpaths need. A build that reads an older
     /// format refuses it, as it does projects.
-    public var formatVersion: Int { operations.map(\.requiredFormatVersion).reduce(1, max) }
+    public var formatVersion: Int {
+        (operations.map(\.requiredFormatVersion) + operations.compactMap { $0.vectorSelection?.requiredFormatVersion }).reduce(1, max)
+    }
+
+    /// The layers the template's toolpaths find their vectors on that `project` doesn't have, in the template's order.
+    public func missingLayers(in project: Project) -> [String] {
+        var missing: [String] = []
+        for op in operations where op.kind.needsShapes {
+            for name in op.vectorSelection?.layerNames ?? [] where !project.hasLayer(name) {
+                if !missing.contains(where: { VectorSelection.sameLayer($0, name) }) { missing.append(name) }
+            }
+        }
+        return missing
+    }
 
     /// `op` as a template keeps it: no shapes but the rule that finds them, no corner overrides (they belong to this
     /// design's shapes), and a depth through the material on a flat sheet tied to the thickness, so the template cuts
@@ -423,6 +656,8 @@ extension ToolpathTemplate {
             public var shapeCount: Int
             /// True when it needs shapes and found none: it's added empty, and Checks says why.
             public var isEmpty: Bool
+            /// True when it isn't added: every layer it finds its vectors on is missing, and the choice was to skip.
+            public var skipped: Bool = false
         }
 
         public struct ToolUse: Hashable, Sendable, Identifiable {
@@ -444,10 +679,27 @@ extension ToolpathTemplate {
         /// What the template's job setup changed (empty when not used).
         public var setupChanges: [JobSetup.Change]
         public var machineNote: String?
+        /// The layers the toolpaths find vectors on that the design didn't have (`ToolpathTemplate.missingLayers`).
+        public var missingLayers: [String] = []
+        /// The ones made, empty, with `MissingLayers.create`.
+        public var createdLayers: [String] = []
+
+        /// The toolpaths left out with `MissingLayers.skip`.
+        public var skippedCount: Int { rows.filter(\.skipped).count }
 
         /// The template's tools the library doesn't have, to offer adding.
         public var newTools: [Tool] { tools.filter { !$0.inLibrary }.map(\.tool) }
-        public var emptyCount: Int { rows.filter(\.isEmpty).count }
+        public var emptyCount: Int { rows.filter { $0.isEmpty && !$0.skipped }.count }
+    }
+
+    /// What applying a template does about layers its toolpaths look on that the design doesn't have.
+    public enum MissingLayers: String, Sendable, CaseIterable {
+        /// Adds the toolpaths empty, and Checks lists them. Only for callers that showed the layers and were told to.
+        case addEmpty
+        /// Makes the layers, empty and named, so vectors can be put on them; the toolpaths are added bound to them.
+        case create
+        /// Leaves out each toolpath whose layers are all missing.
+        case skip
     }
 
     /// Adds the template's toolpaths after `project`'s own. Each finds its shapes by its rule (`selection` for those
@@ -455,9 +707,13 @@ extension ToolpathTemplate {
     /// the library's (or the project's) tool with the same geometry, keeping the template's feeds and speeds; a tool
     /// that's new keeps its number unless another bit has it. With `useJobSetup`, the template's material, zero and
     /// heights replace the project's first, and depths tied to the thickness follow the new one.
-    public func apply(to project: Project, library: ToolLibrary, selection: [UUID] = [], useJobSetup: Bool = false) -> Application {
+    /// `missingLayers` says what's done about layers the design doesn't have: the app and the command line ask first.
+    public func apply(to project: Project, library: ToolLibrary, selection: [UUID] = [], useJobSetup: Bool = false,
+                      missingLayers choice: MissingLayers = .addEmpty) -> Application {
         var p = project
         let setupChanges = useJobSetup ? jobSetup.map { $0.apply(to: &p) } ?? [] : []
+        let missing = missingLayers(in: project)
+        if choice == .create { p.addLayers(missing) }
 
         // Tools: the template's, resolved once each.
         let projectTools = project.operations.flatMap { [$0.tool] + ($0.clearanceTool.map { [$0] } ?? []) }
@@ -493,6 +749,12 @@ extension ToolpathTemplate {
         for source in operations {
             var op = source
             op.id = UUID()
+            let looksOn = op.kind.needsShapes ? source.vectorSelection?.layerNames ?? [] : []
+            if choice == .skip, !looksOn.isEmpty, looksOn.allSatisfy({ !project.hasLayer($0) }) {
+                rows.append(Application.Row(id: op.id, name: op.name, kind: op.kind.label, rule: source.vectorSelection, shapeCount: 0,
+                                            isEmpty: true, skipped: true))
+                continue
+            }
             op.tool = resolve(op.tool)
             switch op.kind {
             case var .pocket(q):
@@ -522,6 +784,7 @@ extension ToolpathTemplate {
         }
         p.fitDepthsToMaterial()
         return Application(project: p, addedOperationIDs: added, rows: rows, tools: uses, setupChanges: setupChanges,
-                           machineNote: jobSetup?.machineNote(for: project))
+                           machineNote: jobSetup?.machineNote(for: project), missingLayers: missing,
+                           createdLayers: choice == .create ? missing : [])
     }
 }

@@ -134,9 +134,12 @@ struct ApplyTemplateSheet: View {
     /// Off unless asked: the template's zero and thickness replace the ones this job is set up for.
     @State private var useJobSetup: Bool
     @State private var addTools = true
+    /// What to do about layers the design doesn't have: nil until chosen, and nothing is added before.
+    @State private var missingChoice: ToolpathTemplate.MissingLayers?
 
     init(template: ToolpathTemplate, project: Project, library: ToolLibrary, selection: [UUID], useJobSetup: Bool = false,
-         height: CGFloat = 600, onApply: @escaping (ToolpathTemplate.Application, _ addTools: Bool) -> Void) {
+         missingChoice: ToolpathTemplate.MissingLayers? = nil, height: CGFloat = 600,
+         onApply: @escaping (ToolpathTemplate.Application, _ addTools: Bool) -> Void) {
         self.height = height
         self.template = template
         self.project = project
@@ -144,26 +147,34 @@ struct ApplyTemplateSheet: View {
         self.selection = selection
         self.onApply = onApply
         _useJobSetup = State(initialValue: useJobSetup)
+        _missingChoice = State(initialValue: missingChoice)
     }
 
     var units: LengthUnit { project.displayUnits }
 
     var body: some View {
-        let result = template.apply(to: project, library: library, selection: selection, useJobSetup: useJobSetup)
+        let missing = template.missingLayers(in: project)
+        let result = template.apply(to: project, library: library, selection: selection, useJobSetup: useJobSetup,
+                                    missingLayers: missingChoice ?? .addEmpty)
+        let adding = result.rows.count - result.skippedCount
+        let mustChoose = !missing.isEmpty && missingChoice == nil
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Apply “\(template.name)”").font(.headline)
-                Text("Adds \(result.rows.count) toolpath\(result.rows.count == 1 ? "" : "s") after this job's own, in the template's order.")
+                Text("Adds \(adding) toolpath\(adding == 1 ? "" : "s") after this job's own, in the template's order.")
                     .font(.callout).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
             .padding(.top, 16)
             Form {
+                if !missing.isEmpty {
+                    MissingLayersSection(layers: missing, choice: $missingChoice)
+                }
                 Section {
                     ForEach(result.rows) { row in
                         LabeledContent {
-                            Text(status(row)).foregroundStyle(row.isEmpty ? .orange : .secondary)
+                            Text(status(row, missing: missing)).foregroundStyle(row.isEmpty && !row.skipped ? .orange : .secondary)
                                 .multilineTextAlignment(.trailing)
                         } label: {
                             Text(row.name)
@@ -173,7 +184,7 @@ struct ApplyTemplateSheet: View {
                 } header: {
                     Text("Toolpaths")
                 } footer: {
-                    if result.emptyCount > 0 {
+                    if result.emptyCount > 0 && !mustChoose {
                         Text("A toolpath that finds no vectors is added empty, and Checks lists it: select vectors and click Use Selected "
                              + "Shapes, or put vectors on its layer and choose Recalculate All.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -233,17 +244,29 @@ struct ApplyTemplateSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(result.rows.isEmpty)
+                .disabled(adding == 0 || mustChoose)
+                .help(mustChoose ? "Choose whether to create the missing layers or skip their toolpaths" : "")
             }
             .padding(16)
         }
         .frame(width: 540, height: height)
     }
 
-    private func status(_ row: ToolpathTemplate.Application.Row) -> String {
+    private func status(_ row: ToolpathTemplate.Application.Row, missing: [String]) -> String {
         guard let rule = row.rule else { return "The whole blank" }
-        if row.isEmpty { return rule == .selection ? "Nothing selected: added empty" : "\(rule.label): none, added empty" }
-        return "\(rule == .selection ? "Selected" : rule.label) · \(row.shapeCount) \(row.shapeCount == 1 ? "vector" : "vectors")"
+        let label = rule.label(units)
+        if row.skipped { return "\(label): skipped" }
+        if row.isEmpty {
+            let onMissing = rule.layerNames.contains { name in missing.contains { VectorSelection.sameLayer($0, name) } }
+            if onMissing {
+                switch missingChoice {
+                case .create?: return "\(label): layer created, added empty"
+                default: return "\(label): layer missing"
+                }
+            }
+            return rule == .selection ? "Nothing selected: added empty" : "\(label): none, added empty"
+        }
+        return "\(rule == .selection ? "Selected" : label) · \(row.shapeCount) \(row.shapeCount == 1 ? "vector" : "vectors")"
     }
 
     private func toolNote(_ use: ToolpathTemplate.Application.ToolUse) -> String? {
@@ -251,6 +274,35 @@ struct ApplyTemplateSheet: View {
         if let n = use.templateNumber { parts.append("T\(n) in the template") }
         if use.feedsDiffer { parts.append("with the template's feeds and speeds") }
         return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+}
+
+/// The template's layers this design doesn't have, and the choice of what to do about them: create them (empty and
+/// named, to put vectors on and Recalculate All) or leave out the toolpaths that find their vectors on them. Nothing is
+/// added until one is chosen, so a template never adds empty toolpaths unasked.
+struct MissingLayersSection: View {
+    let layers: [String]
+    @Binding var choice: ToolpathTemplate.MissingLayers?
+
+    var body: some View {
+        Section {
+            Text(layers.map { "“\($0)”" }.joined(separator: ", "))
+            Picker("Missing layers", selection: $choice) {
+                Text("Create \(layers.count == 1 ? "the layer" : "the layers"), empty").tag(ToolpathTemplate.MissingLayers?.some(.create))
+                Text("Skip the toolpaths that use \(layers.count == 1 ? "it" : "them")").tag(ToolpathTemplate.MissingLayers?.some(.skip))
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+        } header: {
+            Text(layers.count == 1 ? "A Layer Is Missing" : "\(layers.count) Layers Are Missing")
+        } footer: {
+            Text(choice == .create
+                 ? "Put vectors on the new layers, then choose Toolpaths ▸ Recalculate All: their toolpaths pick them up."
+                 : choice == .skip
+                 ? "Each toolpath whose layers are all missing is left out, with its tool."
+                 : "The template's toolpaths find their vectors on layers this design doesn't have. Choose one to go on.")
+                .font(.caption).foregroundStyle(choice == nil ? .orange : .secondary)
+        }
     }
 }
 

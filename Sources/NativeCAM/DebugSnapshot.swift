@@ -10,7 +10,8 @@ import UniformTypeIdentifiers
 /// from the user-defaults argument domain, so AppKit doesn't treat the paths as documents to open.
 ///
 /// With `-NativeCAMSnapshotTemplate <template.nativecamtemplate>` it first applies that template to the project (with
-/// its job setup when `-NativeCAMSnapshotTemplateSetup YES`), logs Toolpaths ▸ Apply Template's items (the templates
+/// its job setup when `-NativeCAMSnapshotTemplateSetup YES`, and `-NativeCAMSnapshotTemplateMissing create|skip` for the
+/// layers the design lacks; unset, the sheet waits for that choice and the toolpaths are added empty), logs Toolpaths ▸ Apply Template's items (the templates
 /// folder can be pointed elsewhere with `-NativeCAMTemplatesFolder <dir>`) and what each toolpath found, draws the
 /// Apply Template sheet and the save panel's options, then snapshots the project with the template applied.
 /// `-NativeCAMSnapshotImport <file.dxf|svg|pdf>` first imports vectors into the project as File ▸ Import does (one shape
@@ -287,10 +288,16 @@ enum DebugSnapshot {
             return project
         }
         let useSetup = UserDefaults.standard.bool(forKey: "NativeCAMSnapshotTemplateSetup")
+        // "create" or "skip": the choice for the template's missing layers (unset, the sheet waits for one).
+        let missingChoice = UserDefaults.standard.string(forKey: "NativeCAMSnapshotTemplateMissing")
+            .flatMap(ToolpathTemplate.MissingLayers.init(rawValue:))
         let library = ToolLibrary(tools: ToolLibraryStore.shared.tools)
-        let result = template.apply(to: project, library: library, useJobSetup: useSetup)
+        let missing = template.missingLayers(in: project)
+        if !missing.isEmpty { log("template missing layers: \(missing.joined(separator: ", ")); choice \(missingChoice?.rawValue ?? "none")") }
+        let result = template.apply(to: project, library: library, useJobSetup: useSetup, missingLayers: missingChoice ?? .addEmpty)
         for row in result.rows {
-            log("template toolpath \(row.name): \(row.rule?.label ?? "needs no vectors"), \(row.shapeCount) vectors\(row.isEmpty ? ", added empty" : "")")
+            let how = row.skipped ? ", skipped" : row.isEmpty ? ", added empty" : ""
+            log("template toolpath \(row.name): \(row.rule?.label(project.displayUnits) ?? "needs no vectors"), \(row.shapeCount) vectors\(how)")
         }
         for use in result.tools {
             log("template tool T\(use.tool.number) \(use.tool.name): \(use.inLibrary ? "in the library" : "new")"
@@ -298,7 +305,9 @@ enum DebugSnapshot {
         }
         for change in result.setupChanges { log("template setup \(change.setting): \(change.from) → \(change.to)") }
         if let note = result.machineNote { log("template machine: \(note)") }
-        render(ApplyTemplateSheet(template: template, project: project, library: library, selection: [], useJobSetup: useSetup, height: 940) { _, _ in },
+        if !result.createdLayers.isEmpty { log("template created layers: \(result.createdLayers.joined(separator: ", "))") }
+        render(ApplyTemplateSheet(template: template, project: project, library: library, selection: [], useJobSetup: useSetup,
+                                  missingChoice: missingChoice, height: 940) { _, _ in },
                size: NSSize(width: 540, height: 940), out: out, name: "apply-template.png", spin: spin)
         let options = TemplateSaveOptions(selectedCount: 2, totalCount: max(3, project.operations.count))
         render(TemplateSaveAccessory(options: options), size: NSSize(width: 460, height: 120), out: out, name: "save-template-options.png", spin: spin)
