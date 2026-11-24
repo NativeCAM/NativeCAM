@@ -897,8 +897,9 @@ extension Nesting {
             while !done() {
                 // Evaluate the new layouts in parallel; each one's result goes in its own slot, so the outcome doesn't
                 // depend on which thread finishes first.
-                var pending = population.indices.filter { population[$0].layout == nil }
-                if let m = settings.maxEvaluations { pending = Array(pending.prefix(max(0, m - evaluations))) }
+                // A `let`, so the parallel loop reads a value nothing can change under it.
+                let unevaluated = population.indices.filter { population[$0].layout == nil }
+                let pending = settings.maxEvaluations.map { Array(unevaluated.prefix(max(0, $0 - evaluations))) } ?? unevaluated
                 if pending.isEmpty { break }
                 let slots = Slots(count: pending.count)
                 let snapshot = population
@@ -935,17 +936,19 @@ extension Nesting {
         /// of a part share theirs). Otherwise they're made as layouts need them.
         func warmUp() {
             let geometries = reach.count
-            var keys: [PairKey] = []
+            var wanted: [PairKey] = []
             for a in 0..<geometries {
                 for b in 0..<geometries {
-                    for k in 0..<angleCount { keys.append(PairKey(fixed: a, moving: b, angle: k, obstacle: false)) }
+                    for k in 0..<angleCount { wanted.append(PairKey(fixed: a, moving: b, angle: k, obstacle: false)) }
                 }
             }
             for o in obstaclePieces.indices {
                 for b in 0..<geometries {
-                    for k in 0..<angleCount { keys.append(PairKey(fixed: o, moving: b, angle: k, obstacle: true)) }
+                    for k in 0..<angleCount { wanted.append(PairKey(fixed: o, moving: b, angle: k, obstacle: true)) }
                 }
             }
+            // A `let`, so the parallel loop reads a value nothing can change under it.
+            let keys = wanted
             guard keys.count > 1, keys.count <= 20_000 else { return }
             DispatchQueue.concurrentPerform(iterations: keys.count) { i in
                 let key = keys[i]
