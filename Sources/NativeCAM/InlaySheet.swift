@@ -7,9 +7,11 @@ struct InlayRequest: Identifiable {
     let selection: [UUID]
 }
 
-/// Add Toolpath ▸ Inlay…: one dialog for both sides of a V-carve inlay. It makes the pocket and the plug with one V-bit
-/// and clearance tool, the pocket's flat depth as the plug's pocket depth, and the plug's glue gap, surface clearance
-/// and boundary (`InlayPairSettings`). Nothing changes until Add Toolpaths.
+/// Add Toolpath ▸ Inlay…: one dialog for both sides of a V-carve inlay. It makes the pocket and the plug with one V-bit,
+/// the pocket's flat depth as the plug's pocket depth, and the plug's glue gap, surface clearance and boundary
+/// (`InlayPairSettings`). Each side starts clearing its flats with the flat end mill the run-time estimate says is
+/// quickest for it (`Project.inlayClearanceTimes`), worked out in the background and again when a setting it depends on
+/// changes, until a tool is picked for that side. Nothing changes until Add Toolpaths.
 struct InlaySheet: View {
     let project: Project
     let selection: [UUID]
@@ -19,19 +21,23 @@ struct InlaySheet: View {
     let onAdd: (InlayPairSettings) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var settings: InlayPairSettings
+    /// The end mills' times for the current settings, once worked out.
+    @State private var times: InlayClearanceTimes?
+    @State private var timing = false
 
-    init(project: Project, selection: [UUID], tools: [Tool], settings: InlayPairSettings? = nil, height: CGFloat = 760,
-         onAdd: @escaping (InlayPairSettings) -> Void) {
+    init(project: Project, selection: [UUID], tools: [Tool], settings: InlayPairSettings? = nil, times: InlayClearanceTimes? = nil,
+         height: CGFloat = 760, onAdd: @escaping (InlayPairSettings) -> Void) {
         self.project = project
         self.selection = selection
         self.tools = tools
         self.height = height
         self.onAdd = onAdd
         _settings = State(initialValue: settings ?? Self.defaults(tools: tools))
+        _times = State(initialValue: times)
     }
 
-    /// A 60° V-bit if there is one (the usual inlay bit), the first flat end mill to clear the flats, Vectric's usual
-    /// depths and a margin round the design.
+    /// A 60° V-bit if there is one (the usual inlay bit), Vectric's usual depths and a margin round the design. The first
+    /// flat end mill clears the flats until each side's quickest is known.
     static func defaults(tools: [Tool]) -> InlayPairSettings {
         let vBits = tools.filter { $0.shape == .vBit }
         let bit = vBits.first { abs($0.includedAngle - 60) < 0.5 && $0.tipDiameter < 1e-6 } ?? vBits.first
@@ -83,6 +89,56 @@ struct InlaySheet: View {
             .padding(16)
         }
         .frame(width: 520, height: height)
+        .task(id: settings.timingKey) { await timeClearanceTools() }
+    }
+
+    /// Times every flat end mill on each side for the current settings (a moment after the last change, in the
+    /// background) and starts each side not picked by hand with its quickest.
+    private func timeClearanceTools() async {
+        let key = settings.timingKey
+        guard times?.key != key else {
+            timing = false
+            return
+        }
+        timing = true
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        let project = project, selection = selection, tools = tools
+        let stop = StopFlag()
+        let result = await withTaskCancellationHandler {
+            await Task.detached(priority: .userInitiated) {
+                project.inlayClearanceTimes(key, shapes: selection, tools: tools, shouldStop: { stop.isSet })
+            }.value
+        } onCancel: {
+            stop.set()
+        }
+        guard !Task.isCancelled else { return }
+        timing = false
+        guard let result else { return }
+        times = result
+        settings = settings.withQuickestClearance(result)
+    }
+
+    /// "1:05" or "1:02:05".
+    private func duration(_ seconds: Double) -> String {
+        let t = Int(seconds.rounded())
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    /// A clearance tool's name, with the side's run time when it's known.
+    private func label(_ t: Tool, side: VCarveInlay.Role) -> String {
+        let name = "T\(t.number) \(t.name)"
+        guard let times, times.key == settings.timingKey, let s = times.seconds(side, tool: t) else { return name }
+        return "\(name) (\(duration(s)))"
+    }
+
+    private func clearancePicker(_ title: String, side: VCarveInlay.Role) -> some View {
+        Picker(title, selection: Binding(get: { settings.clearanceTool(side)?.id }, set: { id in
+            settings.pickClearance(id.flatMap { id in tools.first { $0.id == id } }, for: side)
+        })) {
+            Text("None (V-bit only)").tag(UUID?.none)
+            ForEach(tools.filter { !$0.shape.isTapered }) { t in Text(label(t, side: side)).tag(Optional(t.id)) }
+        }
     }
 
     @ViewBuilder
@@ -96,13 +152,15 @@ struct InlaySheet: View {
                 }
                 ForEach(tools.filter(\.shape.isTapered)) { t in Text("T\(t.number) \(t.name)").tag(t.id) }
             }
-            Picker("Clear flat areas with", selection: Binding(get: { settings.clearanceTool?.id }, set: { id in
-                settings.clearanceTool = id.flatMap { id in tools.first { $0.id == id } }
-            })) {
-                Text("None (V-bit only)").tag(UUID?.none)
-                ForEach(tools.filter { !$0.shape.isTapered }) { t in Text("T\(t.number) \(t.name)").tag(Optional(t.id)) }
+            clearancePicker("Clear the pocket's flats with", side: .pocket)
+            clearancePicker("Clear the plug's flats with", side: .plug)
+            if timing {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Timing the end mills on each side…").font(.caption).foregroundStyle(.secondary)
+                }
             }
-            if settings.clearanceTool == nil {
+            if settings.pocketClearanceTool == nil || settings.plugClearanceTool == nil {
                 Picker("V-bit clears flats in", selection: Binding(get: { settings.flatRaster != nil }, set: { raster in
                     settings.flatRaster = raster ? VCarveRaster() : nil
                 })) {
@@ -118,11 +176,20 @@ struct InlaySheet: View {
         } header: {
             Text("Bits")
         } footer: {
-            Text(settings.clearanceTool == nil
-                 ? "The V-bit clears the flat areas on both sides itself, with passes close enough that the ridges between them stay under the glue gap: slow over large areas. Raster runs straight lines, which suits large flats."
-                 : "The end mill clears the flat areas first, on both sides; the V-bit then carves the walls and cleans up the corners the end mill can't reach.")
+            Text(bitsFooter)
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var bitsFooter: String {
+        let none = [settings.pocketClearanceTool, settings.plugClearanceTool].filter { $0 == nil }.count
+        var text = switch none {
+        case 2: "The V-bit clears the flat areas on both sides itself, with passes close enough that the ridges between them stay under the glue gap: slow over large areas. Raster runs straight lines, which suits large flats."
+        case 1: "The end mill clears one side's flat areas first, and the V-bit cleans up the corners it can't reach; on the other side the V-bit clears them itself, slowly over large areas (raster suits large flats)."
+        default: "The end mill clears the flat areas first; the V-bit then carves the walls and cleans up the corners the end mill can't reach."
+        }
+        text += " Each side starts with the end mill that clears it quickest (the time is that side's whole run); the fit doesn't depend on it. A tool you pick stays."
+        return text
     }
 
     @ViewBuilder

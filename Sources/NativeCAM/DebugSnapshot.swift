@@ -332,28 +332,47 @@ enum DebugSnapshot {
         let d = UserDefaults.standard
         let ids = project.inlayShapes(project.shapes.map(\.id)).map(\.id)
         let tools = ToolLibraryStore.shared.tools
+        // Each side's quickest end mill, as the dialog works it out, timed once for each set of settings drawn.
+        var timed: [InlayPairSettings: InlayClearanceTimes] = [:]
+        func times(_ s: InlayPairSettings) -> InlayClearanceTimes? {
+            if let t = timed[s.timingKey] { return t }
+            let t = project.inlayClearanceTimes(s, shapes: ids, tools: tools)
+            timed[s.timingKey] = t
+            return t
+        }
+        func quickest(_ s: InlayPairSettings) -> InlayPairSettings { times(s).map(s.withQuickestClearance) ?? s }
         var settings = InlaySheet.defaults(tools: tools)
         settings.boundary = VCarveInlay.Boundary(rawValue: d.string(forKey: "NativeCAMSnapshotInlayBoundary") ?? "") ?? .margin
+        if let t = times(settings) {
+            for side in VCarveInlay.Role.allCases {
+                let each = t.times(side).map { "T\($0.tool.number) \(Self.duration($0.seconds))" }.joined(separator: ", ")
+                log("inlay clearance times, \(side.rawValue) (\(settings.boundary.rawValue) boundary): \(each); "
+                    + "quickest T\(t.quickest(side)?.number ?? 0)")
+            }
+        }
         if d.bool(forKey: "NativeCAMSnapshotInlayRaster") {
-            settings.clearanceTool = nil
+            settings.pickClearance(nil, for: .pocket)
+            settings.pickClearance(nil, for: .plug)
             settings.flatRaster = VCarveRaster()
         }
+        settings = quickest(settings)
         log("menu Add Toolpath: Profile (cut out / inside) | Pocket | Drill | V-carve | Inlay… | Chamfer | Fluting | Prism")
         // The dialog as it opens, and with each boundary (whole board both ways), the V-bit alone clearing in raster lines.
-        var sheets: [(String, InlayPairSettings)] = [("inlay-sheet.png", InlaySheet.defaults(tools: tools))]
+        var sheets: [(String, InlayPairSettings)] = [("inlay-sheet.png", quickest(InlaySheet.defaults(tools: tools)))]
         for boundary in VCarveInlay.Boundary.allCases {
             var s = settings
             s.boundary = boundary
-            sheets.append(("inlay-sheet-\(boundary.rawValue).png", s))
+            sheets.append(("inlay-sheet-\(boundary.rawValue).png", quickest(s)))
         }
         var custom = settings
         custom.boundary = .board
         custom.boardSize = Vec2(project.stock.width / 2, project.stock.height / 2)
-        custom.clearanceTool = nil
+        custom.pickClearance(nil, for: .pocket)
+        custom.pickClearance(nil, for: .plug)
         custom.flatRaster = VCarveRaster(angle: 45)
-        sheets.append(("inlay-sheet-board-size-raster.png", custom))
+        sheets.append(("inlay-sheet-board-size-raster.png", quickest(custom)))
         for (name, s) in sheets {
-            render(InlaySheet(project: project, selection: ids, tools: tools, settings: s, height: 1000) { _ in },
+            render(InlaySheet(project: project, selection: ids, tools: tools, settings: s, times: times(s), height: 1000) { _ in },
                    size: NSSize(width: 520, height: 1000), out: out, name: name, spin: spin)
         }
         var result = project
@@ -387,6 +406,12 @@ enum DebugSnapshot {
         render(OperationInspector(op: .constant(plug), project: mismatched, workspace: Workspace()), size: NSSize(width: 440, height: 2000),
                out: out, name: "inspector-inlay-mismatch.png", spin: spin)
         return result
+    }
+
+    /// "3:23", or "1:02:05".
+    static func duration(_ seconds: Double) -> String {
+        let t = Int(seconds.rounded())
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60) : String(format: "%d:%02d", t / 60, t % 60)
     }
 
     /// Job Setup, each toolpath's inspector, the first shape's and the machine setup assistant's setup step, to inspector-*.png,
