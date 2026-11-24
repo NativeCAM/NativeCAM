@@ -1,0 +1,10 @@
+# NativeCAM calibration times for the rotary check (calibration-rotary.tap).
+# Write the seconds you timed in measured_s, leaving a section blank to skip it. Then open this file in
+# File > Calibration Programs > Enter Times, or run: nativecam-cli calibrate fit <this file> [project.nativecam]
+program,rotary
+controller,avid-mach4
+axis,A
+section,count,name,estimate_s,measured_s
+rotary-g93,1,"One turn in inverse time, G93 F10",6.0,6.1
+rotary-360,1,Rapid turn of 360°,4.0,4.9
+rotary-720,1,Rapid turn of 720° back to A0,8.0,9.5

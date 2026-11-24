@@ -437,7 +437,7 @@ enum DebugSnapshot {
         do {
             let fit = try Calibration.fit(times, machine: machine)
             for v in fit.values {
-                log("calibration fit \(v.label): \(v.text(v.before, machine.outputUnits)) -> \(v.determined ? v.text(v.after, machine.outputUnits) : "stays")")
+                log("calibration fit \(v.label): \(v.text(v.before, machine.outputUnits)) -> \(v.afterText(machine.outputUnits))")
             }
             if let v = fit.fChange { log("calibration F-change \(v.passed ? "PASS" : "FAIL"): \(v.text)") }
             if let v = fit.g93 { log("calibration G93 \(v.passed ? "PASS" : "FAIL"): \(v.text)") }
