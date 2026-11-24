@@ -147,6 +147,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// What Checks notes about the toolpath as information rather than a warning (an edge profile's inside corners
     /// sharper than its bit). nil for none.
     public var notes: [String]?
+    /// Spindle ▸ Automatic: the speed picked for this toolpath (`spindleRPM` is set to it) and why; nil when it runs
+    /// at its tool's RPM.
+    public var automaticSpindle: AutomaticSpindle?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

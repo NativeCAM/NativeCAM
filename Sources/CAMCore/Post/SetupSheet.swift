@@ -283,6 +283,8 @@ public enum SetupSheet {
         var step = 0
         var lastTile: Int?
         var loadFeedsNote = false
+        // Spindle ▸ Automatic: each toolpath whose speed was picked, and why (after the table).
+        var automatic: [(step: Int, name: String, why: String)] = []
         let export = job.tiling == nil ? nil : JobExport.files(project, job: job, date: date)
         let names = export.map { JobExport.fileNames($0.files, base: gcodeFile ?? ((project.name.isEmpty ? "Untitled" : project.name) + "." + $0.post.fileExtension), fileExtension: $0.post.fileExtension) } ?? []
         func files(ofTile t: Int) -> [String] {
@@ -331,13 +333,24 @@ public enum SetupSheet {
                 feedCell = "\(u.format(lf.lowest, decimals: 0))–\(feed(maxFeed)) *"
                 loadFeedsNote = true
             }
-            h += "<tr><td>\(step)</td><td>\(esc(tp.name))</td><td>T\(tp.tool.number)</td>\(angle)<td class=\"num\">\(Int(rpm.rounded()))\(machine.spindle == .router ? " (dial)" : "")</td>"
+            var rpmMark = ""
+            if let auto = tp.automaticSpindle {
+                rpmMark = " †"
+                automatic.append((step, tp.name, auto.reason(u)))
+            }
+            h += "<tr><td>\(step)</td><td>\(esc(tp.name))</td><td>T\(tp.tool.number)</td>\(angle)<td class=\"num\">\(Int(rpm.rounded()))\(machine.spindle == .router ? " (dial)" : "")\(rpmMark)</td>"
                 + "<td class=\"num\">\(feedCell)</td><td class=\"num\">\(len(max(0, depth)))</td><td class=\"num\">\(seconds)</td></tr>\n"
         }
         h += "</table>\n"
         if loadFeedsNote {
             h += "<p>* Adjust feeds for load: the feed slows in full-width cuts, inside corners and tight inside arcs, and "
                 + "runs at the higher feed elsewhere.</p>\n"
+        }
+        if !automatic.isEmpty {
+            h += "<p>† Automatic spindle speed, picked from the chip-load chart (not yet calibrated on this machine) "
+                + "instead of the tool's RPM:</p>\n<ul>\n"
+            for a in automatic { h += "<li>\(a.step). \(esc(a.name)): \(esc(a.why))</li>\n" }
+            h += "</ul>\n"
         }
 
         // 3D rotary roughing and finishing: the model each one works on, how it sits on the blank and how it's cut.
