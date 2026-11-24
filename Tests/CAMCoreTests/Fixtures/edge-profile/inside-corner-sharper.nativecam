@@ -1,0 +1,164 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 18,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Inside corners",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "ED6E0000-0000-4000-8084-000000000124",
+      "kind" : {
+        "edgeProfile" : {
+          "_0" : {
+            "direction" : "climb",
+            "edges" : "outside",
+            "entry" : {
+              "kind" : "ramp",
+              "rampLength" : 50.8
+            },
+            "finish" : 0.508,
+            "leads" : {
+              "angle" : 45,
+              "kind" : "arc",
+              "leadOut" : true,
+              "length" : 6.35,
+              "overlap" : 0,
+              "radius" : 6.35,
+              "sweep" : 90
+            },
+            "offset" : 0,
+            "passCount" : 3,
+            "passes" : "horizontal"
+          }
+        }
+      },
+      "name" : "Round over",
+      "shapeIDs" : [
+        "ED6E0000-0000-4000-8084-000000000123"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 3048,
+          "plungeRate" : 762,
+          "spindleRPM" : 16000,
+          "stepdown" : 6.35,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 25.4,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 12.7,
+        "form" : {
+          "kind" : "roundover",
+          "pilotDiameter" : 12.7,
+          "points" : [
+
+          ],
+          "radius" : 6.35,
+          "upperRadius" : 0
+        },
+        "id" : "ED6E0000-0000-4000-8084-000000000992",
+        "includedAngle" : 90,
+        "name" : "1\" roundover",
+        "notes" : "",
+        "number" : 5,
+        "shankDiameter" : 12.7,
+        "shape" : "form",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "ED6E0000-0000-4000-8084-000000000123",
+      "kind" : {
+        "paths" : {
+          "_0" : [
+            {
+              "isClosed" : true,
+              "points" : [
+                {
+                  "x" : 25.4,
+                  "y" : 25.4
+                },
+                {
+                  "x" : 177.79999999999998,
+                  "y" : 25.4
+                },
+                {
+                  "x" : 177.79999999999998,
+                  "y" : 127
+                },
+                {
+                  "x" : 127,
+                  "y" : 127
+                },
+                {
+                  "x" : 127,
+                  "y" : 101.6
+                },
+                {
+                  "x" : 76.19999999999999,
+                  "y" : 101.6
+                },
+                {
+                  "x" : 76.19999999999999,
+                  "y" : 127
+                },
+                {
+                  "x" : 25.4,
+                  "y" : 127
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer" : "Default",
+      "name" : "Notched board",
+      "position" : {
+        "x" : 0,
+        "y" : 0
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 152.39999999999998,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 203.2,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

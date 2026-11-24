@@ -328,26 +328,31 @@ enum EdgeProfileGenerator {
                         return top(p, plungeProbe) > levels[0] + 0.05
                     }
                     let tabs = { (l: Polyline) in TabPlan(length: l.length, params: entryParams, tool: tool, lastLevel: levels[levels.count - 1]) }
-                    if let leads = params.leads,
-                       let lead = LeadPlanner.fit(loop, relieved: loop, near: here, settings: leads, wasteOnLeft: wasteOnLeft,
-                                                  clearance: clearance, rampLength: rampLength, tabs: tabs, linkLimit: linkLimit,
-                                                  chordTolerance: context.arcTolerance) {
-                        if canLink(to: lead.start) {
-                            b.feed(Vec3(lead.start, b.position.z))
-                            ProfileGenerator.cutClosedWithLeads(lead, levels: levels, params: linkedParams, tool: tool, builder: &b,
-                                                                warnings: &warnings)
-                        } else {
-                            b.retract()
-                            if intoMaterial(lead.start) { plungesIntoMaterial += 1 }
-                            ProfileGenerator.cutClosedWithLeads(lead, levels: levels, params: entryParams, tool: tool, builder: &b,
-                                                                warnings: &warnings)
-                        }
+                    func fit(_ leads: LeadSettings, ramp: Double?) -> FittedLead? {
+                        LeadPlanner.fit(loop, relieved: loop, near: here, settings: leads, wasteOnLeft: wasteOnLeft, clearance: clearance,
+                                        rampLength: ramp, tabs: tabs, linkLimit: linkLimit, chordTolerance: context.arcTolerance)
+                    }
+                    // A lap that links arrives at depth, so its lead has no ramp (and its lap no overrun to recut one).
+                    if let leads = params.leads, atDepth, let lead = fit(leads, ramp: nil), canLink(to: lead.start) {
+                        b.feed(Vec3(lead.start, b.position.z))
+                        ProfileGenerator.cutClosedWithLeads(lead, levels: levels, params: linkedParams, tool: tool, builder: &b,
+                                                            warnings: &warnings)
+                    } else if let leads = params.leads, let lead = fit(leads, ramp: rampLength) {
+                        b.retract()
+                        if intoMaterial(lead.start) { plungesIntoMaterial += 1 }
+                        ProfileGenerator.cutClosedWithLeads(lead, levels: levels, params: entryParams, tool: tool, builder: &b,
+                                                            warnings: &warnings)
                     } else {
                         if params.leads != nil { unfitted += 1 }
                         let start = loop.startingNearest(here)
-                        b.retract()
-                        if intoMaterial(start.points[0]) { plungesIntoMaterial += 1 }
-                        ProfileGenerator.cutClosed(start, levels: levels, params: entryParams, tool: tool, builder: &b, warnings: &warnings)
+                        if canLink(to: start.points[0]) {
+                            b.feed(Vec3(start.points[0], b.position.z))
+                            ProfileGenerator.cutClosed(start, levels: levels, params: linkedParams, tool: tool, builder: &b, warnings: &warnings)
+                        } else {
+                            b.retract()
+                            if intoMaterial(start.points[0]) { plungesIntoMaterial += 1 }
+                            ProfileGenerator.cutClosed(start, levels: levels, params: entryParams, tool: tool, builder: &b, warnings: &warnings)
+                        }
                     }
                     atDepth = true
                 }
