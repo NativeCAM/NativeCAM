@@ -121,8 +121,8 @@ public enum RotaryIndex {
         for op in ops {
             switch op.kind {
             case .rough3D, .finish3D, .moulding:
-                issues.append(JobIssue(.error, "3D Roughing, 3D Finishing and Mouldings cut flat sheets: on rotary stock, use 3D "
-                    + "Rotary Roughing and Finishing.", operation: op.name))
+                issues.append(JobIssue(.error, "3D Roughing and 3D Finishing cut flat sheets: on rotary stock, use 3D Rotary "
+                    + "Roughing and Finishing.", operation: op.name))
             case .rounding, .rotaryFinish, .rotaryRough: continue
             default: break
             }
@@ -222,8 +222,8 @@ public enum RotaryIndex {
             }
             switch op.kind {
             case .rough3D, .finish3D, .moulding:
-                issues.append(JobIssue(.error, "3D Roughing, 3D Finishing and Mouldings cut flat sheets: on rotary stock, use 3D "
-                    + "Rotary Roughing and Finishing.", operation: op.name))
+                issues.append(JobIssue(.error, "3D Roughing and 3D Finishing cut flat sheets: on rotary stock, use 3D Rotary "
+                    + "Roughing and Finishing.", operation: op.name))
             default: break
             }
         }
