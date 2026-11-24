@@ -414,9 +414,9 @@ struct TemplateFilterTests {
         #expect(inchBox.label(.mm) == "0.5–2 in wide, at least 0.015625 in tall")
         #expect(inchBox.label(.inch) == "0.5–2 in wide, at least 0.015625 in tall")
         // A rule mixing both stays in the design's units.
-        let mixed = SizeFilter.box(width: SizeRange(min: 2.inch, max: 250), height: nil)
-        #expect(mixed.label(.inch) == "2–9.843 in wide")
-        #expect(mixed.label(.mm) == "50.8–250 mm wide")
+        let mixed = SizeFilter.box(width: SizeRange(min: 0.1875.inch, max: 250), height: nil)
+        #expect(mixed.label(.inch) == "0.1875–9.843 in wide")
+        #expect(mixed.label(.mm) == "4.76–250 mm wide")
         // Round in neither: the design's units, rounded rather than to four places.
         let measured = SizeFilter.circles(7.4937, 8.5063)
         #expect(measured.label(.inch) == "circles 0.295–0.335 in across")
