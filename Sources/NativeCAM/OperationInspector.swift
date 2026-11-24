@@ -287,7 +287,7 @@ struct OperationInspector: View {
         case let .rotaryRough(p):
             RotaryRoughSection(params: p, op: op, project: project, units: units) { op.kind = .rotaryRough($0) }
         case let .chamfer(p):
-            ChamferSection(params: p, tool: op.tool, units: units) { op.kind = .chamfer($0) }
+            ChamferSection(params: p, tool: op.tool, units: units, thickness: project.stock.thickness) { op.kind = .chamfer($0) }
         case let .fluting(p):
             FlutingSection(params: p, tool: op.tool, units: units) { op.kind = .fluting($0) }
         case let .prism(p):
@@ -445,11 +445,13 @@ struct EdgeProfileSection: View {
 }
 
 /// A chamfer: which side of the vector the bevel lies, which edge the vector marks (Vectric's Down / Up), its width
-/// and depth linked through the bit's angle, passes and sharp corners.
+/// and depth linked through the bit's angle, passes, sharp corners and the overcut with the flat it leaves; with a form
+/// bit (a round-nose chamfer), the width where its profile meets the surface, the depth that gives and its passes.
 struct ChamferSection: View {
     let params: ChamferParams
     let tool: Tool
     let units: LengthUnit
+    let thickness: Double
     let set: (ChamferParams) -> Void
 
     private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
@@ -486,7 +488,11 @@ struct ChamferSection: View {
             .help("Top edge: the bevel slopes down away from the vector (Vectric's Down). Bottom edge: it rises away from the vector to the surface (Vectric's Up).")
             SectionNote(text: summary)
             LengthField(title: "Width", mm: Binding(get: { p.width }, set: { var q = p; q.width = max(0.01, $0); set(q) }), units: units,
-                        help: "The bevel's width across the top; its depth follows from the bit's angle")
+                        help: tool.shape == .form ? "How far from the bevel's foot the bit's profile meets the surface; the depth follows from its profile"
+                                                  : "The bevel's width across the top; its depth follows from the bit's angle")
+            if tool.shape == .form {
+                FormChamferRows(params: p, tool: tool, units: units, thickness: thickness)
+            }
             if tool.shape.isTapered {
                 LengthField(title: "Depth", mm: Binding(get: { depth }, set: { var q = p; q.width = max(0.01, ChamferParams.width(depth: $0, tool: tool)); set(q) }),
                             units: units, help: "The bevel's height; changing it changes the width through the bit's angle")
@@ -494,19 +500,59 @@ struct ChamferSection: View {
             }
             LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }), units: units,
                         help: "Where the top of the bevel is: 0 on the material top, or the floor of a pocket or step", minimum: 0)
-            PassDepthRows(passDepth: p.passDepth, depth: depth, tool: tool, units: units) { var q = p; q.passDepth = $0; set(q) }
-            Toggle("Sharp corners", isOn: Binding(get: { p.sharpCorners }, set: { var q = p; q.sharpCorners = $0; set(q) }))
-                .help("Raise the bit along each corner's bisector so the bevel's faces meet in a crisp line, instead of a rounded corner")
+            if tool.shape != .form {
+                PassDepthRows(passDepth: p.passDepth, depth: depth, tool: tool, units: units) { var q = p; q.passDepth = $0; set(q) }
+                Toggle("Sharp corners", isOn: Binding(get: { p.sharpCorners }, set: { var q = p; q.sharpCorners = $0; set(q) }))
+                    .help("Raise the bit along each corner's bisector so the bevel's faces meet in a crisp line, instead of a rounded corner")
+            }
+            if tool.shape.isTapered, !(p.edge == .bottom && p.side == .both) {
+                LengthField(title: "Overcut", mm: Binding(get: { p.overcut ?? 0 }, set: { var q = p; q.overcut = $0 > 1e-9 ? $0 : nil; set(q) }),
+                            units: units, help: "How far past the bevel's foot the tip also runs, on a second lap at the bevel's depth: the foot is left as a flat rather than the bottom of a V-groove, and the bevel keeps its width and angle",
+                            minimum: 0)
+                let flat = p.flatWidth(with: tool)
+                if flat > 1e-9 {
+                    LabeledContent("Flat at the foot", value: len(flat))
+                }
+            }
             Picker("Direction", selection: Binding(get: { p.direction }, set: { var q = p; q.direction = $0; set(q) })) {
                 ForEach(CutDirection.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
-            if !tool.shape.isTapered {
-                SectionNote(text: "Chamfers need a V-bit or engraving bit.", warning: true)
+            if tool.shape == .form {
+                EmptyView()
+            } else if !tool.shape.isTapered {
+                SectionNote(text: "Chamfers need a V-bit, an engraving bit or a form bit (a roundover, cove or ogee).", warning: true)
             } else if p.startDepth + depth > min(tool.taperHeight, tool.fluteLength) + 1e-6 {
                 SectionNote(text: "Deeper than the bit's V (\(len(min(tool.taperHeight, tool.fluteLength)))): the bevel's top comes out as a step.",
                             warning: true)
             }
+        }
+    }
+}
+
+/// A round-nose chamfer's placement: how deep the form bit's tip runs for the width, the most of its profile it has, and
+/// the passes the router-bit chart's cross-section rule asks for (`EdgeProfilePlan.fewestPasses`).
+private struct FormChamferRows: View {
+    let params: ChamferParams
+    let tool: Tool
+    let units: LengthUnit
+    let thickness: Double
+
+    private func len(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+
+    var body: some View {
+        let reach = EdgeProfileParams.profileReach(tool)
+        if let depth = EdgeProfileParams.formDepth(reaching: params.width, tool: tool) {
+            LabeledContent("Depth", value: len(depth))
+            let plan = EdgeProfilePlan.fewestPasses(tool: tool, depth: depth, thickness: max(0.01, thickness - params.startDepth))
+            LabeledContent("Passes", value: plan.passes.count == 1 ? "1" : "\(plan.passes.count), for the profile's cross-section")
+            if params.edge == .bottom && params.side == .both {
+                SectionNote(text: "A form bit can't rise on both sides of one vector: set Side to Inside or Outside, or Vector to Top edge.",
+                            warning: true)
+            }
+        } else {
+            SectionNote(text: "Wider than the bit's profile reaches (\(len(reach))): the chamfer needs more of the profile than the bit has.",
+                        warning: true)
         }
     }
 }

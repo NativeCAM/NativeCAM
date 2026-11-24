@@ -1106,11 +1106,15 @@ public struct ChamferParams: Hashable, Codable, Sendable {
     /// round an arc. Off, the bit stays at depth and the corners come out rounded.
     public var sharpCorners: Bool
     public var direction: CutDirection
+    /// V-bits: how far past the bevel's foot the tip also runs, mm, on a second lap at the bevel's depth (Vectric's
+    /// Overcut). The bevel keeps its width and angle; the tip is kept off its foot, which is left as a flat this wide
+    /// (plus the tip's own width) rather than the bottom of a V-groove. nil or 0 = none. Format 19 when set.
+    public var overcut: Double?
 
     public static let defaultWidth = 0.125.inch
 
     public init(side: Side = .outside, edge: Edge = .top, width: Double = ChamferParams.defaultWidth, startDepth: Double = 0,
-                passDepth: Double? = nil, sharpCorners: Bool = true, direction: CutDirection = .climb) {
+                passDepth: Double? = nil, sharpCorners: Bool = true, direction: CutDirection = .climb, overcut: Double? = nil) {
         self.side = side
         self.edge = edge
         self.width = width
@@ -1118,11 +1122,34 @@ public struct ChamferParams: Hashable, Codable, Sendable {
         self.passDepth = passDepth
         self.sharpCorners = sharpCorners
         self.direction = direction
+        self.overcut = overcut
     }
 
-    /// The bevel's depth (its height) with `tool`, mm: the width over tan(half the bit's angle). 0 for a bit with no
-    /// taper.
-    public func depth(with tool: Tool) -> Double { Self.depth(width: width, tool: tool) }
+    /// The overcut that applies with `tool`, mm: a V-bit or engraving bit's, 0 otherwise (and on a bottom-edge bevel on
+    /// both sides, whose foot is the vector between two bevels).
+    public func overcut(with tool: Tool) -> Double {
+        guard tool.shape.isTapered, !(edge == .bottom && side == .both) else { return 0 }
+        return max(0, overcut ?? 0)
+    }
+
+    /// The flat a V-bit leaves along the bevel's foot, mm: the overcut plus the tip's own width (0 for a pointed bit with
+    /// no overcut).
+    public func flatWidth(with tool: Tool) -> Double {
+        guard tool.shape.isTapered else { return 0 }
+        return overcut(with: tool) + max(0, tool.tipDiameter)
+    }
+
+    /// The bevel's depth (its height) with `tool`, mm: the width over tan(half the bit's angle) for a V-bit, or how deep
+    /// a form bit's tip runs for its profile to meet the surface at the width (`EdgeProfileParams.formDepth`). 0 for
+    /// other bits, and for a width beyond a form bit's profile.
+    public func depth(with tool: Tool) -> Double {
+        if tool.shape == .form { return EdgeProfileParams.formDepth(reaching: width, tool: tool) ?? 0 }
+        return Self.depth(width: width, tool: tool)
+    }
+
+    /// Whether the chamfer needs format 19: an overcut, or a form bit (a round-nose chamfer), which older builds refuse
+    /// or would cut without.
+    public func needsFormat19(with tool: Tool) -> Bool { (overcut ?? 0) > 1e-9 || tool.shape == .form }
 
     /// Depth ↔ width through the bit's angle: a bevel `width` wide is width / tan(half angle) deep.
     public static func depth(width: Double, tool: Tool) -> Double {
@@ -1492,7 +1519,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// clearing is format 13. A whole-board inlay plug is format 14. A tapered ball nose, form or dovetail bit, as the
     /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`). 3D rest finishing
     /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`). Edge
-    /// profiles are format 18.
+    /// profiles are format 18. A chamfer with an overcut or a form bit is format 19.
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {
@@ -1506,7 +1533,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case .rounding: own = 5
         case .rotaryFinish: own = 7
         case .rotaryRough: own = 12
-        case .chamfer, .fluting, .prism: own = 8
+        case let .chamfer(p): own = p.needsFormat19(with: tool) ? 19 : 8
+        case .fluting, .prism: own = 8
         case .edgeProfile: own = 18
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion

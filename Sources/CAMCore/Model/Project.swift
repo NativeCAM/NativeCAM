@@ -20,8 +20,9 @@ public struct Project: Hashable, Sendable {
     /// format-14 build can't read. Format 16 adds jobs nested onto several sheets: an older build would ignore which
     /// sheet each part is on and cut them all on top of each other on the first. A job of one sheet doesn't raise it.
     /// Format 17 adds 3D rest finishing, which an older build can't read. Format 18 adds edge profiles, which an older
-    /// build can't read.
-    public static let currentFormatVersion = 18
+    /// build can't read. Format 19 adds a chamfer's overcut, which an older build would ignore and cut a V-groove at the
+    /// bevel's foot, and chamfers cut with a form bit, which older builds refuse.
+    public static let currentFormatVersion = 19
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

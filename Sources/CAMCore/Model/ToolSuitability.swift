@@ -3,7 +3,7 @@ import Foundation
 public extension OperationKind {
     /// Why this kind of toolpath can't cut with `tool`, or nil when it can. Only the tapered ball nose, form and dovetail
     /// shapes are checked here (the older shapes keep their generators' own warnings): form and dovetail bits cut
-    /// edges, so only profiles take them (and edge profiles, form bits that only widen going up); a tapered ball nose
+    /// edges, so only profiles take them (and edge profiles and chamfers, form bits that only widen going up); a tapered ball nose
     /// carves 3D surfaces, flutes and profiles. An edge profile takes nothing but those form bits.
     func refusal(for tool: Tool) -> String? {
         let shape = tool.shape
@@ -11,6 +11,7 @@ public extension OperationKind {
         if case .edgeProfile = self, let why = Self.edgeProfileRefusal(tool, bit: bit) { return why }
         guard shape.requiredFormatVersion > 1 else { return nil }
         if let problem = tool.geometryProblem { return problem + " Fix it in the Tool Library." }
+        if case .chamfer = self, shape.cutsEdgesOnly { return Self.chamferRefusal(tool, bit: bit) }
         let a = shape == .taperedBallNose ? "a tapered ball nose" : (shape == .form ? "a form bit" : "a dovetail bit")
         if shape.cutsEdgesOnly {
             switch self {
@@ -36,6 +37,20 @@ public extension OperationKind {
         case .rounding:
             return "Rounding needs an end mill, not \(bit), \(a)."
         }
+    }
+
+    /// Why a chamfer can't cut with `tool`, a form or dovetail bit: it takes form bits whose profile only widens going up
+    /// (a round-nose chamfer), placed by width as an edge profile places them.
+    private static func chamferRefusal(_ tool: Tool, bit: String) -> String? {
+        if tool.shape == .dovetail {
+            return "Chamfers can't use \(bit), a dovetail bit: it's wider at its tip than above it, so it undercuts the edge "
+                + "rather than shaping it. Cut dovetails with a Profile toolpath, in one pass at full depth."
+        }
+        if tool.hasUndercut {
+            return "Chamfers can't use \(bit): its profile is wider low down than higher up, so it can't lift out of the cut "
+                + "without cutting into the edge above. Cut it with a Profile toolpath, which takes it in one pass at full depth."
+        }
+        return nil
     }
 
     /// Why an edge profile can't cut with `tool`: it takes roundover, cove, ogee and custom form bits whose profile only
