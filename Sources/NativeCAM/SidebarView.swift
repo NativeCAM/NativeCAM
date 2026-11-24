@@ -161,6 +161,7 @@ struct SidebarView: View {
         case .chamfer: "skew"
         case .fluting: "line.diagonal"
         case .prism: "triangle"
+        case .edgeProfile: "rectangle.roundedtop"
         }
     }
 
@@ -245,6 +246,8 @@ struct AddOperationMenu: View {
         let selected = workspace.selectedShapeIDs
         Group {
             Button("Profile (cut out / inside)") { add(.profile) }
+            Button("Edge Profile") { add(.edgeProfile) }
+                .help("Shape the top edge of parts with a roundover, cove, ogee or custom form bit, round their outside, their holes or both, before they're cut out")
             Button("Pocket") { add(.pocket) }
             Button("Drill") { add(.drill) }
             Button("V-carve") { add(.vcarve) }
@@ -279,13 +282,13 @@ struct AddOperationMenu: View {
         }
     }
 
-    enum Kind { case profile, pocket, drill, vcarve, chamfer, fluting, prism, rough3D, finish3D, rounding, rotaryFinish, rotaryRough }
+    enum Kind { case profile, edgeProfile, pocket, drill, vcarve, chamfer, fluting, prism, rough3D, finish3D, rounding, rotaryFinish, rotaryRough }
 
     private func add(_ kind: Kind) {
         let shapes = kind == .rounding ? [] : workspace.selectedShapeIDs
         guard !shapes.isEmpty || kind == .rounding else { return }
         let op = ShapeFactory.operation(kind, shapes: shapes, project: project, library: library.tools)
-        project.operations.append(op)
+        project.addOperation(op)
         workspace.selection = [.operation(op.id)]
     }
 }
@@ -346,6 +349,21 @@ enum ShapeFactory {
             return CAMOperation(name: "Profile", kind: .profile(ProfileParams(
                 side: .outside, direction: .climb, depth: flat ? .through(t) : DepthSettings(cutDepth: t + 0.02.inch),
                 tabs: TabSettings(enabled: true), entry: EntrySettings(kind: .ramp))), shapeIDs: shapes, tool: endMill)
+        case .edgeProfile:
+            // The library's first form bit an edge profile takes, or else a 1/4" roundover kept in the project, numbered
+            // clear of the library's bits and the project's.
+            let params = EdgeProfileParams()
+            let kind = OperationKind.edgeProfile(params)
+            var bit = library.first { $0.shape == .form && kind.refusal(for: $0) == nil }
+                ?? project.operations.map(\.tool).first { $0.shape == .form && kind.refusal(for: $0) == nil }
+            if bit == nil {
+                var t = ToolLibrary.template(for: .form)
+                t.name = "1/4\" Roundover"
+                let taken = Set(library.map(\.number) + project.operations.map(\.tool.number))
+                t.number = (1...).first { !taken.contains($0) }!
+                bit = t
+            }
+            return CAMOperation(name: "Edge Profile", kind: kind, shapeIDs: shapes, tool: bit!)
         case .pocket:
             return CAMOperation(name: "Pocket", kind: .pocket(PocketParams(depth: DepthSettings(cutDepth: min(0.25.inch, t / 2)))),
                                 shapeIDs: shapes, tool: endMill)

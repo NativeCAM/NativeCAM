@@ -1249,6 +1249,93 @@ public struct PrismParams: Hashable, Codable, Sendable {
     }
 }
 
+// MARK: Edge profile
+
+/// An edge profile: a form bit (roundover, cove, ogee or custom) shapes the top edge of closed shapes, the parts, round
+/// their outside, their holes or both, as a bearing-guided bit does on a router table (see `EdgeProfileGenerator`). The
+/// bit's tip runs `depth` below the material top with its pilot (its radius at the tip) on the edge, stood off it by
+/// `offset`, so a roundover rounds the edge rather than cutting a groove beside it. By default it steps in from the
+/// waste in horizontal passes at full depth, each taking a band of the cross-section, then takes a light finishing pass;
+/// or it steps down at its final position, as a Profile toolpath does. Format 18.
+public struct EdgeProfileParams: Hashable, Codable, Sendable {
+    /// Which edges of the parts are profiled. Shapes inside shapes are holes, as a profile's are.
+    public enum Edges: String, Codable, Sendable, CaseIterable, Identifiable {
+        case outside, holes, both
+        public var id: String { rawValue }
+        public var label: String { rawValue.capitalized }
+        public var includesOutside: Bool { self != .holes }
+        public var includesHoles: Bool { self != .outside }
+    }
+
+    /// How the passes divide the profile.
+    public enum Passes: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// Stepping in from the waste at full depth, a band of the cross-section at a time (as a router table's fence is
+        /// moved back between passes).
+        case horizontal
+        /// Stepping down at the final position, as a Profile toolpath does (for profiles that only widen going up).
+        case vertical
+        public var id: String { rawValue }
+        public var label: String { rawValue.capitalized }
+    }
+
+    public var edges: Edges
+    /// How far below the material top the bit's tip runs, mm; nil = the bit's full profile height (`depth(for:)`).
+    /// Deeper than the profile leaves a step above it (a reveal), as raising the bit on a router table does.
+    public var depth: Double?
+    /// How far the bit stands off the edge, mm: 0 puts its pilot on the edge; more cuts only the inner part of the
+    /// profile.
+    public var offset: Double
+    public var passes: Passes
+    /// Horizontal passes before the finishing pass, each taking an equal share of the cross-section (unless `bandWidth`
+    /// is set).
+    public var passCount: Int
+    /// Horizontal passes: the widest band one pass may step in, mm; the passes then step in evenly, as few as keep each
+    /// band within it. nil = `passCount` passes of equal cross-section.
+    public var bandWidth: Double?
+    /// Vertical passes: the deepest cut per pass, mm; nil uses the tool's stepdown.
+    public var passDepth: Double?
+    /// The finishing pass's band, mm: the passes before it stop this far off the final position, and a last lap takes
+    /// the rest. 0 = no finishing pass.
+    public var finish: Double
+    public var direction: CutDirection
+    /// How each edge's first pass enters (later passes link to it at depth where they can).
+    public var entry: EntrySettings
+    /// Lead-in and lead-out moves in the waste; nil = none.
+    public var leads: LeadSettings?
+
+    public static let defaultPassCount = 3
+    public static let defaultFinish = 0.02.inch
+    public static let defaultEntry = EntrySettings(kind: .ramp, rampLength: 2.inch)
+
+    public init(edges: Edges = .outside, depth: Double? = nil, offset: Double = 0, passes: Passes = .horizontal,
+                passCount: Int = EdgeProfileParams.defaultPassCount, bandWidth: Double? = nil, passDepth: Double? = nil,
+                finish: Double = EdgeProfileParams.defaultFinish, direction: CutDirection = .climb,
+                entry: EntrySettings = EdgeProfileParams.defaultEntry, leads: LeadSettings? = LeadSettings()) {
+        self.edges = edges
+        self.depth = depth
+        self.offset = offset
+        self.passes = passes
+        self.passCount = passCount
+        self.bandWidth = bandWidth
+        self.passDepth = passDepth
+        self.finish = finish
+        self.direction = direction
+        self.entry = entry
+        self.leads = leads
+    }
+
+    /// The depth `tool`'s tip runs at below the material top, mm: the depth set, or the height of its profile.
+    public func depth(for tool: Tool) -> Double {
+        max(0.01, depth ?? tool.form?.profileHeight ?? tool.fluteLength)
+    }
+
+    /// How much deeper than `tool`'s profile the cut goes, mm: the step (reveal) left above the profile.
+    public func reveal(for tool: Tool) -> Double {
+        guard let h = tool.form?.profileHeight else { return 0 }
+        return max(0, depth(for: tool) - h)
+    }
+}
+
 public enum OperationKind: Hashable, Codable, Sendable {
     case profile(ProfileParams)
     case pocket(PocketParams)
@@ -1268,6 +1355,8 @@ public enum OperationKind: Hashable, Codable, Sendable {
     case fluting(FlutingParams)
     /// A raised bevel rising to a ridge along the middle of a shape.
     case prism(PrismParams)
+    /// A form bit's profile cut into the top edge of parts, round their outside or their holes. Format 18.
+    case edgeProfile(EdgeProfileParams)
 
     public var label: String {
         switch self {
@@ -1283,16 +1372,23 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case .chamfer: "Chamfer"
         case .fluting: "Fluting"
         case .prism: "Prism"
+        case .edgeProfile: "Edge Profile"
         }
     }
 
-    /// True for the operations that cut along their vectors rather than from the tool's edge (chamfers, flutes and
-    /// prisms): the part they shape is the one drawn, however wide the bit.
+    /// True for the operations that cut along their vectors rather than from the tool's edge (chamfers, flutes, prisms
+    /// and edge profiles): the part they shape is the one drawn, however wide the bit.
     public var followsVectors: Bool {
         switch self {
-        case .chamfer, .fluting, .prism: true
+        case .chamfer, .fluting, .prism, .edgeProfile: true
         default: false
         }
+    }
+
+    /// True for an edge profile.
+    public var isEdgeProfile: Bool {
+        if case .edgeProfile = self { return true }
+        return false
     }
 
     /// True for an operation that works on the blank itself rather than on shapes.
@@ -1328,6 +1424,8 @@ public enum OperationKind: Hashable, Codable, Sendable {
         case let .fluting(p): p.startDepth + p.depth
         // Set by the bit's angle (a chamfer's width) or the shape (a full prism).
         case let .prism(p): p.depth.map { p.startDepth + $0 }
+        // nil: the bit's whole profile, as the chip-load chart reads a form bit with no depth.
+        case let .edgeProfile(p): p.depth
         case .rough3D, .finish3D, .rounding, .rotaryFinish, .rotaryRough, .chamfer: nil
         }
     }
@@ -1393,7 +1491,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// is format 10 (see `Finish3DParams.requiredFormatVersion`). 3D rotary roughing is format 12. Adaptive pocket
     /// clearing is format 13. A whole-board inlay plug is format 14. A tapered ball nose, form or dovetail bit, as the
     /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`). 3D rest finishing
-    /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`).
+    /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`). Edge
+    /// profiles are format 18.
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {
@@ -1408,6 +1507,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case .rotaryFinish: own = 7
         case .rotaryRough: own = 12
         case .chamfer, .fluting, .prism: own = 8
+        case .edgeProfile: own = 18
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion
         default: own = 1

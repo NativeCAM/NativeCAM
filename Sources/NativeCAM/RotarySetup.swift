@@ -372,7 +372,7 @@ extension OperationKind {
     /// The toolpaths that cut at index angles on a rotary job so far.
     var takesIndexAngles: Bool {
         switch self {
-        case .profile, .pocket, .drill, .vcarve, .chamfer, .fluting, .prism: true
+        case .profile, .pocket, .drill, .vcarve, .chamfer, .fluting, .prism, .edgeProfile: true
         case .rough3D, .finish3D, .rounding, .rotaryFinish, .rotaryRough: false
         }
     }

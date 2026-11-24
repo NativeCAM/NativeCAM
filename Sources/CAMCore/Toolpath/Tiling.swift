@@ -217,6 +217,7 @@ enum TileSplitter {
         switch s.operation.kind {
         case let .profile(p) where p.entry.kind == .ramp && p.entry.rampLength > 0: return p.entry.rampLength
         case let .pocket(p) where p.entry.kind == .ramp && p.entry.rampLength > 0: return p.entry.rampLength
+        case let .edgeProfile(p) where p.entry.kind == .ramp && p.entry.rampLength > 0: return p.entry.rampLength
         default: return s.toolpath.tool.shape == .surfacing ? 2 * s.toolpath.tool.diameter : nil
         }
     }

@@ -387,7 +387,7 @@ public enum SetupSheet {
 
         // Chamfers, flutes and prisms: the size of each bevel or flute, so it can be checked on the part.
         let cut = Set(job.toolpaths.filter { !$0.isEmpty }.map(\.sourceOperationID))
-        let shaped = project.operations.filter { $0.kind.followsVectors && cut.contains($0.id) }
+        let shaped = project.operations.filter { $0.kind.followsVectors && !$0.kind.isEdgeProfile && cut.contains($0.id) }
         if !shaped.isEmpty {
             h += "<h2>Chamfers, flutes and prisms</h2>\n<ul>\n"
             for op in shaped {
@@ -418,6 +418,30 @@ public enum SetupSheet {
                         + "the outline too; clear round it with a pocket or profile.</li>\n"
                 default: break
                 }
+            }
+            h += "</ul>\n"
+        }
+
+        // Edge profiles: the bit, the edges and how deep, so the profile can be checked on the part and the bit set up.
+        let edges = project.operations.compactMap { op -> (CAMOperation, EdgeProfileParams)? in
+            guard case let .edgeProfile(p) = op.kind, cut.contains(op.id) else { return nil }
+            return (op, p)
+        }
+        if !edges.isEmpty {
+            h += "<h2>Edge profiles</h2>\n<ul>\n"
+            for (op, p) in edges {
+                let plan = p.plan(tool: op.tool, thickness: project.stock.thickness)
+                let which = p.edges == .both ? "outside edges and holes" : (p.edges == .holes ? "holes" : "outside edges")
+                let bit = op.tool.name.isEmpty ? "T\(op.tool.number)" : "T\(op.tool.number) \(esc(op.tool.name))"
+                let passes = plan.passes.filter { !$0.isFinish }.count
+                let how = p.passes == .horizontal
+                    ? "\(passes) pass\(passes == 1 ? "" : "es") stepping in from the waste"
+                    : "stepping down in \(plan.passes.first?.depths.count ?? 1) pass\(plan.passes.first?.depths.count == 1 ? "" : "es")"
+                let finish = plan.passes.contains(where: \.isFinish) ? ", then a \(len(p.finish)) finishing pass" : ""
+                let reveal = plan.reveal > 1e-6 ? "; \(len(plan.reveal)) deeper than the profile, leaving that step above it" : ""
+                let offset = p.offset > 1e-9 ? ", stood \(len(p.offset)) off the edge" : ""
+                h += "<li><b>\(esc(op.name))</b>: the \(which) profiled \(len(plan.depth)) deep with \(bit)\(offset), \(how)\(finish)"
+                    + "\(reveal). Its depth is to the bottom of the cutting edge: take any bearing off.</li>\n"
             }
             h += "</ul>\n"
         }

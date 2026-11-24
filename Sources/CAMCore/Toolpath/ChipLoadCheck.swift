@@ -15,7 +15,12 @@ extension CAMEngine {
         let material = project.stock.material
         // A bit whose width changes with depth is read at the widest it cuts with (the toolpath's deepest cut).
         let depth = tp.cuttingExtents.map { max(0, -$0.min.z) }
-        let reading = ChipLoad.reading(tool, material: material, depth: depth)
+        // An edge profile's passes each take a band of the profile: its heaviest lap's cross-section sets the feed.
+        var passArea: Double?
+        if case let .edgeProfile(p)? = operation?.kind {
+            passArea = p.plan(tool: tool, thickness: project.stock.thickness).largestLap
+        }
+        let reading = ChipLoad.reading(tool, material: material, depth: depth, crossSection: passArea)
         let r = reading.range
         let z = Double(tool.fluteCount)
         let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
@@ -30,7 +35,7 @@ extension CAMEngine {
             loops = p.adaptiveSettings.loopFeedLimit(tool: tool, machine: project.machine)
         }
         let rec = ChipLoad.recommendation(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops,
-                                          depth: depth)
+                                          depth: depth, crossSection: passArea)
         let held = loops.map { rec.feed >= $0 - 1e-6 && $0 < project.machine.maxFeedRate } ?? false
         let notes = reading.notes(units)
         let suggestion = "Try \(units.format(rec.feed, decimals: units == .inch ? 0 : 0)) \(units.feedSymbol) at \(Int(rec.rpm.rounded())) RPM"

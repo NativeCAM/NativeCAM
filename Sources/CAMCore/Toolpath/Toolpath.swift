@@ -139,6 +139,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// goes; what a pocket resting from earlier toolpaths has left to clear). Empty when nothing is left; nil for every
     /// other toolpath. Posts and checks don't read it.
     public var restAreas: [Polyline]?
+    /// What Checks notes about the toolpath as information rather than a warning (an edge profile's inside corners
+    /// sharper than its bit). nil for none.
+    public var notes: [String]?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {
