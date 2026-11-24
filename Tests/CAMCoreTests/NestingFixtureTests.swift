@@ -167,6 +167,22 @@ struct NestingFixtureTests {
         #expect(OperationScheduler.optimize(renested).outOfOrder.isEmpty)
     }
 
+    /// #105: the frames and coasters demo opens with parts off its sheet, so with an error and warnings; Checks says why
+    /// and points to Nest Parts, as a note that adds no warning of its own. Once nested, it goes.
+    @Test func theFramesDemoSaysToNestItsParts() throws {
+        let demo = CAMEngine.generate(Project.demoNestingSheets())
+        #expect(demo.hasErrors)
+        let note = try #require(demo.issues.first { $0.message.contains("Nest Parts") })
+        #expect(note.severity == .info)
+        #expect(note.message.contains("other shapes lie off the material"), "\(note.message)")
+        let nested = try GoldenPostTests.savedProject("nesting-part-in-part-v16", make: Self.nestedFramesAndCoasters)
+        #expect(!CAMEngine.generate(nested).issues.contains { $0.message.contains("Nest Parts") })
+        // A shape off the material that nothing cuts (a reference drawing) needs no note.
+        var drawing = Project.demoNestingSheets()
+        drawing.operations = []
+        #expect(CAMEngine.offMaterialNote(drawing) == nil)
+    }
+
     // MARK: Edge cases
 
     /// `nest-too-big.svg`: the 700 mm rail fits no 600 × 400 sheet either way round. It's left out (where it was, or

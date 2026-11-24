@@ -375,9 +375,12 @@ struct NestPartsSheet: View {
             : "\(n == 1 ? "1 part has a hole" : "\(n) parts have holes") other parts can go in: each is cut out before the hole "
                 + "it sits in, and keeps the spacing (or the hole's own cut) from its edge."
         if let first = closed.first {
-            let who = closed.count == 1 ? "“\(first.name)”'s hole is" : "\(closed.count) parts' holes are"
-            note += " \(who) cut free before the other parts are cut out, so \(closed.count == 1 ? "it stays" : "they stay") empty: "
-                + "cut those parts earlier, or in the same profile, to use \(closed.count == 1 ? "it" : "them")."
+            // One hole: "The hole in “Top” is…"; otherwise they.
+            let one = closed.count == 1 && first.holes.count == 1
+            let who = closed.count > 1 ? "\(closed.count) parts' holes are"
+                : one ? "The hole in “\(first.name)” is" : "The holes in “\(first.name)” are"
+            note += " \(who) cut free before the other parts are cut out, so \(one ? "it stays" : "they stay") empty: "
+                + "cut those parts earlier, or in the same profile, to use \(one ? "it" : "them")."
         }
         return note
     }
@@ -439,9 +442,9 @@ struct NestPartsSheet: View {
                 let holes = r.inHoles.isEmpty ? "" : " (\(r.inHoles.count) in other parts' holes)"
                 let last = r.sheetCount > 1 ? "the last sheet" : "the sheet"
                 Text("\(placed) of \(job.parts.count) part\(job.parts.count == 1 ? "" : "s") placed\(sheets)\(holes). "
-                     + String(format: "They fill %.0f%% of the %@ %@ of %@ they use (%.0f%% of the whole of %@).",
+                     + String(format: "They fill %.0f%% of the %@ %@ of %@ they use (%.0f%% of %@).",
                               r.utilization * 100, rough(r.usedLength), units.symbol, last,
-                              r.sheetUtilization * 100, r.sheetCount > 1 ? "every sheet" : "the sheet"))
+                              r.sheetUtilization * 100, r.sheetCount > 1 ? "all the sheets' area" : "the sheet"))
                 if placed > 0, r.sheetLength - r.usedLength > session.settings.spacing, let use = r.sheets.last {
                     let left = r.sheetLength - r.usedLength - session.settings.spacing
                     let across = r.alongX ? use.sheet.height : use.sheet.width
