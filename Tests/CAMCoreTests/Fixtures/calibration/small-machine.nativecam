@@ -1,0 +1,47 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 1,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "custom",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 304.79999999999995,
+      "y" : 304.79999999999995,
+      "z" : 76.19999999999999
+    }
+  },
+  "name" : "Desktop machine, 12 × 12 in",
+  "notes" : "",
+  "operations" : [
+
+  ],
+  "shapes" : [
+
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 457.2,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 609.5999999999999,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

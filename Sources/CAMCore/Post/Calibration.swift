@@ -17,9 +17,10 @@ import Foundation
 ///   `ChipLoad` and never changes it.
 ///
 /// Each program is posted with NativeCAM's own post for the machine's controller (an imported Vectric post can't write
-/// the stops), with one change for machines with manual tool changes: there's one bit, so the file asks for it to be
-/// loaded before starting rather than calling the tool-change macro. It's checked with `GCodeCheck` and with
-/// `Calibration.verify` (the air height and the window).
+/// the stops). The ladder cuts, so it changes tools as any job does (on the Avid, the M6 macro and the touch plate). The
+/// air programs run one bit in the air: on a machine with manual tool changes they skip the tool-change macro, ask for
+/// any bit to be loaded and Z zeroed on the work before starting, and the first stop confirms it. Every program is
+/// checked with `GCodeCheck` and with `Calibration.verify` (the air height and the window).
 public enum Calibration {
     /// A program that can't be made, or times that can't be fitted, and why.
     public struct Refused: Error, LocalizedError, Hashable, Sendable {
@@ -101,13 +102,16 @@ public enum Calibration {
         public var passedChecks: Bool { !issues.contains { $0.severity == .error } }
     }
 
-    /// The machine a calibration program is posted for: NativeCAM's own post for its controller, and with a manual
-    /// tool change, no tool-change macro (one bit, loaded before starting).
-    static func postingMachine(_ machine: MachineProfile, dustCollection: Bool) -> MachineProfile {
+    /// The machine a calibration program is posted for: NativeCAM's own post for its controller. An air program (no
+    /// cut) on a machine with manual tool changes skips the tool-change macro: any bit will do, loaded and zeroed before
+    /// starting, and it leaves the dust collector off. The ladder cuts, so it keeps the machine's own tool change.
+    static func postingMachine(_ machine: MachineProfile, air: Bool) -> MachineProfile {
         var m = machine
         m.customPost = nil
-        if m.toolChange == .manualM6 { m.toolChange = .manualPause }
-        m.dustCollection = dustCollection && machine.dustCollection
+        if air {
+            if m.toolChange == .manualM6 { m.toolChange = .manualPause }
+            m.dustCollection = false
+        }
         return m
     }
 
@@ -168,7 +172,8 @@ public enum Calibration {
     public static func feed(_ mmPerMin: Double, _ u: LengthUnit) -> String { "\(number(u.fromMM(mmPerMin))) \(u.feedSymbol)" }
 
     public static func number(_ v: Double) -> String {
-        v.formatted(.number.precision(.fractionLength(0...3)).grouping(.never))
+        // The same in every locale: it goes into G-code comments and times files.
+        v.formatted(.number.precision(.fractionLength(0...3)).grouping(.never).locale(Locale(identifier: "en_US_POSIX")))
     }
 
     /// Rounds a feed to the precision the posts write it at (0.1 in/min, 1 mm/min), in mm/min.
@@ -185,10 +190,14 @@ public enum Calibration {
         public var window: Vec2
         /// Height above Z zero that every move stays at or above, mm; never below `minimumAirHeight`.
         public var airHeight: Double
+        /// How long each section runs, seconds (`sectionTarget`). Shorter sections can't be timed by hand to a few
+        /// percent; tests use them to keep the program small.
+        public var sectionSeconds: Double
 
-        public init(window: Vec2 = Vec2(24.inch, 24.inch), airHeight: Double = 1.inch) {
+        public init(window: Vec2 = Vec2(24.inch, 24.inch), airHeight: Double = 1.inch, sectionSeconds: Double = Calibration.sectionTarget) {
             self.window = window
             self.airHeight = airHeight
+            self.sectionSeconds = sectionSeconds
         }
 
         /// 24 × 24 in at 1 in for a machine in inches; 600 × 600 mm at 25 mm in millimetres.
@@ -391,7 +400,7 @@ public enum Calibration {
         switch kind {
         case .zigzag:
             let (dx, dy) = zigzagStep(u), feed = plan.feeds[2]
-            var steps = Int((w.x / dx).rounded(.down))
+            var steps = Int((w.x / dx + 1e-6).rounded(.down))
             if steps % 2 == 1 { steps -= 1 }
             let there = (1...steps).map { j in p(Double(j) * dx, j % 2 == 1 ? dy : 0) }
             let back = (0..<steps).reversed().map { j in p(Double(j) * dx, j % 2 == 1 ? dy : 0) }
@@ -427,7 +436,7 @@ public enum Calibration {
             m.append(.feed(p(0, 0), feed))
         case .fChangeSingle, .fChangeAlternating:
             let piece = fChangePiece(u), ff = fChangeFeeds(plan)
-            var pieces = Int((w.x / piece + 1e-9).rounded(.down))
+            var pieces = Int((w.x / piece + 1e-6).rounded(.down))
             if pieces % 2 == 1 { pieces -= 1 }
             func feed(_ j: Int) -> Double { kind == .fChangeSingle ? ff.single : (j % 2 == 0 ? ff.high : ff.low) }
             for _ in 0..<n {
@@ -441,11 +450,11 @@ public enum Calibration {
     }
 
     /// The suite's plan for a machine: its feeds, the Z stroke its travel allows, and repetitions that make each section
-    /// run about `sectionTarget` seconds on the machine's class defaults.
+    /// run about `options.sectionSeconds` (normally `sectionTarget`) on the machine's class defaults.
     public static func timingPlan(machine: MachineProfile, options: TimingOptions) throws -> TimingPlan {
         if let refused = noPost(machine) { throw refused }
         let u = machine.outputUnits
-        let m = postingMachine(machine, dustCollection: false)
+        let m = postingMachine(machine, air: true)
         guard let dialect = Dialect.for(m) else { throw Refused("NativeCAM has no post for \(machine.controllerLabel).") }
         if options.airHeight < minimumAirHeight - 1e-6 {
             throw Refused("The air height can't be below \(length(minimumAirHeight, u == .inch ? .mm : u))"
@@ -461,7 +470,7 @@ public enum Calibration {
                 + "Make it smaller in Calibration Programs (or with --window).")
         }
         let step = u == .inch ? 0.25.inch : 5
-        let stroke = max(step, (min(u == .inch ? 2.inch : 50, travel.z / 4) / step).rounded(.down) * step)
+        let stroke = max(step, (min(u == .inch ? 2.inch : 50, travel.z / 4) / step + 1e-6).rounded(.down) * step)
         if options.airHeight + stroke > travel.z + 1e-6 {
             throw Refused("A \(length(options.airHeight, u)) air height leaves no room for the Z rapids in the machine's "
                 + "\(length(travel.z, u)) of Z travel.")
@@ -481,19 +490,19 @@ public enum Calibration {
             let one = sectionSeconds(toolpath(kind, plan: plan, count: 1, index: 0), project: project)
             let two = sectionSeconds(toolpath(kind, plan: plan, count: 2, index: 0), project: project)
             let each = max(1e-3, two - one), fixed = max(0, one - each)
-            plan.counts[kind.id] = max(1, Int(((sectionTarget - fixed) / each).rounded(.up)))
+            plan.counts[kind.id] = max(1, Int(((max(1, options.sectionSeconds) - fixed) / each).rounded(.up)))
         }
         return plan
     }
 
-    /// The project a timing program is posted and estimated for: the window as a sheet of no thickness with Z zero on the
-    /// spoilboard, safe Z and the park at the air height over the window's corner, so each section starts and ends at
-    /// the park position.
+    /// The project a timing program is posted and estimated for: the window as a sheet of no thickness with Z zero on its
+    /// top (the work), safe Z and the park at the air height over the window's corner, so each section starts and ends
+    /// at the park position.
     static func timingProject(machine: MachineProfile, plan: TimingPlan) -> Project {
-        var m = postingMachine(machine, dustCollection: false)
+        var m = postingMachine(machine, air: true)
         m.outputUnits = plan.units
         let stock = Stock(width: plan.window.x, height: plan.window.y, thickness: 0, materialName: "None (air cut)",
-                          xyOrigin: .lowerLeft, zZero: .machineBed, clearanceHeight: plan.airHeight,
+                          xyOrigin: .lowerLeft, zZero: .materialTop, clearanceHeight: plan.airHeight,
                           plungeHeight: plan.airHeight, homePosition: Vec3(0, 0, plan.airHeight))
         var p = Project(name: "NativeCAM timing suite", displayUnits: plan.units, stock: stock, machine: m)
         p.notes = "Air cut: time each section from its first move until the machine stops."
@@ -509,7 +518,7 @@ public enum Calibration {
 
     static func toolpath(_ kind: TimingKind, plan: TimingPlan, count: Int, index: Int) -> Toolpath {
         let id = UUID(uuidString: String(format: "CA11B000-0000-0000-0000-%012d", index + 1))!
-        return Toolpath(id: id, name: "\(index + 1). \(name(kind, plan))", tool: airTool, spindleRPM: 0,
+        return Toolpath(id: id, name: name(kind, plan), tool: airTool, spindleRPM: 0,
                         start: Vec3(0, 0, plan.airHeight), motions: motions(kind, plan, count: count))
     }
 
@@ -576,7 +585,9 @@ public enum Calibration {
         let total = sections.map(\.estimate).reduce(0, +)
         let setup = [
             "NATIVECAM TIMING SUITE: an air cut in \(sections.count) timed sections, about \(Int((total / 60).rounded())) min of moves.",
-            "Zero X and Y at the front-left corner of a clear \(size(plan.window, u)) window, and Z on the spoilboard.",
+            "Zero X and Y at the front-left corner of a clear \(size(plan.window, u)) window.",
+            "There's no tool change: load any bit and zero Z on the work (the spoilboard, or the top of anything in the window) "
+                + "before starting. The first stop is there to confirm it.",
             "Every move stays at least \(length(plan.airHeight, u)) above Z zero, rising to \(length(plan.topZ, u)): keep the bit clear "
                 + "of the work, clamps and anything else in the window, and make sure Z can rise that far.",
             "At each stop the message names the next section. Press Cycle Start and \(timingInstruction.prefix(1).lowercased() + timingInstruction.dropFirst()) "
@@ -641,7 +652,7 @@ public enum Calibration {
     /// The rotary check for a machine that drives its A axis, ready to run; refused elsewhere (`rotaryRefusal`).
     public static func rotary(machine: MachineProfile, date: Date = Date(), timeZone: TimeZone = .current) throws -> Program {
         if let refused = rotaryRefusal(machine) { throw refused }
-        var m = postingMachine(machine, dustCollection: false)
+        var m = postingMachine(machine, air: true)
         let axis = m.rotary ?? RotaryAxis()
         m.rotary = axis
         let dialect = Dialect.for(m)!
@@ -654,6 +665,7 @@ public enum Calibration {
         let setup = [
             "NATIVECAM ROTARY CHECK: times the rotary \(letter) axis. Nothing but \(letter) moves: X, Y and Z stay where they are.",
             "Take any stock out of the chuck. Raise the bit well clear of the chuck and tailstock before starting.",
+            "There's no tool change: leave any bit in, with Z zeroed on the work as usual. The first stop is there to confirm it.",
             "Zero \(letter) where it is now (any angle will do). Keep the overrides at 100%.",
             "At each stop the message names the next turn. Press Cycle Start and \(timingInstruction.prefix(1).lowercased() + timingInstruction.dropFirst()) "
                 + "The first turn, in inverse time (G93 F\(Int(rotaryInverseTime))), should take \(Int(rotaryExpectedSeconds)) s.",
@@ -758,7 +770,7 @@ public enum Calibration {
         if let refused = noPost(machine) { return refused }
         let tool = options.tool
         guard ChipLoad.applies(to: tool) else {
-            return Refused("No chip-load chart covers a \(tool.shape.label.lowercased()), so there's nothing for the ladder to step through.")
+            return Refused("No chip-load chart covers a \(tool.shape.label), so there's nothing for the ladder to step through.")
         }
         if tool.shape == .form {
             return Refused("A form bit cuts an edge, not a slot, so the ladder's slots can't test it. Try it on an edge with a profile toolpath.")
@@ -774,7 +786,7 @@ public enum Calibration {
     public static func ladder(machine: MachineProfile, options: LadderOptions, date: Date = Date(),
                               timeZone: TimeZone = .current) throws -> Program {
         if let refused = ladderRefusal(options, machine: machine) { throw refused }
-        let m = postingMachine(machine, dustCollection: true)
+        let m = postingMachine(machine, air: false)
         let u = m.outputUnits
         let tool = options.tool
         let depth = options.depth ?? (tool.shape == .dovetail ? tool.fluteLength : tool.diameter / 2)
@@ -851,7 +863,7 @@ public enum Calibration {
             "NATIVECAM CHIP-LOAD LADDER: \(rungs.count) slots with \(tool.name) in \(options.material.label.lowercased()), "
                 + "from below the \(reading.chart.label)'s chip loads to above them. A REAL CUT: use scrap.",
             "Scrap at least \(size(window, u)) and \(length(thickness, u)) thick, clamped clear of the slots, with a straight front edge.",
-            "Zero X and Y at the scrap's front-left corner and Z on its top. Each slot plunges in front of the scrap and cuts "
+            "Zero X and Y at the scrap's front-left corner, and Z on its top as for any job. Each slot plunges in front of the scrap and cuts "
                 + "\(length(depth, u)) deep into it from the front edge; rung 1 is on the left.",
             "Listen to each rung and keep its chips: the recording sheet lists each rung's feed, speed and chip load.",
         ] + (dropped > 0 ? ["\(dropped) rung\(dropped == 1 ? " is" : "s are") left out: faster than the machine's highest feed of \(feed(m.maxFeedRate, u))."] : [])

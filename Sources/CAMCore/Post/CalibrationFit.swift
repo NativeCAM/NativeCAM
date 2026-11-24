@@ -54,12 +54,13 @@ public extension Calibration {
             "controller,\(program.dialect.id)",
         ]
         if let plan = program.plan {
+            func n(_ v: Double) -> String { v.formatted(.number.precision(.fractionLength(0...6)).grouping(.never).locale(Locale(identifier: "en_US_POSIX"))) }
             lines += [
                 "units,\(plan.units.rawValue)",
-                "window_mm,\(plan.window.x),\(plan.window.y)",
-                "air_height_mm,\(plan.airHeight)",
-                "z_stroke_mm,\(plan.zStroke)",
-                "feeds_mm_min,\(plan.feeds.map { "\($0)" }.joined(separator: ","))",
+                "window_mm,\(n(plan.window.x)),\(n(plan.window.y))",
+                "air_height_mm,\(n(plan.airHeight))",
+                "z_stroke_mm,\(n(plan.zStroke))",
+                "feeds_mm_min,\(plan.feeds.map(n).joined(separator: ","))",
             ]
         }
         if let letter = program.axisLetter { lines.append("axis,\(letter)") }
@@ -184,7 +185,7 @@ public extension Calibration {
                 case .accelerationXY, .accelerationZ:
                     return u == .inch ? String(format: "%.1f in/s²", u.fromMM(v)) : String(format: "%.0f mm/s²", v)
                 case .junctionDeviation:
-                    return u == .inch ? String(format: "%.4f in", u.fromMM(v)) : String(format: "%.3f mm", v)
+                    return u == .inch ? String(format: "%.5f in", u.fromMM(v)) : String(format: "%.3f mm", v)
                 case .turnSpeed:
                     return String(format: "%.0f°/min (%.1f°/s)", v, v / 60)
                 default:
