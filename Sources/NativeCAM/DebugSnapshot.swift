@@ -10,7 +10,8 @@ import UniformTypeIdentifiers
 /// from the user-defaults argument domain, so AppKit doesn't treat the paths as documents to open.
 ///
 /// With `-NativeCAMSnapshotTemplate <template.nativecamtemplate>` it first applies that template to the project (with
-/// its job setup when `-NativeCAMSnapshotTemplateSetup YES`), logs Toolpaths ▸ Apply Template's items (the templates
+/// its job setup when `-NativeCAMSnapshotTemplateSetup YES`, and `-NativeCAMSnapshotTemplateMissing create|skip` for the
+/// layers the design lacks; unset, the sheet waits for that choice and the toolpaths are added empty), logs Toolpaths ▸ Apply Template's items (the templates
 /// folder can be pointed elsewhere with `-NativeCAMTemplatesFolder <dir>`) and what each toolpath found, draws the
 /// Apply Template sheet and the save panel's options, then snapshots the project with the template applied.
 /// `-NativeCAMSnapshotImport <file.dxf|svg|pdf>` first imports vectors into the project as File ▸ Import does (one shape

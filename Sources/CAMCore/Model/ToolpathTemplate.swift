@@ -118,19 +118,70 @@ public struct SizeFilter: Hashable, Codable, Sendable {
     /// True when it measures circles' diameters (else bounding boxes, or nothing).
     public var measuresDiameter: Bool { !(diameter?.isOpen ?? true) }
 
+    /// True when the shape is this size. Imported vectors (`ShapeKind.paths`, one shape per layer) are measured
+    /// outline by outline: the shape counts when any outline does, and the toolpath cuts only those
+    /// (`Project.shapes(for:)`), so an imported layer of holes drills just the ones of the size.
     public func matches(_ shape: DesignShape) -> Bool {
-        let tol = Swift.max(0, tolerance)
-        if let diameter, !diameter.isOpen {
-            guard case let .circle(r) = shape.kind, diameter.contains(2 * r * abs(shape.scale), tolerance: tol) else { return false }
+        guard !shape.isKeepOut, shape.modelSpec == nil else { return false }
+        if case .paths = shape.kind { return shape.polylines(tolerance: 0.01).contains(where: matches) }
+        if measuresDiameter {
+            guard case let .circle(r) = shape.kind, diameter!.contains(2 * r * abs(shape.scale), tolerance: Swift.max(0, tolerance)) else {
+                return false
+            }
         }
+        guard boxRanges != nil else { return true }
+        let outlines = shape.polylines(tolerance: 0.01)
+        guard !outlines.isEmpty, outlines.allSatisfy(\.isClosed) else { return false }
+        return fitsBox(outlines.bounds)
+    }
+
+    /// True when one outline (in design coordinates) is this size: a circle of the diameter, a closed outline whose
+    /// bounding box fits.
+    public func matches(_ outline: Polyline) -> Bool {
+        guard outline.isClosed, outline.count >= 3 else { return false }
+        if measuresDiameter {
+            guard let d = Self.circleDiameter(outline), diameter!.contains(d, tolerance: Swift.max(0, tolerance)) else { return false }
+        }
+        return boxRanges == nil || fitsBox(outline.bounds)
+    }
+
+    /// The part of `shape` a toolpath with this rule cuts: imported vectors keep only the outlines of the size; other
+    /// shapes are cut whole. nil when nothing of it is the size.
+    public func cutPart(of shape: DesignShape) -> DesignShape? {
+        guard case let .paths(paths) = shape.kind else { return shape }
+        let t = shape.transform
+        let kept = paths.filter { matches($0.transformed(t)) }
+        guard !kept.isEmpty else { return nil }
+        guard kept.count != paths.count else { return shape }
+        var part = shape
+        part.kind = .paths(kept)
+        return part
+    }
+
+    /// The diameter of a closed outline that's a circle (every point as far from the middle of its bounding box, to
+    /// within 1% and 0.02 mm), else nil. Imported circles come in as flattened outlines.
+    public static func circleDiameter(_ outline: Polyline) -> Double? {
+        guard outline.isClosed, outline.count >= 8 else { return nil }
+        let b = outline.bounds
+        let c = Vec2((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)
+        let radii = outline.points.map { ($0 - c).length }
+        guard let lo = radii.min(), let hi = radii.max(), hi > 0 else { return nil }
+        let w = b.max.x - b.min.x, h = b.max.y - b.min.y
+        guard hi - lo <= Swift.max(0.02, 0.01 * hi), abs(w - h) <= Swift.max(0.02, 0.01 * hi) * 2 else { return nil }
+        return 2 * hi
+    }
+
+    private var boxRanges: (SizeRange?, SizeRange?)? {
         let w = width.flatMap { $0.isOpen ? nil : $0 }
         let h = height.flatMap { $0.isOpen ? nil : $0 }
-        if w != nil || h != nil {
-            guard ShapeFilter.closed.matches(shape) else { return false }
-            let b = shape.polylines(tolerance: 0.01).bounds
-            if let w, !w.contains(b.max.x - b.min.x, tolerance: tol) { return false }
-            if let h, !h.contains(b.max.y - b.min.y, tolerance: tol) { return false }
-        }
+        return w == nil && h == nil ? nil : (w, h)
+    }
+
+    private func fitsBox(_ b: Rect2) -> Bool {
+        guard let (w, h) = boxRanges else { return true }
+        let tol = Swift.max(0, tolerance)
+        if let w, !w.contains(b.max.x - b.min.x, tolerance: tol) { return false }
+        if let h, !h.contains(b.max.y - b.min.y, tolerance: tol) { return false }
         return true
     }
 
@@ -200,7 +251,11 @@ public enum VectorSelection: Hashable, Sendable {
         case let .kind(filter, _): base = filter.label
         case .selection: return "Selected vectors"
         }
-        return size.map { "\(base), \($0.label(units))" } ?? base
+        guard let size else { return base }
+        if case .kind(.circles, _) = self, size.measuresDiameter, size.width == nil, size.height == nil, let d = size.diameter {
+            return "Circles \(d.label(units)) across"
+        }
+        return "\(base) (\(size.label(units)))"
     }
 
     /// The warning Checks shows for a toolpath that found no shapes.
@@ -211,7 +266,8 @@ public enum VectorSelection: Hashable, Sendable {
         case let .layers(names, _):
             return "No vectors on \(names.count == 1 ? "layer" : "layers") \(Self.quoted(names))\(sized). Put vectors on it, \(fix)"
         case let .kind(filter, _):
-            return "The design has no \(filter.noun)\(sized). Add some, \(fix)"
+            let what = size == nil || label(.mm).hasPrefix("Circles ") == false ? "\(filter.noun)\(sized)" : label(.mm).lowercased()
+            return "The design has no \(what). Add some, \(fix)"
         case .selection:
             return "No shapes selected."
         }
@@ -222,7 +278,10 @@ public enum VectorSelection: Hashable, Sendable {
         let found: Bool
         switch self {
         case let .layers(names, _): found = names.contains { Self.sameLayer($0, shape.layer) }
-        case let .kind(filter, _): found = filter.matches(shape)
+        case let .kind(filter, size):
+            // Imported circles are outlines, not circles: a diameter rule finds them among the imported vectors.
+            let importedCircles: Bool = { if case .paths = shape.kind { filter == .circles && size?.measuresDiameter == true } else { false } }()
+            found = importedCircles || filter.matches(shape)
         case .selection: return false
         }
         return found && (size?.matches(shape) ?? true)

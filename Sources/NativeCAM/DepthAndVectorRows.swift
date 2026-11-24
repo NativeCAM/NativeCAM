@@ -184,7 +184,7 @@ struct SizeFilterRows: View {
         case .any:
             size = nil
         case .diameter:
-            let d = found.compactMap { s -> Double? in if case let .circle(r) = s.kind { 2 * r * abs(s.scale) } else { nil } }
+            let d = found.flatMap { $0.polylines(tolerance: 0.01) }.compactMap(SizeFilter.circleDiameter)
             size = .circles(d.min() ?? 0, d.max() ?? 25.4)
         case .box:
             let boxes = found.filter { ShapeFilter.closed.matches($0) }.map { $0.bounds }

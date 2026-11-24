@@ -125,8 +125,12 @@ public struct Project: Hashable, Sendable {
 
     public func shape(id: UUID) -> DesignShape? { shapes.first { $0.id == id } }
 
+    /// The shapes `op` cuts. With a size rule (`VectorSelection.size`), imported vectors keep only the outlines of the
+    /// size (`SizeFilter.cutPart(of:)`).
     public func shapes(for op: CAMOperation) -> [DesignShape] {
-        op.shapeIDs.compactMap { shape(id: $0) }
+        let found = op.shapeIDs.compactMap { shape(id: $0) }
+        guard let size = op.vectorSelection?.size else { return found }
+        return found.compactMap { size.cutPart(of: $0) }
     }
 
     /// The inlay pocket a V-carve inlay plug goes into: the one sharing a shape with it (the plug mirrors the same
