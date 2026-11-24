@@ -1,0 +1,177 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 19,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Chamfer options (format 19)",
+  "notes" : "Saved by format 19 to pin chamfer overcuts and round-nose chamfers.",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "C4A3F000-0000-4000-8090-000000000012",
+      "kind" : {
+        "chamfer" : {
+          "_0" : {
+            "direction" : "conventional",
+            "edge" : "top",
+            "overcut" : 0.7619999999999999,
+            "passDepth" : 1.27,
+            "sharpCorners" : true,
+            "side" : "both",
+            "startDepth" : 1.27,
+            "width" : 2.54
+          }
+        }
+      },
+      "name" : "Hexagon overcut",
+      "shapeIDs" : [
+        "C4A3F000-0000-4000-8090-000000000011"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2032,
+          "plungeRate" : 762,
+          "spindleRPM" : 18000,
+          "stepdown" : 3.175,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 12.7,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 6.35,
+        "id" : "C4A3F000-0000-4000-8090-000000000900",
+        "includedAngle" : 90,
+        "name" : "90° V-Bit 1\/2\"",
+        "notes" : "",
+        "number" : 6,
+        "shankDiameter" : 6.35,
+        "shape" : "vBit",
+        "stickout" : 19.049999999999997,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "C4A3F000-0000-4000-8090-000000000013",
+      "kind" : {
+        "chamfer" : {
+          "_0" : {
+            "direction" : "climb",
+            "edge" : "top",
+            "sharpCorners" : true,
+            "side" : "outside",
+            "startDepth" : 0,
+            "width" : 6.35
+          }
+        }
+      },
+      "name" : "Cove chamfer",
+      "shapeIDs" : [
+        "C4A3F000-0000-4000-8090-000000000010"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 3048,
+          "plungeRate" : 762,
+          "spindleRPM" : 16000,
+          "stepdown" : 6.35,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 31.749999999999996,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 15.874999999999998,
+        "form" : {
+          "kind" : "cove",
+          "pilotDiameter" : 12.7,
+          "points" : [
+
+          ],
+          "radius" : 9.524999999999999,
+          "upperRadius" : 0
+        },
+        "id" : "C4A3F000-0000-4000-8090-000000000901",
+        "includedAngle" : 90,
+        "name" : "1-1\/4\" cove",
+        "notes" : "",
+        "number" : 7,
+        "shankDiameter" : 12.7,
+        "shape" : "form",
+        "stickout" : 28.574999999999996,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "C4A3F000-0000-4000-8090-000000000010",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 12.7,
+          "height" : 101.6,
+          "width" : 152.39999999999998
+        }
+      },
+      "layer" : "Default",
+      "name" : "Board",
+      "position" : {
+        "x" : 101.6,
+        "y" : 76.19999999999999
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "C4A3F000-0000-4000-8090-000000000011",
+      "kind" : {
+        "polygon" : {
+          "radius" : 25.4,
+          "sides" : 6
+        }
+      },
+      "layer" : "Default",
+      "name" : "Hexagon",
+      "position" : {
+        "x" : 101.6,
+        "y" : 76.19999999999999
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 152.39999999999998,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 203.2,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

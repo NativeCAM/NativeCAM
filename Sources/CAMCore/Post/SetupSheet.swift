@@ -397,8 +397,15 @@ public enum SetupSheet {
                 case let .chamfer(p):
                     let side = p.side == .both ? "both sides of" : "\(p.side.rawValue)"
                     let edge = p.edge == .top ? "its top edge on the vector" : "its bottom edge on the vector"
+                    if op.tool.shape == .form {
+                        h += "<li><b>\(esc(op.name))</b>: a round-nose chamfer \(len(p.width)) wide, the tip \(len(p.depth(with: op.tool))) deep, "
+                            + "\(side) the shapes, \(edge)\(from(p.startDepth)), with the T\(op.tool.number) \(esc(op.tool.name)).</li>\n"
+                        break
+                    }
+                    let overcut = p.overcut(with: op.tool) > 1e-9 ? "; a \(len(p.overcut(with: op.tool))) overcut leaves a "
+                        + "\(len(p.flatWidth(with: op.tool))) flat at its foot" : ""
                     h += "<li><b>\(esc(op.name))</b>: a bevel \(len(p.width)) wide and \(len(p.depth(with: op.tool))) deep \(side) the "
-                        + "shapes, \(edge)\(from(p.startDepth)), with the \(bit)\(p.sharpCorners ? "; sharp corners" : "").</li>\n"
+                        + "shapes, \(edge)\(from(p.startDepth)), with the \(bit)\(p.sharpCorners ? "; sharp corners" : "")\(overcut).</li>\n"
                 case let .fluting(p):
                     let ramps: String
                     switch p.ramp {
