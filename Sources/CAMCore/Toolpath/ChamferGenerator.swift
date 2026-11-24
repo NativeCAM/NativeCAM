@@ -26,7 +26,10 @@ import Foundation
 /// the vector on a top-edge bevel, across it into the waste on a bottom-edge one, stepped so the ridges between them
 /// stay within V-carve flat clearing's (`VCarveParams.flatClearingRidge`). Each is an offset of the vectors like the
 /// first lap's, so its cone's near side lies beyond the bevel's face and never touches it: the bevel keeps its width and
-/// angle, and its foot is a flat the overcut wide (plus the tip's width) instead of the bottom of a V.
+/// angle, and its foot is a flat the overcut wide (plus the tip's width) instead of the bottom of a V. The laps are cut
+/// in order out from the bevel, every lap of one round before the next, so each only shaves the strip between its cone
+/// and the last one's: the lap spacing wide and the bevel's depth tall. That runs at full depth in one pass when it's no
+/// bigger than the bevel's own first pass takes (`lapLevels`), and is stepped down only as far as needed to get there.
 ///
 /// Round-nose chamfers (form bits). A roundover, cove, ogee or custom form bit is placed as an edge profile places it
 /// (`EdgeProfileParams.formDepth`, `EdgeProfilePlan.fewestPasses`): its tip runs deep enough for the profile to meet
@@ -53,6 +56,8 @@ enum ChamferGenerator {
         var points: [Vec3]
         /// Whether the cut may start at each point (not on a rise).
         var startable: [Bool]
+        /// 0 for the bevel's own path, k for the overcut's kth lap out from it.
+        var lap = 0
     }
 
     /// Turns gentler than this are a flattened curve, not a corner to rise into (as `VCarveGenerator`'s).
@@ -248,12 +253,15 @@ enum ChamferGenerator {
             .passLevels(toolStepdown: tool.cutting.stepdown)
         var paths = tipPaths(bevel, tool: tool, arcTolerance: context.arcTolerance)
         if paths.isEmpty { warnings.append("The bevel has nowhere to go: the shapes are too small for it.") }
+        let laps = lapLevels(bevel, tool: tool, bevelLevels: levels)
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
         var cursor = context.stock.homePosition.xy
         while !paths.isEmpty, !levels.isEmpty {
-            // Nearest path next, entered at its nearest point off a rise.
+            // Nearest path next among the bevel's, then each round of the overcut's laps in turn out from it, entered at
+            // its nearest point off a rise.
+            let round = paths.map(\.lap).min()!
             var best = (path: 0, point: 0, d: Double.infinity)
-            for (i, path) in paths.enumerated() {
+            for (i, path) in paths.enumerated() where path.lap == round {
                 for (k, p) in path.points.enumerated() where path.startable[k] {
                     let d = p.xy.distanceSquared(to: cursor)
                     if d < best.d { best = (i, k, d) }
@@ -261,7 +269,7 @@ enum ChamferGenerator {
             }
             let path = paths.remove(at: best.path)
             let pts = Array(path.points[best.point...] + path.points[..<best.point]) + [path.points[best.point]]
-            for z in levels {
+            for z in path.lap == 0 ? levels : laps {
                 let pass = pts.map { Vec3($0.x, $0.y, max($0.z, z)) }
                 b.enter(at: pass[0])
                 b.follow(Array(pass.dropFirst()))
@@ -270,6 +278,31 @@ enum ChamferGenerator {
             cursor = pts[0].xy
         }
         return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+    }
+
+    /// How far apart the overcut's laps are, mm, and how many there are: as few as keep the ridges between them within
+    /// V-carve flat clearing's (`VCarveParams.flatClearingRidge`). nil without an overcut.
+    static func lapSpacing(_ bevel: Bevel, tool: Tool) -> (spacing: Double, count: Int)? {
+        guard bevel.overcut > 1e-9 else { return nil }
+        let most = max(0.02, tool.tipDiameter + 2 * VCarveParams.flatClearingRidge * tool.halfAngleTangent)
+        let n = max(1, Int((bevel.overcut / most - 1e-9).rounded(.up)))
+        return (bevel.overcut / Double(n), n)
+    }
+
+    /// The depth levels each overcut lap is cut at. A lap cut after the one before it (or the bevel) takes only the strip
+    /// between their cones, the spacing wide all the way up the bevel's depth, so it runs at full depth in one pass when
+    /// that strip is no bigger than the bevel's first pass (the V its first level cuts), and otherwise in as few equal
+    /// passes as keep each within it, never more than the bevel's own.
+    static func lapLevels(_ bevel: Bevel, tool: Tool, bevelLevels levels: [Double]) -> [Double] {
+        guard let first = levels.first, levels.count > 1, let spacing = lapSpacing(bevel, tool: tool)?.spacing else { return levels }
+        let t = tool.halfAngleTangent, rt = max(0, tool.tipDiameter / 2)
+        let d = bevel.width / t
+        let p = -first - bevel.startDepth
+        let firstPass = p * (2 * rt + p * t)
+        guard firstPass > 1e-9 else { return levels }
+        let m = max(1, Int((spacing * d / firstPass - 1e-9).rounded(.up)))
+        guard m < levels.count else { return levels }
+        return (1...m).map { -(bevel.startDepth + d * Double($0) / Double(m)) }
     }
 
     /// The closed paths the bit's tip follows to cut `bevel` at full depth, rises included, each oriented for the
@@ -384,9 +417,7 @@ enum ChamferGenerator {
             }
             // The overcut's laps: the same offset run further past the foot, at the bevel's depth, out to the overcut, close
             // enough that the ridges between them stay within V-carve flat clearing's.
-            if bevel.overcut > 1e-9, sigma != 0 {
-                let spacing = max(0.02, tool.tipDiameter + 2 * VCarveParams.flatClearingRidge * t)
-                let n = max(1, Int((bevel.overcut / spacing - 1e-9).rounded(.up)))
+            if sigma != 0, let n = lapSpacing(bevel, tool: tool)?.count {
                 for k in 1...n {
                     let o = bevel.overcut * Double(k) / Double(n)
                     let past = sigma * (oFinal + (top ? o : -o))
@@ -394,7 +425,8 @@ enum ChamferGenerator {
                                              arcTolerance: arcTolerance)
                     for loop in lap where loop.count >= 3 {
                         let pts = loop.points.map { Vec3($0, -(start + d)) }
-                        out.append(TipPath(points: reverse ? pts.reversed() : pts, startable: [Bool](repeating: true, count: pts.count)))
+                        out.append(TipPath(points: reverse ? pts.reversed() : pts, startable: [Bool](repeating: true, count: pts.count),
+                                           lap: k))
                     }
                 }
             }
