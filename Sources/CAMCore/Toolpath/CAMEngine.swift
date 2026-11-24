@@ -351,7 +351,7 @@ public enum CAMEngine {
                         // 3D rotary roughing and finishing have already lowered their feeds for the rotary axis, and said so.
                         let own = op.kind.is3D && op.kind.turnsWholeBlank
                         tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !own)
-                    } else if project.machine.outputArcs {
+                    } else if project.machine.outputArcs, op.kind.fitsArcs {
                         tp = ArcFitter.fit(tp, tolerance: project.machine.arcFitTolerance)
                     }
                     // After arc fitting, so an arc keeps one feed.

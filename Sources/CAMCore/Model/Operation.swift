@@ -709,6 +709,14 @@ public enum Finish3DStrategy: String, Codable, Sendable, CaseIterable, Identifia
     /// Rest finishing: a smaller ball or tapered ball nose finishes only where earlier 3D finishing toolpaths' larger
     /// bits couldn't reach (`RestSettings`), in raster rows clipped to those areas. Format 17.
     case rest
+    /// Constant scallop (3D offset): passes that are iso-lines of geodesic distance on the cutter-location surface from
+    /// the boundary inward, so neighbouring passes are the same distance apart along the surface and the scallop
+    /// between them stays even however the slope changes. Format 21.
+    case constantScallop
+    /// An Archimedean spiral from a centre out to the boundary, dropped onto the model as one continuous cut. Format 21.
+    case spiral
+    /// Spokes from a centre at an angular step, thinned near the centre to a minimum spacing. Format 21.
+    case radial
 
     public var id: String { rawValue }
     public var label: String {
@@ -718,12 +726,21 @@ public enum Finish3DStrategy: String, Codable, Sendable, CaseIterable, Identifia
         case .steepShallow: "Steep and shallow"
         case .pencil: "Pencil"
         case .rest: "Rest"
+        case .constantScallop: "Constant scallop"
+        case .spiral: "Spiral"
+        case .radial: "Radial"
         }
     }
     /// Whether it lays raster rows (and so can cross-hatch).
     public var usesRaster: Bool { self == .raster || self == .steepShallow || self == .rest }
     /// Whether it lays waterline loops (and so has a Z step from the steep angle).
     public var usesWaterline: Bool { self == .waterline || self == .steepShallow }
+    /// Whether it can space its passes by a scallop-height target (`Finish3DParams.scallopHeight`).
+    public var usesScallopTarget: Bool { self == .constantScallop || self == .spiral }
+    /// Whether it works out from a centre (`Finish3DParams.centre`).
+    public var usesCentre: Bool { self == .spiral || self == .radial }
+    /// The strategies format 21 adds.
+    public var isFormat21: Bool { self == .constantScallop || self == .spiral || self == .radial }
 }
 
 public struct Finish3DParams: Hashable, Sendable {
@@ -753,10 +770,27 @@ public struct Finish3DParams: Hashable, Sendable {
     public var smoothLinks: Bool
     /// Rest finishing's settings (`strategy == .rest`); nil = the defaults in millimetres. Other strategies ignore it.
     public var rest: RestSettings?
+    /// Constant scallop and spiral: the scallop height to hold between passes, mm, which sets the stepover from the
+    /// bit's effective radius (`Tool.stepover(forScallop:)`); nil = the stepover fraction sets the spacing. Other
+    /// strategies ignore it.
+    public var scallopHeight: Double?
+    /// Spiral and radial: the centre they work out from, in design coordinates (mm from the material's lower-left
+    /// corner); nil = the boundary's centroid. Other strategies ignore it.
+    public var centre: Vec2?
+    /// Spiral: hold the scallop on slopes by closing the turns up where the surface tilts across them (the stepover
+    /// measured along the surface); off = a constant stepover in plan.
+    public var spiralHoldsScallop: Bool
+    /// Radial: the angle between spokes, degrees; nil = the stepover apart at the boundary's farthest point.
+    public var radialStep: Double?
+    /// Radial: how close spokes may come near the centre before every other one stops short, mm; nil = half the stepover
+    /// (so between the centre and the boundary neighbouring spokes are between half a stepover and a stepover apart).
+    public var radialMinSpacing: Double?
 
     public init(stepoverFraction: Double = 0.1, rasterAngle: Double = 0, allowance: Double = 0, boundary: ModelBoundary = .model,
                 boundaryMargin: Double? = nil, strategy: Finish3DStrategy = .raster, crossHatch: Bool = false,
-                steepAngle: Double? = nil, overlap: Double? = nil, smoothLinks: Bool = true, rest: RestSettings? = nil) {
+                steepAngle: Double? = nil, overlap: Double? = nil, smoothLinks: Bool = true, rest: RestSettings? = nil,
+                scallopHeight: Double? = nil, centre: Vec2? = nil, spiralHoldsScallop: Bool = false, radialStep: Double? = nil,
+                radialMinSpacing: Double? = nil) {
         self.stepoverFraction = stepoverFraction
         self.rasterAngle = rasterAngle
         self.allowance = allowance
@@ -768,6 +802,11 @@ public struct Finish3DParams: Hashable, Sendable {
         self.overlap = overlap
         self.smoothLinks = smoothLinks
         self.rest = rest
+        self.scallopHeight = scallopHeight
+        self.centre = centre
+        self.spiralHoldsScallop = spiralHoldsScallop
+        self.radialStep = radialStep
+        self.radialMinSpacing = radialMinSpacing
     }
 
     /// Rest finishing's settings in use.
@@ -785,11 +824,21 @@ public struct Finish3DParams: Hashable, Sendable {
         max(0.01, tool.stepoverBasis * stepoverFraction) * tan(steepAngleInUse.radians)
     }
 
+    /// The stepover in use for `tool`, mm: from the scallop-height target where the strategy holds one and it's set
+    /// (and the bit has a rounded tip to hold it with), otherwise the stepover fraction of the bit's stepover basis.
+    public func stepoverInUse(tool: Tool) -> Double {
+        if strategy.usesScallopTarget, let h = scallopHeight, h > 0, let s = tool.stepover(forScallop: h) { return max(0.02, s) }
+        return max(0.02, tool.stepoverBasis * stepoverFraction)
+    }
+
     /// Format 10 adds the waterline, steep-and-shallow and pencil strategies and cross-hatching: a format-9 build would
     /// ignore them and cut one raster. Smooth links don't raise it (an older build links rows its own way, cutting the
     /// same surface), nor do a steep angle or overlap a raster doesn't use. Rest finishing is format 17: a format-16
-    /// build can't read it (and would otherwise finish the whole model with the small bit).
+    /// build can't read it (and would otherwise finish the whole model with the small bit). Constant scallop, spiral and
+    /// radial finishing are format 21, which an older build can't read; their settings mean nothing to the others, so
+    /// they don't raise it on their own.
     public var requiredFormatVersion: Int {
+        if strategy.isFormat21 { return 21 }
         if strategy == .rest { return 17 }
         return strategy != .raster || (crossHatch && strategy.usesRaster) ? 10 : 1
     }
@@ -838,6 +887,7 @@ public struct RestSettings: Hashable, Codable, Sendable {
 extension Finish3DParams: Codable {
     private enum CodingKeys: String, CodingKey {
         case stepoverFraction, rasterAngle, allowance, boundary, boundaryMargin, strategy, crossHatch, steepAngle, overlap, smoothLinks, rest
+        case scallopHeight, centre, spiralHoldsScallop, radialStep, radialMinSpacing
     }
 
     /// Keys missing from older files read as the raster without cross-hatching or smooth links they meant.
@@ -854,6 +904,11 @@ extension Finish3DParams: Codable {
         overlap = try c.decodeIfPresent(Double.self, forKey: .overlap)
         smoothLinks = try c.decodeIfPresent(Bool.self, forKey: .smoothLinks) ?? false
         rest = try c.decodeIfPresent(RestSettings.self, forKey: .rest)
+        scallopHeight = try c.decodeIfPresent(Double.self, forKey: .scallopHeight)
+        centre = try c.decodeIfPresent(Vec2.self, forKey: .centre)
+        spiralHoldsScallop = try c.decodeIfPresent(Bool.self, forKey: .spiralHoldsScallop) ?? false
+        radialStep = try c.decodeIfPresent(Double.self, forKey: .radialStep)
+        radialMinSpacing = try c.decodeIfPresent(Double.self, forKey: .radialMinSpacing)
     }
 
     /// Defaults are left out, so a plain raster saves exactly as before (apart from smooth links, which are on).
@@ -870,6 +925,11 @@ extension Finish3DParams: Codable {
         try c.encodeIfPresent(overlap, forKey: .overlap)
         if smoothLinks { try c.encode(smoothLinks, forKey: .smoothLinks) }
         try c.encodeIfPresent(rest, forKey: .rest)
+        try c.encodeIfPresent(scallopHeight, forKey: .scallopHeight)
+        try c.encodeIfPresent(centre, forKey: .centre)
+        if spiralHoldsScallop { try c.encode(spiralHoldsScallop, forKey: .spiralHoldsScallop) }
+        try c.encodeIfPresent(radialStep, forKey: .radialStep)
+        try c.encodeIfPresent(radialMinSpacing, forKey: .radialMinSpacing)
     }
 }
 
@@ -1442,6 +1502,15 @@ public enum OperationKind: Hashable, Codable, Sendable {
         }
     }
 
+    /// Whether the posted moves may be fitted with arcs. Constant scallop, spiral and radial passes curve in plan while
+    /// following the surface: an arc fitted to them (Z linear in angle, within the fitting tolerance in plan and at
+    /// its points) can dip into the surface by about the tolerance on a slope, and side into a vertical edge the
+    /// passes run beside. They post as the straight moves along the exact drop-cutter path that raster rows are.
+    public var fitsArcs: Bool {
+        if case let .finish3D(p) = self, p.strategy.isFormat21 { return false }
+        return true
+    }
+
     /// Deepest point the operation is asked to reach, mm below the material top (nil for unlimited V-carve).
     public var requestedDepth: Double? {
         switch self {
@@ -1520,7 +1589,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// clearing is format 13. A whole-board inlay plug is format 14. A tapered ball nose, form or dovetail bit, as the
     /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`). 3D rest finishing
     /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`). Edge
-    /// profiles are format 18. A chamfer with an overcut or a form bit is format 19.
+    /// profiles are format 18. A chamfer with an overcut or a form bit is format 19. Constant scallop, spiral and radial
+    /// 3D finishing are format 21.
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {
