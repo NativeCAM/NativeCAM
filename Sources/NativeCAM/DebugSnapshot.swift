@@ -478,7 +478,7 @@ enum DebugSnapshot {
             settings.flatRaster = VCarveRaster()
         }
         settings = quickest(settings)
-        log("menu Add Toolpath: Profile (cut out / inside) | Pocket | Drill | V-carve | Inlay… | Chamfer | Fluting | Prism")
+        log("menu Add Toolpath: Profile (cut out / inside) | Edge Profile | Pocket | Drill | V-carve | Inlay… | Chamfer | Fluting | Prism")
         // The dialog as it opens, and with each boundary (whole board both ways), the V-bit alone clearing in raster lines.
         var sheets: [(String, InlayPairSettings)] = [("inlay-sheet.png", quickest(InlaySheet.defaults(tools: tools)))]
         for boundary in VCarveInlay.Boundary.allCases {

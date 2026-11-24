@@ -219,10 +219,12 @@ enum EdgeProfileGenerator {
                                                   keepOuts: context.keepOuts, others: others, materialTop: context.materialTop,
                                                   topLimit: 0))
             for loop in offsetRegions.flatMap(\.loops) {
-                let probe = loop.points[0]
+                // A few points round the loop, so one that passes near another edge is still put with its own.
+                let n = loop.count
+                let probes = [0, n / 3, 2 * n / 3].map { loop.points[$0] }
                 var nearest = 0, best = Double.infinity
                 for (i, e) in drawn.enumerated() {
-                    let d = e.loop.closestPoint(to: probe).distance
+                    let d = probes.reduce(0) { $0 + e.loop.closestPoint(to: $1).distance }
                     if d < best { best = d; nearest = i }
                 }
                 loops[nearest][k].append(reverse ? loop.reversed : loop)
