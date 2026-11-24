@@ -57,6 +57,25 @@ struct CommandLineTests {
         return project
     }
 
+    /// #105: `nest` lets parts go on up to 10 sheets, as Nest Parts in the app does to start with, so the frames and
+    /// coasters demo nests whole. Held to one sheet, it says how many parts didn't fit and how to use another.
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: cli.path)))
+    func nestUsesMoreSheetsByDefaultAndSaysHowAtTheLimit() throws {
+        let dir = try Self.folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let demo = dir.appendingPathComponent("frames.nativecam").path
+        #expect(try Self.run(["demosheets", demo]).status == 0)
+        let all = try Self.run(["nest", demo, "--evaluations", "300", "-o", dir.appendingPathComponent("all.nativecam").path])
+        #expect(all.status == 0, "\(all.output)")
+        #expect(all.output.contains("Nested 19 of 19 parts"), "\(all.output)")
+        #expect(all.output.contains("On 2 sheets") && all.output.contains("% of all the sheets' area)"), "\(all.output)")
+        #expect(!all.output.contains("didn't fit"))
+        let one = try Self.run(["nest", demo, "--evaluations", "300", "--sheets", "1", "-o", dir.appendingPathComponent("one.nativecam").path])
+        #expect(one.status == 0, "\(one.output)")
+        #expect(one.output.contains("% of the sheet)"), "\(one.output)")
+        #expect(one.output.contains("8 parts didn't fit on 1 sheet; pass --sheets 2 to use another sheet"), "\(one.output)")
+    }
+
     @Test func cliIsBuilt() {
         #expect(FileManager.default.isExecutableFile(atPath: Self.cli.path), "no nativecam-cli at \(Self.cli.path)")
     }

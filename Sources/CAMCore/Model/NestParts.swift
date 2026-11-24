@@ -87,6 +87,10 @@ public struct NestJob: Sendable {
     /// Spacing to start with: the cut-out bit's diameter plus a margin.
     public var defaultSpacing: Double
 
+    /// How many sheets Nest Parts (and `nativecam-cli nest`) may use until a limit is set: parts that don't fit on the
+    /// sheets a job has go on new ones, up to this many (or as many as the job has, if more).
+    public static let defaultSheetLimit = 10
+
     /// Margin added to the cut-out bit for the default spacing: 1/8 in, or 3 mm in a metric job.
     public static func spacingMargin(_ units: LengthUnit) -> Double { units == .inch ? 0.125.inch : 3 }
 

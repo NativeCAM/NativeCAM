@@ -194,7 +194,7 @@ final class NestSession {
     }
 
     /// Sheets parts may go on until the user sets a limit.
-    static let defaultSheetLimit = 10
+    static let defaultSheetLimit = NestJob.defaultSheetLimit
 }
 
 /// A layout that didn't pass the final check (it never should): nothing is moved.
