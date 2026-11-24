@@ -22,10 +22,11 @@ import Foundation
 /// bevel's valleys are on the inside of a turn; a bottom-edge bevel's are on the outside, where it rises from the
 /// vector's corner into the material.
 ///
-/// Overcut (V-bits). A second lap at the bevel's depth runs the overcut further past the bevel's foot: away from the
-/// vector on a top-edge bevel, toward it and beyond on a bottom-edge one. It's an offset of the vectors like the first
-/// lap's, so its cone's near side lies the overcut beyond the bevel's face and never touches it: the bevel keeps its
-/// width and angle, and its foot is a flat the overcut wide (plus the tip's width) instead of the bottom of a V.
+/// Overcut (V-bits). Further laps at the bevel's depth run the tip out past the bevel's foot, to the overcut: away from
+/// the vector on a top-edge bevel, across it into the waste on a bottom-edge one, stepped so the ridges between them
+/// stay within V-carve flat clearing's (`VCarveParams.flatClearingRidge`). Each is an offset of the vectors like the
+/// first lap's, so its cone's near side lies beyond the bevel's face and never touches it: the bevel keeps its width and
+/// angle, and its foot is a flat the overcut wide (plus the tip's width) instead of the bottom of a V.
 ///
 /// Round-nose chamfers (form bits). A roundover, cove, ogee or custom form bit is placed as an edge profile places it
 /// (`EdgeProfileParams.formDepth`, `EdgeProfilePlan.fewestPasses`): its tip runs deep enough for the profile to meet
@@ -142,8 +143,10 @@ enum ChamferGenerator {
             var best = Double.infinity
             for j in grid.query(p, radius: radius, scratch: &scratch) {
                 if owner[j].loop == owner[k].loop {
-                    let gap = abs(owner[j].along - s)
-                    if min(gap, lengths[owner[k].loop] - gap) < 3 * radius + segments[j].0.distance(to: segments[j].1) { continue }
+                    // How far along the loop, either way round, the segment is from the sample.
+                    let a0 = owner[j].along, span = segments[j].0.distance(to: segments[j].1), a1 = a0 + span
+                    let gap = s < a0 ? a0 - s : (s > a1 ? s - a1 : 0)
+                    if min(gap, lengths[owner[k].loop] - span - gap) < 3 * radius { continue }
                 }
                 best = min(best, distancePointSegment(p, segments[j].0, segments[j].1))
             }
@@ -379,14 +382,20 @@ enum ChamferGenerator {
                 out.append(reverse ? TipPath(points: points[i].reversed(), startable: startable[i].reversed())
                                    : TipPath(points: points[i], startable: startable[i]))
             }
-            // The overcut's lap: the same offset run the overcut further past the foot, at the bevel's depth.
+            // The overcut's laps: the same offset run further past the foot, at the bevel's depth, out to the overcut, close
+            // enough that the ridges between them stay within V-carve flat clearing's.
             if bevel.overcut > 1e-9, sigma != 0 {
-                let past = sigma * (oFinal + (top ? bevel.overcut : -bevel.overcut))
-                let lap = Clipper.offset(loops, delta: past, join: bevel.sharpCorners ? .miter : .round, miterLimit: miterLimit,
-                                         arcTolerance: arcTolerance)
-                for loop in lap where loop.count >= 3 {
-                    let pts = loop.points.map { Vec3($0, -(start + d)) }
-                    out.append(TipPath(points: reverse ? pts.reversed() : pts, startable: [Bool](repeating: true, count: pts.count)))
+                let spacing = max(0.02, tool.tipDiameter + 2 * VCarveParams.flatClearingRidge * t)
+                let n = max(1, Int((bevel.overcut / spacing - 1e-9).rounded(.up)))
+                for k in 1...n {
+                    let o = bevel.overcut * Double(k) / Double(n)
+                    let past = sigma * (oFinal + (top ? o : -o))
+                    let lap = Clipper.offset(loops, delta: past, join: bevel.sharpCorners ? .miter : .round, miterLimit: miterLimit,
+                                             arcTolerance: arcTolerance)
+                    for loop in lap where loop.count >= 3 {
+                        let pts = loop.points.map { Vec3($0, -(start + d)) }
+                        out.append(TipPath(points: reverse ? pts.reversed() : pts, startable: [Bool](repeating: true, count: pts.count)))
+                    }
                 }
             }
         }

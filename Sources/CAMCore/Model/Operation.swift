@@ -1106,7 +1106,7 @@ public struct ChamferParams: Hashable, Codable, Sendable {
     /// round an arc. Off, the bit stays at depth and the corners come out rounded.
     public var sharpCorners: Bool
     public var direction: CutDirection
-    /// V-bits: how far past the bevel's foot the tip also runs, mm, on a second lap at the bevel's depth (Vectric's
+    /// V-bits: how far past the bevel's foot the tip also runs, mm, in further laps at the bevel's depth (Vectric's
     /// Overcut). The bevel keeps its width and angle; the tip is kept off its foot, which is left as a flat this wide
     /// (plus the tip's own width) rather than the bottom of a V-groove. nil or 0 = none. Format 19 when set.
     public var overcut: Double?
@@ -1321,8 +1321,9 @@ public struct EdgeProfileParams: Hashable, Codable, Sendable {
     public var bandWidth: Double?
     /// Vertical passes: the deepest cut per pass, mm; nil uses the tool's stepdown.
     public var passDepth: Double?
-    /// The finishing pass's band, mm: the passes before it stop this far off the final position, and a last lap takes
-    /// the rest. 0 = no finishing pass.
+    /// The finishing pass's band at most, mm: the passes before it stop this far off the final position, and a last lap
+    /// takes the rest. Narrower where that band would take more than a quarter of the heaviest pass before it
+    /// (`EdgeProfilePlan.finishShare`), so the finish stays the lightest cut. 0 = no finishing pass.
     public var finish: Double
     public var direction: CutDirection
     /// How each edge's first pass enters (later passes link to it at depth where they can).

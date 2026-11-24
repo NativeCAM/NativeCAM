@@ -50,6 +50,10 @@ public struct EdgeProfilePlan: Hashable, Sendable {
     public var largestLap: Double { passes.map(\.largestLap).max() ?? 0 }
     /// The pass (from 0) whose lap takes the most.
     public var largestPass: Int? { passes.indices.max { passes[$0].largestLap < passes[$1].largestLap } }
+
+    /// The most a finishing pass takes, as a share of the heaviest pass before it: its band is narrowed to keep within
+    /// this (`EdgeProfileParams.finish` is the widest it may be), so it stays the lightest cut.
+    public static let finishShare = 0.25
 }
 
 public extension EdgeProfileParams {
@@ -79,7 +83,47 @@ public extension EdgeProfileParams {
         var plan = EdgeProfilePlan(passes: [], depth: d, reach: reach, centreOffset: c, reveal: reveal(for: tool),
                                    crossSection: area(d, 0))
         guard reach > 0.01 else { return plan }
-        let f = min(max(0, finish), reach)
+        let levels = DepthSettings(startDepth: 0, cutDepth: d, passDepth: passDepth)
+            .passLevels(toolStepdown: tool.cutting.stepdown).map { -$0 }
+        // The heaviest lap the passes before a finish `f` wide take, mm².
+        func heaviestRough(_ f: Double) -> Double {
+            let rough = reach - f
+            guard rough > 0.01 else { return 0 }
+            switch passes {
+            case .horizontal:
+                if let band = bandWidth, band > 1e-6 {
+                    let n = max(1, Int((rough / band - 1e-9).rounded(.up)))
+                    var before = 0.0, most = 0.0
+                    for k in 1...n {
+                        let now = area(d, f + rough * Double(n - k) / Double(n))
+                        most = max(most, now - before)
+                        before = now
+                    }
+                    return most
+                }
+                return area(d, f) / Double(max(1, passCount))
+            case .vertical:
+                var before = 0.0, most = 0.0
+                for level in levels {
+                    let now = area(level, f)
+                    most = max(most, now - before)
+                    before = now
+                }
+                return most
+            }
+        }
+        // The finish is the band asked for, narrowed until its lap takes no more than `finishShare` of the heaviest pass
+        // before it: a band of the same width takes far more of a profile that's steep at the edge (a roundover's,
+        // upright there) than of the passes' share (#118).
+        var f = min(max(0, finish), reach)
+        if f > 1e-6, area(d, 0) - area(d, f) > EdgeProfilePlan.finishShare * heaviestRough(f) {
+            var lo = 0.0, hi = f
+            for _ in 0..<40 {
+                let mid = (lo + hi) / 2
+                if area(d, 0) - area(d, mid) > EdgeProfilePlan.finishShare * heaviestRough(mid) { hi = mid } else { lo = mid }
+            }
+            f = lo
+        }
         let rough = reach - f
         // The final position: the finish's, or the last rough pass's when there's no finish (or nothing left for one).
         let finishing = f > 1e-6 && rough > 0.01
@@ -118,8 +162,6 @@ public extension EdgeProfileParams {
             }
         case .vertical:
             let s = finishing ? f : 0
-            let levels = DepthSettings(startDepth: 0, cutDepth: d, passDepth: passDepth)
-                .passLevels(toolStepdown: tool.cutting.stepdown).map { -$0 }
             var taken = 0.0
             var laps: [Double] = []
             for level in levels {

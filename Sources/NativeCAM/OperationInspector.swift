@@ -425,7 +425,7 @@ struct EdgeProfileSection: View {
                 SectionNote(text: "Steps down at the final position, as a Profile toolpath does: for profiles that only widen going up.")
             }
             LengthField(title: "Finishing pass", mm: Binding(get: { p.finish }, set: { var q = p; q.finish = max(0, $0); set(q) }), units: units,
-                        help: "The band the last, light pass takes; 0 for none", minimum: 0)
+                        help: "The widest band the last, light pass takes, narrowed where needed so it takes at most a quarter of the heaviest pass before it; 0 for none", minimum: 0)
             let material = project.stock.material
             ForEach(Array(plan.passes.enumerated()), id: \.offset) { k, pass in
                 let rec = ChipLoad.recommendation(for: tool, material: material, machine: project.machine, depth: plan.depth,
@@ -507,7 +507,7 @@ struct ChamferSection: View {
             }
             if tool.shape.isTapered, !(p.edge == .bottom && p.side == .both) {
                 LengthField(title: "Overcut", mm: Binding(get: { p.overcut ?? 0 }, set: { var q = p; q.overcut = $0 > 1e-9 ? $0 : nil; set(q) }),
-                            units: units, help: "How far past the bevel's foot the tip also runs, on a second lap at the bevel's depth: the foot is left as a flat rather than the bottom of a V-groove, and the bevel keeps its width and angle",
+                            units: units, help: "How far past the bevel's foot the tip also runs, in further laps at the bevel's depth: the foot is left as a flat rather than the bottom of a V-groove, and the bevel keeps its width and angle",
                             minimum: 0)
                 let flat = p.flatWidth(with: tool)
                 if flat > 1e-9 {

@@ -77,7 +77,7 @@ struct EdgeProfileTests {
     // MARK: The passes
 
     /// A full 1/2" roundover takes three passes of equal cross-section plus a light finish, from the outside in; together
-    /// they take the whole profile, R²(1 − π/4).
+    /// they take the whole profile, R²(1 − π/4). The finish takes no more than a quarter of a pass.
     @Test func aFullRoundoverPlansThreeEqualPassesAndAFinish() throws {
         let tool = Self.roundover
         let plan = EdgeProfileParams().plan(tool: tool, thickness: 0.75.inch)
@@ -91,7 +91,11 @@ struct EdgeProfileTests {
         #expect(plan.passes.last?.isFinish == true && plan.passes.last?.standoff == 0)
         let standoffs = plan.passes.map(\.standoff)
         #expect(zip(standoffs, standoffs.dropFirst()).allSatisfy { $0 > $1 })
-        #expect(abs(standoffs[2] - EdgeProfileParams.defaultFinish) < 1e-9)
+        // The finish is narrower than the 0.02" asked for: a band that wide, upright at the edge, would take more than a
+        // quarter of a pass (#118).
+        #expect(standoffs[2] > 0 && standoffs[2] < EdgeProfileParams.defaultFinish)
+        let finish = try #require(plan.passes.last)
+        #expect(finish.crossSection <= EdgeProfilePlan.finishShare * plan.passes[0].crossSection + 1e-6)
         let rough = plan.passes.prefix(3).map(\.crossSection)
         for a in rough { #expect(abs(a - rough[0]) < 0.02 * rough[0], "\(rough)") }
         let total = plan.passes.reduce(0) { $0 + $1.crossSection }
