@@ -337,11 +337,19 @@ public struct PocketParams: Hashable, Codable, Sendable {
     public var clearanceTool: Tool?
     /// Adaptive clearing's settings (`strategy == .adaptive`); nil = the defaults. Other strategies ignore it.
     public var adaptive: AdaptiveSettings?
+    /// Rest from earlier toolpaths: the pocket toolpaths before this one in the run order that cut the same shapes as
+    /// deep or deeper with a larger bit (`RestMachining.pocketReferences`) have already cleared what their bits reach,
+    /// so this toolpath's tool cuts only what they left (corners, narrow parts) and the walls there. nil or false = it
+    /// clears the whole pocket.
+    ///
+    /// Saved only when on. No new file format: a build that doesn't know the key clears the whole pocket with this
+    /// toolpath's tool, which is slower but not wrong.
+    public var restFromEarlier: Bool?
 
     public init(strategy: PocketStrategy = .offset, direction: CutDirection = .climb, depth: DepthSettings,
                 allowance: Double = 0, rasterAngle: Double = 0, stepoverFraction: Double? = nil,
                 entry: EntrySettings = EntrySettings(), cornerRelief: CornerReliefSettings? = nil, clearanceTool: Tool? = nil,
-                adaptive: AdaptiveSettings? = nil) {
+                adaptive: AdaptiveSettings? = nil, restFromEarlier: Bool? = nil) {
         self.strategy = strategy
         self.direction = direction
         self.depth = depth
@@ -352,10 +360,14 @@ public struct PocketParams: Hashable, Codable, Sendable {
         self.cornerRelief = cornerRelief
         self.clearanceTool = clearanceTool
         self.adaptive = adaptive
+        self.restFromEarlier = restFromEarlier
     }
 
     /// Adaptive clearing's settings in use.
     public var adaptiveSettings: AdaptiveSettings { adaptive ?? AdaptiveSettings() }
+
+    /// True when the pocket rests from the pocket toolpaths before it (`restFromEarlier`).
+    public var restsFromEarlier: Bool { restFromEarlier == true }
 
     /// The pass depth `tool` cuts at when Pass depth isn't set: its stepdown, or for adaptive clearing the full length
     /// of its flutes, which is the point of it (a light cut the bit's whole height rather than a wide one at a time).
@@ -694,6 +706,9 @@ public enum Finish3DStrategy: String, Codable, Sendable, CaseIterable, Identifia
     /// Single passes along concave creases, where the bit touches two faces at once (usually a smaller ball after the
     /// main finish).
     case pencil
+    /// Rest finishing: a smaller ball or tapered ball nose finishes only where earlier 3D finishing toolpaths' larger
+    /// bits couldn't reach (`RestSettings`), in raster rows clipped to those areas. Format 17.
+    case rest
 
     public var id: String { rawValue }
     public var label: String {
@@ -702,10 +717,11 @@ public enum Finish3DStrategy: String, Codable, Sendable, CaseIterable, Identifia
         case .waterline: "Waterline"
         case .steepShallow: "Steep and shallow"
         case .pencil: "Pencil"
+        case .rest: "Rest"
         }
     }
     /// Whether it lays raster rows (and so can cross-hatch).
-    public var usesRaster: Bool { self == .raster || self == .steepShallow }
+    public var usesRaster: Bool { self == .raster || self == .steepShallow || self == .rest }
     /// Whether it lays waterline loops (and so has a Z step from the steep angle).
     public var usesWaterline: Bool { self == .waterline || self == .steepShallow }
 }
@@ -735,10 +751,12 @@ public struct Finish3DParams: Hashable, Sendable {
     /// from the free side) instead of plunging onto it. Off (as projects saved before it existed read) keeps the row
     /// links the raster always had.
     public var smoothLinks: Bool
+    /// Rest finishing's settings (`strategy == .rest`); nil = the defaults in millimetres. Other strategies ignore it.
+    public var rest: RestSettings?
 
     public init(stepoverFraction: Double = 0.1, rasterAngle: Double = 0, allowance: Double = 0, boundary: ModelBoundary = .model,
                 boundaryMargin: Double? = nil, strategy: Finish3DStrategy = .raster, crossHatch: Bool = false,
-                steepAngle: Double? = nil, overlap: Double? = nil, smoothLinks: Bool = true) {
+                steepAngle: Double? = nil, overlap: Double? = nil, smoothLinks: Bool = true, rest: RestSettings? = nil) {
         self.stepoverFraction = stepoverFraction
         self.rasterAngle = rasterAngle
         self.allowance = allowance
@@ -749,7 +767,11 @@ public struct Finish3DParams: Hashable, Sendable {
         self.steepAngle = steepAngle
         self.overlap = overlap
         self.smoothLinks = smoothLinks
+        self.rest = rest
     }
+
+    /// Rest finishing's settings in use.
+    public var restSettings: RestSettings { rest ?? RestSettings() }
 
     public static func autoMargin(tool: Tool) -> Double { tool.radius + 0.5 }
     public static let defaultSteepAngle = 40.0
@@ -765,13 +787,57 @@ public struct Finish3DParams: Hashable, Sendable {
 
     /// Format 10 adds the waterline, steep-and-shallow and pencil strategies and cross-hatching: a format-9 build would
     /// ignore them and cut one raster. Smooth links don't raise it (an older build links rows its own way, cutting the
-    /// same surface), nor do a steep angle or overlap a raster doesn't use.
-    public var requiredFormatVersion: Int { strategy != .raster || (crossHatch && strategy.usesRaster) ? 10 : 1 }
+    /// same surface), nor do a steep angle or overlap a raster doesn't use. Rest finishing is format 17: a format-16
+    /// build can't read it (and would otherwise finish the whole model with the small bit).
+    public var requiredFormatVersion: Int {
+        if strategy == .rest { return 17 }
+        return strategy != .raster || (crossHatch && strategy.usesRaster) ? 10 : 1
+    }
+}
+
+/// 3D rest finishing (`Finish3DStrategy.rest`): what a smaller ball or tapered ball nose follows. The places the
+/// references' bits couldn't reach (where they left more than the tolerance) are worked out exactly with the
+/// drop-cutter, from where each bit could have touched the model, not from the passes it made: the scallops between a
+/// reference's passes don't count.
+public struct RestSettings: Hashable, Codable, Sendable {
+    /// The earlier 3D finishing toolpaths whose cuts this one follows, by ID; nil = automatic: every enabled 3D
+    /// finishing toolpath before this one in the run order, on the same model, with a larger bit
+    /// (`RestMachining.references`).
+    public var references: [UUID]?
+    /// Material thicker than this, square to the surface, counts as left over, mm.
+    public var tolerance: Double
+    /// How far each rest area is grown, so the passes run a little onto the finished surface round it, mm.
+    public var margin: Double
+    /// Also run the pencil pass along the concave creases inside the rest areas.
+    public var pencil: Bool
+
+    /// 0.05 mm (0.002 in on an inch job, `defaults(for:)`).
+    public static let defaultTolerance = 0.05
+    /// 0.5 mm (0.02 in on an inch job).
+    public static let defaultMargin = 0.5
+
+    public init(references: [UUID]? = nil, tolerance: Double = RestSettings.defaultTolerance,
+                margin: Double = RestSettings.defaultMargin, pencil: Bool = false) {
+        self.references = references
+        self.tolerance = tolerance
+        self.margin = margin
+        self.pencil = pencil
+    }
+
+    /// The defaults for a job in `units`: 0.05 mm and 0.5 mm, or 0.002" and 0.02".
+    public static func defaults(for units: LengthUnit) -> RestSettings {
+        units == .inch ? RestSettings(tolerance: 0.002.inch, margin: 0.02.inch) : RestSettings()
+    }
+
+    /// The tolerance in use, mm (at least a micron).
+    public var toleranceInUse: Double { max(0.001, tolerance) }
+    /// The margin in use, mm.
+    public var marginInUse: Double { max(0, margin) }
 }
 
 extension Finish3DParams: Codable {
     private enum CodingKeys: String, CodingKey {
-        case stepoverFraction, rasterAngle, allowance, boundary, boundaryMargin, strategy, crossHatch, steepAngle, overlap, smoothLinks
+        case stepoverFraction, rasterAngle, allowance, boundary, boundaryMargin, strategy, crossHatch, steepAngle, overlap, smoothLinks, rest
     }
 
     /// Keys missing from older files read as the raster without cross-hatching or smooth links they meant.
@@ -787,6 +853,7 @@ extension Finish3DParams: Codable {
         steepAngle = try c.decodeIfPresent(Double.self, forKey: .steepAngle)
         overlap = try c.decodeIfPresent(Double.self, forKey: .overlap)
         smoothLinks = try c.decodeIfPresent(Bool.self, forKey: .smoothLinks) ?? false
+        rest = try c.decodeIfPresent(RestSettings.self, forKey: .rest)
     }
 
     /// Defaults are left out, so a plain raster saves exactly as before (apart from smooth links, which are on).
@@ -802,6 +869,7 @@ extension Finish3DParams: Codable {
         try c.encodeIfPresent(steepAngle, forKey: .steepAngle)
         try c.encodeIfPresent(overlap, forKey: .overlap)
         if smoothLinks { try c.encode(smoothLinks, forKey: .smoothLinks) }
+        try c.encodeIfPresent(rest, forKey: .rest)
     }
 }
 
@@ -1324,7 +1392,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// Chamfers, flutes and prisms are format 8 (older builds can't read them). 3D finishing other than a single raster
     /// is format 10 (see `Finish3DParams.requiredFormatVersion`). 3D rotary roughing is format 12. Adaptive pocket
     /// clearing is format 13. A whole-board inlay plug is format 14. A tapered ball nose, form or dovetail bit, as the
-    /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`).
+    /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`). 3D rest finishing
+    /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`).
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {

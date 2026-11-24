@@ -157,6 +157,17 @@ enum DebugSnapshot {
             }
             for corner in corners { if let reason = CanvasController.flagReason(corner) { log("corner \(op.name): \(reason)") } }
         }
+        // Each rest toolpath selected in the top view, so its rest areas are shaded (rest-op-N.png).
+        for (i, op) in project.operations.enumerated() {
+            guard let areas = ws.job?.toolpaths.last(where: { $0.sourceOperationID == op.id && $0.restAreas != nil })?.restAreas else { continue }
+            ws.selection = [.operation(op.id)]
+            ws.rebuildLines(project)
+            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .top) {
+                write(img, to: out.appendingPathComponent("rest-op-\(i).png"))
+            }
+            let regions = Region.nest(areas)
+            log("rest \(op.name): \(regions.count) areas, \(String(format: "%.1f", regions.reduce(0) { $0 + $1.area })) mm²")
+        }
         ws.selection = []
         ws.rebuildLines(project)
         // 4. Each inspector at full height, sections below the fold included, and the checks Export runs.

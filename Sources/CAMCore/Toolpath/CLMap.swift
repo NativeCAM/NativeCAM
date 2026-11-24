@@ -58,6 +58,18 @@ struct CLMap: Sendable {
         onModel = model.array
     }
 
+    /// A map of `grid`'s nodes whose samples are already worked out (as `init(dropper:floor:grid:)` would).
+    init(dropper: CombinedDrop, floor: Double, grid: SurfaceGrid, z: [Double], onModel: [Bool]) {
+        self.dropper = dropper
+        self.floor = floor
+        pitch = grid.cellSize
+        origin = grid.origin
+        columns = grid.columns
+        rows = grid.rows
+        self.z = z
+        self.onModel = onModel
+    }
+
     static func sample(_ d: CombinedDrop, floor: Double, _ p: Vec2, hint: inout Int32) -> Sample {
         var h = hint
         let e = d.exact?.z(at: p, hint: &h) ?? -.infinity

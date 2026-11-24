@@ -129,7 +129,9 @@ struct OperationInspector: View {
                 }
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = $0; set(q) }), units: units)
             }
-            RestMachiningSection(params: Binding(get: { p }, set: { set($0) }), tool: op.tool, units: units)
+            RestMachiningSection(params: Binding(get: { p }, set: { set($0) }), tool: op.tool, units: units,
+                                 earlier: p.restsFromEarlier ? RestMachining.pocketReferences(for: op, in: project) : nil,
+                                 left: workspace.job?.toolpaths.last { $0.sourceOperationID == op.id }?.restAreas)
             DepthSection(depth: Binding(get: { p.depth }, set: { var q = p; q.depth = $0; set(q) }), tool: op.tool, stock: project.stock, units: units,
                          defaultPassDepth: p.defaultPassDepth(op.tool),
                          passHelp: p.strategy == .adaptive ? "Defaults to the tool's flute length: adaptive cuts the full depth of its flutes at once" : nil)
@@ -177,9 +179,15 @@ struct OperationInspector: View {
             }
         case let .finish3D(p):
             let set: (Finish3DParams) -> Void = { op.kind = .finish3D($0) }
-            let stepover = op.tool.diameter * p.stepoverFraction
+            let stepover = op.tool.stepoverBasis * p.stepoverFraction
             Section("3D Finishing") {
-                Picker("Strategy", selection: Binding(get: { p.strategy }, set: { var q = p; q.strategy = $0; set(q) })) {
+                Picker("Strategy", selection: Binding(get: { p.strategy }, set: {
+                    var q = p
+                    q.strategy = $0
+                    // A rest pass starts from the defaults in the job's units.
+                    if $0 == .rest, q.rest == nil { q.rest = .defaults(for: units) }
+                    set(q)
+                })) {
                     ForEach(Finish3DStrategy.allCases) { Text($0.label).tag($0) }
                 }
                 Picker("Machine", selection: Binding(get: { p.boundary }, set: { var q = p; q.boundary = $0; set(q) })) {
@@ -222,6 +230,10 @@ struct OperationInspector: View {
                     .help("Turn between raster rows on an arc, and start passes off the model (ramping in, or coming onto a waterline loop from the open side) instead of plunging onto it")
                 Text(finishingNote(p.strategy))
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if p.strategy == .rest {
+                RestFinishSection(params: p, op: op, project: project, units: units,
+                                  areas: workspace.job?.toolpaths.first { $0.sourceOperationID == op.id }?.restAreas, set: set)
             }
         case let .vcarve(p):
             let set: (VCarveParams) -> Void = { op.kind = .vcarve($0) }
@@ -835,6 +847,8 @@ func finishingNote(_ strategy: Finish3DStrategy) -> String {
         "Waterline loops on slopes steeper than the steep angle and raster rows on the rest, overlapping a little, so the scallop stays about the same on both."
     case .pencil:
         "One pass along each concave crease, where the bit touches two faces at once. Run it with a smaller ball nose after the main finish."
+    case .rest:
+        "Finishes only where the larger bits of the toolpaths it follows couldn't reach: crevices, serifs and tight valleys. Use a smaller ball or tapered ball nose after the main finish."
     }
 }
 
@@ -1095,6 +1109,10 @@ struct RestMachiningSection: View {
     @Binding var params: PocketParams
     let tool: Tool
     let units: LengthUnit
+    /// With rest from earlier toolpaths on: what it follows.
+    var earlier: RestMachining.References? = nil
+    /// What's left for this toolpath's bit, from the last generation (nil when unknown).
+    var left: [Polyline]? = nil
     @Environment(ToolLibraryStore.self) private var library
 
     /// Flat-bottomed bits that can clear a pocket floor.
@@ -1135,6 +1153,95 @@ struct RestMachiningSection: View {
                 Text("Clears the bulk with a big bit and sends this toolpath's bit only where the big one can't reach.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            Toggle("Rest from earlier toolpaths", isOn: Binding(get: { params.restsFromEarlier }, set: { params.restFromEarlier = $0 ? true : nil }))
+                .help("Cut only what the pocket toolpaths before this one, with larger bits on the same shapes, couldn't reach")
+            if let earlier {
+                if earlier.operations.isEmpty {
+                    Text(earlier.warnings.last ?? "")
+                        .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    LabeledContent("Follows", value: earlier.operations.map { "\($0.name) (T\($0.tool.number))" }.joined(separator: ", "))
+                    if let left {
+                        let area = Region.nest(left).reduce(0) { $0 + $1.area }
+                        let a = units == .inch ? area / (25.4 * 25.4) : area
+                        LabeledContent("Left to cut", value: left.isEmpty ? "Nothing"
+                            : "\(a.formatted(.number.precision(.fractionLength(units == .inch ? 3 : 1)))) \(units.symbol)²")
+                    }
+                    Text("\(tool.name) cuts only the corners and narrow parts those bits couldn't reach, and the walls there. "
+                        + "The areas are shaded on the canvas.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+/// 3D rest finishing's settings: which toolpaths it follows, the tolerance and margin, and the pencil pass.
+struct RestFinishSection: View {
+    let params: Finish3DParams
+    let op: CAMOperation
+    let project: Project
+    let units: LengthUnit
+    /// The rest areas from the last generation (nil when unknown).
+    let areas: [Polyline]?
+    let set: (Finish3DParams) -> Void
+
+    private var rest: RestSettings { params.rest ?? .defaults(for: units) }
+
+    private func update(_ change: (inout RestSettings) -> Void) {
+        var q = params
+        var r = rest
+        change(&r)
+        q.rest = r
+        set(q)
+    }
+
+    var body: some View {
+        let refs = RestMachining.references(for: op, in: project)
+        Section("Rest") {
+            Toggle("Follow earlier finishes automatically", isOn: Binding(get: { rest.references == nil }, set: { automatic in
+                update { $0.references = automatic ? nil : refs.operations.map(\.id) }
+            }))
+            .help("Every enabled 3D finishing toolpath before this one on the same model, with a larger bit")
+            if rest.references == nil {
+                LabeledContent("Follows", value: refs.operations.isEmpty ? "None"
+                    : refs.operations.map { "\($0.name) (T\($0.tool.number))" }.joined(separator: ", "))
+            } else {
+                let candidates = RestMachining.candidates(for: op, in: project)
+                if candidates.isEmpty {
+                    Text("No other 3D finishing toolpath finishes this model.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(candidates) { c in
+                    Toggle("\(c.name) (T\(c.tool.number) \(c.tool.name))", isOn: Binding(get: { rest.references?.contains(c.id) == true }, set: { on in
+                        update { r in
+                            var ids = r.references ?? []
+                            ids.removeAll { $0 == c.id }
+                            if on { ids.append(c.id) }
+                            r.references = ids
+                        }
+                    }))
+                }
+            }
+            LengthField(title: "Rest tolerance", mm: Binding(get: { rest.tolerance }, set: { v in update { $0.tolerance = max(0.001, v) } }),
+                        units: units, help: "Material thicker than this, square to the surface, counts as left over")
+            LengthField(title: "Margin", mm: Binding(get: { rest.margin }, set: { v in update { $0.margin = max(0, v) } }), units: units,
+                        help: "How far each rest area is grown, so the passes run a little onto the finished surface round it")
+            Toggle("Pencil pass along creases", isOn: Binding(get: { rest.pencil }, set: { v in update { $0.pencil = v } }))
+                .help("After the raster, one pass along each concave crease inside the rest areas")
+            if let areas {
+                let area = Region.nest(areas).reduce(0) { $0 + $1.area }
+                let a = units == .inch ? area / (25.4 * 25.4) : area
+                let count = Region.nest(areas).count
+                LabeledContent("Rest areas", value: areas.isEmpty ? "Nothing left"
+                    : "\(count) area\(count == 1 ? "" : "s"), \(a.formatted(.number.precision(.fractionLength(units == .inch ? 3 : 1)))) \(units.symbol)²")
+            }
+            ForEach(Array((refs.warnings + (refs.refusal.map { [$0] } ?? [])).enumerated()), id: \.offset) { _, w in
+                Text(w).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Works out where each reference's bit couldn't reach (its own scallops don't count) and rasters only there, at the raster "
+                + "angle, with links above the model. The areas are shaded on the canvas.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

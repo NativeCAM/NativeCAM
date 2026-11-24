@@ -212,6 +212,38 @@ struct TriangleDropCutter: Sendable {
     /// Triangle t's corners (t from `z(at:hint:)`'s winner).
     func corners(_ t: Int) -> (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>) { (vertex(t, 0), vertex(t, 1), vertex(t, 2)) }
 
+    /// Where the cutter dropped at `p` to tip height `z` touches triangle `t` (the drop's winner), and the model's
+    /// upward unit normal there (square to the cutter where it touches). nil for a flat end mill or a form bit, whose
+    /// contact this doesn't work out.
+    func contact(at p: Vec2, tip z: Double, triangle t: Int) -> (point: SIMD3<Double>, normal: SIMD3<Double>)? {
+        guard t >= 0, t < triangleCount else { return nil }
+        let (a, b, c) = corners(t)
+        switch kind {
+        case .ball:
+            // The ball's centre is a radius above the tip; the contact is the triangle's point nearest it.
+            let centre = SIMD3(p.x, p.y, z + radius)
+            let q = CLMap.closestPoint(centre, a, b, c)
+            let d = centre - q
+            let len = simd_length(d)
+            return (q, len > 1e-9 ? d / len : SIMD3(0, 0, 1))
+        case .profile:
+            let n = SIMD3(nx[t], ny[t], nz[t])
+            guard let shape = profile, let hit = shape.touch(a, b, c, p, normal: n) else { return nil }
+            let q = hit.point
+            if hit.facet { return (q, n) }
+            let off = Vec2(q.x - p.x, q.y - p.y)
+            let rho = off.length
+            guard rho > 1e-9 else { return (q, SIMD3(0, 0, 1)) }
+            let u = off / rho
+            let k = shape.slope(at: rho)
+            guard k.isFinite else { return (q, SIMD3(-u.x, -u.y, 0)) }
+            let m = SIMD3(-k * u.x, -k * u.y, 1)
+            return (q, m / simd_length(m))
+        case .flat, .rings:
+            return nil
+        }
+    }
+
     /// What triangle t asks the tip to rise to at p (or, for a profile, anything up to `best` when it can't beat it).
     @inline(__always) private func value(_ t: Int, _ p: Vec2, best: Double = -.infinity) -> Double {
         let a = vertex(t, 0), b = vertex(t, 1), c = vertex(t, 2)
@@ -492,6 +524,101 @@ struct CutterProfile: Sendable, Equatable {
     @inline(__always) func height(_ r: Double) -> Double {
         for p in pieces where r <= p.r1 { return p.height(r) }
         return pieces.last.map { $0.height($0.r1) } ?? 0
+    }
+
+    /// dh/dr at distance r from the axis (infinite where an arc turns vertical).
+    func slope(at r: Double) -> Double {
+        for p in pieces where r <= p.r1 { return p.slope(max(r, p.r0)) }
+        return pieces.last.map { $0.slope($0.r1) } ?? 0
+    }
+
+    /// Distance from a point `r` from the axis and `z` above the tip to the cutter: its profile, and the shank going
+    /// straight up from the rim. 0 for a point inside it. Its surface of revolution means the nearest point is in the
+    /// same half-plane through the axis.
+    func distance(radial r: Double, height z: Double) -> Double {
+        let R = radius
+        guard !pieces.isEmpty else { return .infinity }
+        if r <= R + 1e-12, z >= height(min(r, R)) - 1e-12 { return 0 }
+        var best = Double.infinity
+        func toPoint(_ pr: Double, _ pz: Double) { best = min(best, ((r - pr) * (r - pr) + (z - pz) * (z - pz)).squareRoot()) }
+        for p in pieces {
+            if p.isArc {
+                let dr = r - p.cR, dz = z - p.cH
+                let phi = atan2(dr, -dz) // from straight down, out from the axis
+                let phi0 = asin(max(-1, min(1, (p.r0 - p.cR) / p.c))), phi1 = asin(max(-1, min(1, (p.r1 - p.cR) / p.c)))
+                if phi >= phi0 - 1e-12, phi <= phi1 + 1e-12 {
+                    best = min(best, abs((dr * dr + dz * dz).squareRoot() - p.c))
+                } else {
+                    toPoint(p.r0, p.height(p.r0))
+                    toPoint(p.r1, p.height(p.r1))
+                }
+            } else {
+                let a = Vec2(p.r0, p.height(p.r0)), b = Vec2(p.r1, p.height(p.r1))
+                let d = b - a, w = Vec2(r, z) - a
+                let t = max(0, min(1, d.dot(w) / max(d.dot(d), 1e-300)))
+                toPoint(a.x + d.x * t, a.y + d.y * t)
+            }
+        }
+        let top = height(R)
+        if z >= top { best = min(best, abs(r - R)) }
+        return best
+    }
+
+    /// Like `tip`, the tip Z of this cutter dropped at `p` onto the triangle a, b, c, with the point of the triangle it
+    /// touches, and whether that's inside the triangle (a facet contact, whose normal is the triangle's) rather than on
+    /// an edge or corner. nil when it misses.
+    func touch(_ a: SIMD3<Double>, _ b: SIMD3<Double>, _ c: SIMD3<Double>, _ p: Vec2, normal n: SIMD3<Double>)
+        -> (z: Double, point: SIMD3<Double>, facet: Bool)? {
+        let R = radius
+        var best = -Double.infinity
+        var at = SIMD3<Double>.zero
+        var facet = false
+        if n.z > 1e-9 {
+            let gx = -n.x / n.z, gy = -n.y / n.z
+            let s = (gx * gx + gy * gy).squareRoot()
+            let r = facetRadius(s)
+            let qx = s > 1e-12 ? p.x + r * gx / s : p.x, qy = s > 1e-12 ? p.y + r * gy / s : p.y
+            if TriangleDropCutter.insideXY(SIMD3(qx, qy, 0), a, b, c) {
+                let qz = a.z + gx * (qx - a.x) + gy * (qy - a.y)
+                best = qz - height(r)
+                at = SIMD3(qx, qy, qz)
+                facet = true
+            }
+        }
+        for v in [a, b, c] {
+            let dx = v.x - p.x, dy = v.y - p.y
+            let d2 = dx * dx + dy * dy
+            if d2 <= R * R {
+                let z = v.z - height(d2.squareRoot())
+                if z > best { best = z; at = v; facet = false }
+            }
+        }
+        for (v1, v2) in [(a, b), (b, c), (c, a)] {
+            let ex = v2.x - v1.x, ey = v2.y - v1.y
+            let L2 = ex * ex + ey * ey
+            guard L2 > 1e-18 else { continue }
+            let L = L2.squareRoot()
+            let wx = p.x - v1.x, wy = p.y - v1.y
+            let s0 = (wx * ex + wy * ey) / L
+            let d = abs(wx * ey - wy * ex) / L
+            guard d <= R else { continue }
+            let U = max(0, R * R - d * d).squareRoot()
+            var lo = max(-s0, -U), hi = min(L - s0, U)
+            guard lo <= hi else { continue }
+            var m = (v2.z - v1.z) / L
+            let flip = m < 0
+            if flip {
+                m = -m
+                (lo, hi) = (-hi, -lo)
+            }
+            var u = min(max(edgePeak(m: m, d: d, limit: U), lo), hi)
+            if flip { u = -u }
+            let t = max(0, min(1, (s0 + u) / L))
+            let q = v1 + (v2 - v1) * t
+            let z = q.z - height(min(R, (d * d + u * u).squareRoot()))
+            if z > best { best = z; at = q; facet = false }
+        }
+        return best.isFinite ? (best, at, facet) : nil
     }
 
     /// Where on the cutter a plane of slope s (rise over run) touches it: the distance from the axis at which the

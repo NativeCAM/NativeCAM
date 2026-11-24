@@ -319,6 +319,7 @@ enum TileSplitter {
             return r
         }
         t.reliefCorners = nil
+        t.restAreas = nil
         return t
     }
 

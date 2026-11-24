@@ -25,6 +25,9 @@ public struct GenerationContext: Sendable {
     public var protectedRegions: ProtectedRegions?
     /// The project's display units, which generators' warnings give lengths and feeds in (like the job's checks).
     public var units: LengthUnit
+    /// The whole project, for toolpaths that follow what earlier ones cut (rest machining, `RestMachining`). nil when an
+    /// operation is generated on its own: a rest toolpath then has no references.
+    public var project: Project?
 
     public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005,
                 units: LengthUnit = .mm) {
@@ -183,10 +186,11 @@ public enum CAMEngine {
 
     /// One sheet's toolpaths and checks (the whole job, on a job of one sheet), without the run-order check.
     static func generateSheet(_ project: Project, operationIDs: Set<UUID>?) -> JobResult {
-        let ctx = GenerationContext(stock: project.stock, machine: project.machine,
+        var ctx = GenerationContext(stock: project.stock, machine: project.machine,
                                     flattenTolerance: 0.01,
                                     arcTolerance: min(0.005, project.machine.arcFitTolerance / 2),
                                     units: project.displayUnits)
+        ctx.project = project
         var toolpaths: [Toolpath] = []
         var issues: [JobIssue] = []
         // Coarse model of the material as each toolpath removes it (drives links and rest-aware depths). A rotary job
@@ -388,6 +392,8 @@ public enum CAMEngine {
             let byID = Dictionary(project.operations.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             for late in r.outOfOrder {
                 guard let early = byID[late.operation], let later = byID[late.mustPrecede] else { continue }
+                // A rest toolpath before what it rests on says so itself (`RestMachining.references`).
+                if RestMachining.dependencies(of: later, in: project).contains(early.id) { continue }
                 if early.kind.is3D && later.kind.is3D {
                     issues.append(JobIssue(.warning, "Runs before its roughing (“\(early.name)”). "
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))

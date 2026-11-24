@@ -19,7 +19,8 @@ public struct Project: Hashable, Sendable {
     /// inlay plugs, which a format-13 build can't read. Format 15 adds tapered ball nose, form and dovetail bits, which a
     /// format-14 build can't read. Format 16 adds jobs nested onto several sheets: an older build would ignore which
     /// sheet each part is on and cut them all on top of each other on the first. A job of one sheet doesn't raise it.
-    public static let currentFormatVersion = 16
+    /// Format 17 adds 3D rest finishing, which an older build can't read.
+    public static let currentFormatVersion = 17
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
