@@ -158,8 +158,10 @@ final class Workspace {
 
     /// Top surface of all models over the stock (nil when the project has no 3D models). Models on a rotary blank are
     /// shown on it instead (`RotaryModelPreview`).
+    /// Mouldings' swept surfaces are shown the same way, as a shaded band along their rails.
     nonisolated static func previewSurface(_ project: Project) -> SurfaceGrid? {
         let models = project.shapes.filter { $0.modelSpec != nil && (project.stock.rotary == nil || $0.modelSpec?.rotary == nil) }
+            + (project.stock.rotary == nil ? project.mouldingSurfaces : [])
         guard !models.isEmpty else { return nil }
         let area = project.stock.bounds
         let cell = ModelRaster.cellSize(for: area, preferred: max(project.stock.width, project.stock.height) / 1200, maxCells: 1_500_000)

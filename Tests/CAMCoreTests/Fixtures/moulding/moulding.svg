@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written for NativeCAM's moulding tests (GPL-3.0-or-later), 100 user units per inch. Each group is a layer:
+     Profile        an ogee 1.5 in across and 0.5 in tall, drawn from its start on the rail (high, at the left)
+     TrimProfile    a cove 1.2 in across and 0.4 in tall, for the curved trim
+     ClosedProfile  a closed shape, which a moulding refuses as its profile
+     FrameRail      a 12 x 10 in rectangle: a picture frame's outside edge
+     CurvedRail     an open, gently curved rail: a piece of curved trim
+     TightRail      an open L whose corner is rounded to 0.5 in radius, tighter than the ogee is wide
+     SmallRing      a closed circle 0.6 in in radius, smaller than the ogee is wide -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16in" height="20in" viewBox="0 0 1600 2000">
+  <g id="Profile">
+    <path fill="none" d="M 1400 250 L 1415 250 C 1460 250 1460 275 1475 275 C 1490 275 1490 300 1535 300 L 1550 300"/>
+  </g>
+  <g id="TrimProfile">
+    <path fill="none" d="M 1400 560 C 1450 560 1480 580 1490 600 L 1520 600"/>
+  </g>
+  <g id="ClosedProfile">
+    <path d="M 1400 750 L 1550 750 L 1550 800 L 1400 800 Z"/>
+  </g>
+  <g id="FrameRail">
+    <rect x="100" y="100" width="1200" height="1000"/>
+  </g>
+  <g id="CurvedRail">
+    <path fill="none" d="M 200 1900 C 500 1550 1100 1550 1400 1900"/>
+  </g>
+  <g id="TightRail">
+    <path fill="none" d="M 200 1300 L 700 1300 A 50 50 0 0 0 750 1250 L 750 900"/>
+  </g>
+  <g id="SmallRing">
+    <circle cx="1450" cy="1000" r="60"/>
+  </g>
+</svg>
