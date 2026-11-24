@@ -172,11 +172,9 @@ public struct OpenSBPPost: PostProcessor {
                 state = (round(start.x), round(start.y), round(safe))
             }
 
-            var position = tp.start
             for m in tp.motions {
                 let e = stock.toWork(m.end)
                 let r = (round(e.x), round(e.y), round(e.z))
-                defer { position = m.end }
                 switch m.kind {
                 case .dwell:
                     line("PAUSE \(String(format: "%.2f", m.feed))")

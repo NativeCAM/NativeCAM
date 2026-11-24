@@ -190,9 +190,10 @@ public extension Project {
         let layout = inlayLayout(ids, boundary: settings.boundary)
         guard let first = layout.design.first else { return nil }
         // The design's sheet as a job of its own, without tiles: only the one side cut.
-        var base = sheetCount > 1 ? sheetProject(shape(id: first).map { sheetIndex(of: $0) } ?? 0) : self
-        base.tiling = nil
-        func seconds(_ op: CAMOperation) -> Double {
+        var sheet = sheetCount > 1 ? sheetProject(shape(id: first).map { sheetIndex(of: $0) } ?? 0) : self
+        sheet.tiling = nil
+        let base = sheet // an immutable copy, so the parallel loop below only reads it
+        @Sendable func seconds(_ op: CAMOperation) -> Double {
             var p = base
             var o = op
             o.enabled = true
