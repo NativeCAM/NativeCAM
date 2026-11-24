@@ -101,9 +101,15 @@ public enum RestMachining {
                                     : "\(missing) of its references have been deleted, so they aren't counted.")
             }
         } else {
-            for ref in ops[..<min(index, ops.count)] where ref.enabled && finishesSurface(ref) && !models.isDisjoint(with: ref.shapeIDs)
-                && tipRadius(ref.tool) > size + 1e-6 {
-                out.operations.append(ref)
+            // Earlier enabled finishes of this model, whatever their bits; those with larger bits are its references.
+            let earlier = ops[..<min(index, ops.count)].filter { $0.enabled && finishesSurface($0) && !models.isDisjoint(with: $0.shapeIDs) }
+            out.operations = earlier.filter { tipRadius($0.tool) > size + 1e-6 }
+            if out.operations.isEmpty, !earlier.isEmpty {
+                // There are earlier finishes, but none with a larger bit: say so, as a reference picked by hand is refused.
+                let same = earlier.contains { abs(tipRadius($0.tool) - size) <= 1e-6 }
+                out.warnings.append("The earlier finishes on this model use \(same ? "bits no larger than" : "smaller bits than") this one, "
+                    + "so there's nothing for it to rest from. A rest pass needs a smaller bit than the finish it follows.")
+                return out
             }
         }
         if out.operations.isEmpty && out.refusal == nil {

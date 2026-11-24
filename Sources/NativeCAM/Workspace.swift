@@ -483,30 +483,40 @@ final class Workspace {
         return job?.toolpaths.last { $0.sourceOperationID == id && $0.restAreas != nil }?.restAreas
     }
 
-    /// Line geometry shading the selected toolpath's rest areas: their outlines and 45° hatching inside them, in amber.
+    /// Line geometry shading the selected toolpath's rest areas in a deep amber that stands out against a shaded model
+    /// (#108): each outline drawn as a band of parallel lines, so it reads as a thick edge, and cross-hatching inside.
     private func restAreaLines(_ project: Project) -> [LineVertex] {
         guard !isSimulating, rotaryAxis == nil, let loops = selectedRestAreas(project), !loops.isEmpty else { return [] }
         var v: [LineVertex] = []
         let z: Float = 0.055
-        let edge = SIMD4<Float>(1, 0.76, 0.2, 0.95), hatch = SIMD4<Float>(1, 0.76, 0.2, 0.55)
+        let edge = SIMD4<Float>(1, 0.55, 0.05, 1), hatch = SIMD4<Float>(1, 0.6, 0.1, 0.8)
         func line(_ a: Vec2, _ b: Vec2, _ c: SIMD4<Float>) {
             v.append(LineVertex(SIMD3(Float(a.x), Float(a.y), z), c))
             v.append(LineVertex(SIMD3(Float(b.x), Float(b.y), z), c))
         }
-        for loop in loops {
+        func outline(_ loop: Polyline, _ c: SIMD4<Float>) {
             for i in 0..<loop.segmentCount {
                 let (a, b) = loop.segment(i)
-                line(a, b, edge)
+                line(a, b, c)
             }
         }
-        // Hatching a fixed distance apart on the material, at least 100 lines across the stock's diagonal.
+        let diagonal = hypot(project.stock.width, project.stock.height)
+        // The edge: each outline and a line either side of it, a small step apart on the material.
+        let step = max(0.05, diagonal / 2000)
+        for loop in loops {
+            outline(loop, edge)
+            for d in [step, 2 * step] {
+                for band in Clipper.offset([loop], delta: d, end: .joined) { outline(band, edge) }
+            }
+        }
+        // Cross-hatching a fixed distance apart on the material, at least 125 lines each way across the stock's diagonal.
         let bounds = loops.bounds
-        let gap = max(0.4, min(2, hypot(project.stock.width, project.stock.height) / 100))
+        let gap = max(0.3, min(1.6, diagonal / 125))
         var raw: [Polyline] = []
         var t = -bounds.height
         while t <= bounds.width {
-            let a = Vec2(bounds.min.x + t, bounds.min.y), b = Vec2(bounds.min.x + t + bounds.height, bounds.max.y)
-            raw.append(Polyline([a, b], closed: false))
+            raw.append(Polyline([Vec2(bounds.min.x + t, bounds.min.y), Vec2(bounds.min.x + t + bounds.height, bounds.max.y)], closed: false))
+            raw.append(Polyline([Vec2(bounds.min.x + t, bounds.max.y), Vec2(bounds.min.x + t + bounds.height, bounds.min.y)], closed: false))
             t += gap * 2.squareRoot()
         }
         for piece in Clipper.clipOpen(raw, to: loops, fill: .evenOdd) {
