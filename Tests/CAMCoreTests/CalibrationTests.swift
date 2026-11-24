@@ -324,6 +324,186 @@ struct CalibrationTests {
         #expect(verdict.text.contains("slows at each change of F"), "\(verdict.text)")
     }
 
+    /// The figures an F-change verdict quotes: the two lines' times, the time NativeCAM expected for the line with two
+    /// feeds, and the share it was slower than that (negative when quicker).
+    struct FChangeFigures {
+        var alternating: Double
+        var single: Double
+        var expected: Double
+        var percent: Double
+    }
+
+    static func fChangeFigures(_ text: String) throws -> FChangeFigures {
+        let pattern = try Regex(#"took (\d+\.\d) s against (\d+\.\d) s at one feed; NativeCAM expected (\d+\.\d) s for it, "#
+            + #"so it was (\d+\.\d)% (slower|quicker) than expected"#)
+        let match = try #require(text.firstMatch(of: pattern), "\(text)")
+        func value(_ i: Int) throws -> Double { try #require(match.output[i].substring.flatMap { Double($0) }) }
+        let sign = match.output[5].substring == "quicker" ? -1.0 : 1.0
+        return FChangeFigures(alternating: try value(1), single: try value(2), expected: try value(3), percent: sign * (try value(4)))
+    }
+
+    /// The F-change verdict decides whether "Adjust feeds for load" can default on, so it must check by hand: it quotes
+    /// the time NativeCAM expected, and its percentage is the quoted times' own, passing and failing.
+    @Test func fChangeVerdictCanBeCheckedByHand() throws {
+        let passing = try Calibration.readTimes(String(contentsOf: Self.fixtures.appendingPathComponent("times.csv"), encoding: .utf8))
+        let plan = try #require(passing.plan)
+        var slow = passing.measured
+        slow["fchange-alternating"] = (slow["fchange-single"] ?? 0) * 1.15
+        let failing = Calibration.Times(kind: .timing, controller: plan.controller, plan: plan, measured: slow)
+        var outcomes: [Bool] = []
+        for times in [passing, failing] {
+            let fit = try Calibration.fit([times], machine: MachineProfile())
+            let verdict = try #require(fit.fChange)
+            outcomes.append(verdict.passed)
+            let f = try Self.fChangeFigures(verdict.text)
+            // The times quoted are the ones measured.
+            let single = try #require(times.measured["fchange-single"])
+            let alternating = try #require(times.measured["fchange-alternating"])
+            #expect(abs(f.single - single) <= 0.05 + 1e-9, "\(verdict.text)")
+            #expect(abs(f.alternating - alternating) <= 0.05 + 1e-9, "\(verdict.text)")
+            // The time expected is the single-feed line's, scaled by NativeCAM's estimates of the two lines.
+            let singleRow = try #require(fit.rows.first { $0.id == "fchange-single" })
+            let alternatingRow = try #require(fit.rows.first { $0.id == "fchange-alternating" })
+            let expected = f.single * alternatingRow.after / singleRow.after
+            #expect(abs(f.expected - expected) <= 0.05 + 1e-9, "\(verdict.text): \(expected) s expected")
+            // The percentage quoted is the quoted two-feed time over the quoted expected time.
+            let recomputed = 100 * (f.alternating / f.expected - 1)
+            #expect(abs(recomputed - f.percent) <= 0.05 + 1e-9, "\(verdict.text): \(recomputed)%")
+            // And the verdict follows from it.
+            let limit = 100 * Calibration.fChangeTolerance
+            #expect(verdict.passed == (f.percent <= limit + 1e-9), "\(verdict.text)")
+            if f.percent >= 0 {
+                #expect(verdict.text.contains(verdict.passed ? "slower than expected (within 3%)" : "slower than expected (more than 3%)"),
+                        "\(verdict.text)")
+            }
+            guard !verdict.passed else { continue }
+            // What each change costs: the time over the expected one, shared between the changes quoted.
+            let cost = try Regex(#"about (\d+\.\d\d) s at each of the line's (\d+) changes"#)
+            let match = try #require(verdict.text.firstMatch(of: cost), "\(verdict.text)")
+            let lost = try #require(match.output[1].substring.flatMap { Double($0) })
+            let changes = try #require(match.output[2].substring.flatMap { Double($0) })
+            #expect(changes > 0)
+            #expect(abs((f.alternating - f.expected) / changes - lost) <= 0.005 + 1e-9, "\(verdict.text)")
+        }
+        #expect(outcomes == [true, false])
+    }
+
+    @Test func fChangeVerdictWording() {
+        // Exactly 3% slower than expected still passes; a tenth more doesn't.
+        let edge = Calibration.fChangeVerdict(single: 50, alternating: 51.5, ratio: 1, changes: 10, controller: "Mach4")
+        #expect(edge.passed)
+        #expect(edge.text.hasPrefix("the line with two feeds took 51.5 s against 50.0 s at one feed; NativeCAM expected 50.0 s for it, "
+            + "so it was 3.0% slower than expected (within 3%): Mach4 kept constant velocity"), "\(edge.text)")
+        let over = Calibration.fChangeVerdict(single: 50, alternating: 51.6, ratio: 1, changes: 10, controller: "Mach4")
+        #expect(!over.passed)
+        #expect(over.text.contains("so it was 3.2% slower than expected (more than 3%): Mach4 slows at each change of F, "
+            + "about 0.16 s at each of the line's 10 changes."), "\(over.text)")
+        // Quicker than expected passes, and says so.
+        let quick = Calibration.fChangeVerdict(single: 50, alternating: 50.5, ratio: 1.02, changes: 10, controller: "Mach4")
+        #expect(quick.passed)
+        #expect(quick.text.contains("NativeCAM expected 51.0 s for it, so it was 1.0% quicker than expected: Mach4 kept"), "\(quick.text)")
+    }
+
+    // MARK: The rotary check's times
+
+    /// A machine with Avid's rotary axis on, its turn speed not set (90°/s assumed).
+    static func rotaryMachine() -> MachineProfile {
+        var m = MachineProfile()
+        m.rotary = RotaryAxis()
+        return m
+    }
+
+    /// The turn speed the rotary times fixture was timed (made up) on, °/min: a 360° turn in 4.8 s, 720° in 9.6 s.
+    static let rotaryTruth = 4500.0
+    /// The fixture's times: the turns a stopwatch's tenth or so either way, and G93 on its 6 s.
+    static let rotaryMeasured: [String: Double] = ["rotary-g93": 6.1, "rotary-360": 4.9, "rotary-720": 9.5]
+    static let rotaryFixture = fixtures.appendingPathComponent("times-rotary.csv")
+
+    static func rotaryFixtureTimes() throws -> Calibration.Times {
+        if GoldenPostTests.updating {
+            let program = try Calibration.rotary(machine: rotaryMachine())
+            try FileManager.default.createDirectory(at: fixtures, withIntermediateDirectories: true)
+            try Calibration.timesCSV(program, measured: rotaryMeasured).write(to: rotaryFixture, atomically: true, encoding: .utf8)
+        }
+        return try Calibration.readTimes(String(contentsOf: rotaryFixture, encoding: .utf8))
+    }
+
+    @Test func rotaryTimesFixtureFits() throws {
+        let times = try Self.rotaryFixtureTimes()
+        #expect(times.kind == .rotary)
+        #expect(times.axisLetter == "A")
+        #expect(times.measured == Self.rotaryMeasured)
+        let machine = Self.rotaryMachine()
+        let fit = try Calibration.fit([times], machine: machine)
+        #expect(fit.programs == [.rotary])
+        let speed = try #require(fit.values.first { $0.field == .turnSpeed })
+        #expect(speed.determined)
+        #expect(speed.held == nil)
+        #expect(speed.before == RotaryAxis.nominalTurnSpeed)
+        #expect(abs(speed.after / Self.rotaryTruth - 1) < 0.05, "\(speed.after)")
+        // Both turns within a few percent of their times once fitted.
+        for row in fit.rows where row.fitted {
+            let error = try #require(row.errorAfter)
+            #expect(abs(error) < 0.03, "\(row.id): \(error)")
+        }
+        let g93 = try #require(fit.g93)
+        #expect(g93.passed, "\(g93.text)")
+        #expect(g93.text.hasPrefix("the inverse-time turn took 6.1 s, as expected (6 s): Avid"), "\(g93.text)")
+        #expect(fit.notes.isEmpty, "\(fit.notes)")
+        let report = fit.report(.inch)
+        #expect(report.contains("  Turn speed: 5400°/min (90.0°/s) -> \(speed.text(speed.after, .inch))"), "\(report)")
+        #expect(report.contains("G93: \(g93.text)"), "\(report)")
+        // Apply keeps the fitted speed, marked as measured.
+        var applied = machine
+        fit.apply(to: &applied, date: GoldenPostTests.date)
+        let kept = try #require(applied.rotary?.turnSpeed)
+        #expect(abs(kept - speed.after) < 1e-9)
+        #expect(applied.source(of: .turnSpeed)?.kind == .measured)
+        #expect(applied.source(of: .turnSpeed)?.note?.contains("rotary check") == true)
+    }
+
+    /// With no driven rotary axis the turns can still be timed: the row says the speed was fitted but not applied, and
+    /// quotes the same speed as the note.
+    @Test func turnSpeedFittedWithTheRotaryAxisOffIsNotApplied() throws {
+        let times = try Self.rotaryFixtureTimes()
+        var byHand = Self.rotaryMachine()
+        byHand.rotary?.turnsByHand = true
+        let cases: [(MachineProfile, String, String)] = [
+            (MachineProfile(), "the rotary axis is off", "Turn on the machine's rotary axis"),
+            (byHand, "the rotary axis is turned by hand", "Turn off Turn by hand"),
+        ]
+        for (machine, reason, advice) in cases {
+            let fit = try Calibration.fit([times], machine: machine)
+            let speed = try #require(fit.values.first { $0.field == .turnSpeed })
+            #expect(!speed.determined, "\(reason)")
+            #expect(speed.after == speed.before, "\(reason)")
+            let held = try #require(speed.held, "\(reason)")
+            #expect(held.reason == reason)
+            #expect(abs(held.value / Self.rotaryTruth - 1) < 0.05, "\(reason): \(held.value)")
+            let fitted = speed.text(held.value, .inch)
+            let row = speed.afterText(.inch)
+            #expect(row == "\(fitted) fitted, not applied: \(reason)")
+            #expect(!row.contains("not timed"))
+            let report = fit.report(.inch)
+            #expect(report.contains("  Turn speed: 5400°/min (90.0°/s) -> \(row)"), "\(report)")
+            let note = try #require(fit.notes.first { $0.hasPrefix(advice) }, "\(fit.notes)")
+            #expect(note.hasSuffix("to keep the fitted turn speed of \(fitted)."), "\(note)")
+            // G93 still gets its verdict, and nothing is applied.
+            #expect(fit.g93?.passed == true, "\(fit.g93?.text ?? "")")
+            #expect(fit.changes.isEmpty)
+            var applied = machine
+            fit.apply(to: &applied, date: GoldenPostTests.date)
+            #expect(applied == machine, "\(reason)")
+        }
+        // Not timed at all: the row says so, and there's no note.
+        let g93Only = Calibration.Times(kind: .rotary, controller: times.controller, axisLetter: "A", measured: ["rotary-g93": 6.1])
+        let fit = try Calibration.fit([g93Only], machine: MachineProfile())
+        let speed = try #require(fit.values.first { $0.field == .turnSpeed })
+        #expect(speed.held == nil)
+        #expect(speed.afterText(.inch) == "not timed, stays")
+        #expect(fit.notes.isEmpty, "\(fit.notes)")
+    }
+
     @Test func rotaryFitAndG93Verdict() throws {
         var machine = MachineProfile()
         machine.rotary = RotaryAxis()
@@ -461,5 +641,55 @@ struct CalibrationCommandLineTests {
         let bad = try CommandLineTests.run(["calibrate", "fit", CalibrationTests.fixtures.appendingPathComponent("unfittable-times.csv").path])
         #expect(bad.status != 0)
         #expect(bad.output.contains("Not fitted"), "\(bad.output)")
+    }
+
+    /// The turn speed fitted from the rotary times fixture, read from the report's row.
+    static func turnSpeedRow(_ output: String) throws -> (fitted: Double, text: String) {
+        let pattern = try Regex(#"Turn speed: 5400°/min \(90\.0°/s\) -> ((\d+)°/min \(\d+\.\d°/s\))"#)
+        let match = try #require(output.firstMatch(of: pattern), "\(output)")
+        let text = try #require(match.output[1].substring.map(String.init))
+        return (try #require(match.output[2].substring.flatMap { Double($0) }), text)
+    }
+
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: CommandLineTests.cli.path)))
+    func calibrateFitsRotaryTimes() throws {
+        let dir = try CommandLineTests.folder()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let timing = CalibrationTests.fixtures.appendingPathComponent("times.csv").path
+        let rotary = CalibrationTests.rotaryFixture.path
+
+        // A machine with its rotary axis on: both programs' times at once, the turn speed fitted and applied.
+        var project = Project()
+        project.machine.rotary = RotaryAxis()
+        let path = dir.appendingPathComponent("rotary.nativecam")
+        try project.encoded().write(to: path)
+        let report = try CommandLineTests.run(["calibrate", "fit", timing, rotary, path.path])
+        #expect(report.status == 0, "\(report.output)")
+        #expect(report.output.contains("Fitted Timing suite and Rotary check times"), "\(report.output)")
+        let speed = try Self.turnSpeedRow(report.output)
+        #expect(abs(speed.fitted / CalibrationTests.rotaryTruth - 1) < 0.05, "\(report.output)")
+        #expect(report.output.contains("G93: the inverse-time turn took 6.1 s, as expected (6 s)"), "\(report.output)")
+        // The F-change verdict as printed, checked by hand.
+        let line = try #require(report.output.components(separatedBy: "\n").first { $0.hasPrefix("F-change line: ") })
+        let f = try CalibrationTests.fChangeFigures(line)
+        #expect(abs(100 * (f.alternating / f.expected - 1) - f.percent) <= 0.05 + 1e-9, "\(line)")
+        #expect(line.contains("slower than expected (within 3%)"), "\(line)")
+        let applied = try CommandLineTests.run(["calibrate", "fit", timing, rotary, path.path, "--apply"])
+        #expect(applied.status == 0, "\(applied.output)")
+        #expect(applied.output.contains("turn speed"), "\(applied.output)")
+        let machine = try Project.decode(Data(contentsOf: path)).machine
+        let kept = try #require(machine.rotary?.turnSpeed)
+        #expect(abs(kept / CalibrationTests.rotaryTruth - 1) < 0.05)
+
+        // No rotary axis (Avid's PRO6060 without a project): fitted, not applied, and the note quotes the same speed.
+        let off = try CommandLineTests.run(["calibrate", "fit", rotary])
+        #expect(off.status == 0, "\(off.output)")
+        let held = try Self.turnSpeedRow(off.output)
+        #expect(abs(held.fitted / CalibrationTests.rotaryTruth - 1) < 0.05, "\(off.output)")
+        #expect(off.output.contains("-> \(held.text) fitted, not applied: the rotary axis is off\n"), "\(off.output)")
+        #expect(!off.output.contains("not timed, stays"), "\(off.output)")
+        #expect(off.output.contains("Note: Turn on the machine's rotary axis (Material & Machine ▸ Rotary Axis) to keep the fitted "
+            + "turn speed of \(held.text)."), "\(off.output)")
+        #expect(off.output.contains("G93: the inverse-time turn took 6.1 s, as expected (6 s)"), "\(off.output)")
     }
 }

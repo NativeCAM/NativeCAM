@@ -205,7 +205,25 @@ public extension Calibration {
             public var after: Double
             /// The timed sections pin it down; when false it's left as it was.
             public var determined: Bool
+            /// A value the times did fit but that can't be applied, and why: the turn speed while the machine's rotary
+            /// axis is off. Not `determined`, so Apply leaves the machine's own value.
+            public var held: Held? = nil
             public var id: String { field.rawValue }
+
+            public struct Held: Hashable, Sendable {
+                /// The fitted value.
+                public var value: Double
+                /// Why it isn't applied: “the rotary axis is off”.
+                public var reason: String
+            }
+
+            /// What the fit makes of the value, for display: the fitted value, the fitted value and why it isn't applied
+            /// ("5400°/min (90.0°/s) fitted, not applied: the rotary axis is off"), or "not timed, stays".
+            public func afterText(_ u: LengthUnit) -> String {
+                if determined { return text(after, u) }
+                if let held { return "\(text(held.value, u)) fitted, not applied: \(held.reason)" }
+                return "not timed, stays"
+            }
 
             /// A value of this field for display: "50.0 in/s²", "400 in/min", "0.0020 in", "5400°/min (90°/s)".
             public func text(_ v: Double, _ u: LengthUnit) -> String {
@@ -282,8 +300,7 @@ public extension Calibration {
         public func report(_ u: LengthUnit) -> [String] {
             var out: [String] = []
             for v in values {
-                let after = v.determined ? v.text(v.after, u) : "not timed, stays"
-                out.append("  \(v.label): \(v.text(v.before, u)) -> \(after)")
+                out.append("  \(v.label): \(v.text(v.before, u)) -> \(v.afterText(u))")
             }
             out.append("Sections (NativeCAM's estimate before and after, against the time measured):")
             for r in rows {
@@ -455,23 +472,40 @@ public extension Calibration {
         if let single = result.rows.first(where: { $0.id == TimingKind.fChangeSingle.id }),
            let alternating = result.rows.first(where: { $0.id == TimingKind.fChangeAlternating.id }),
            let ts = single.measured, let ta = alternating.measured {
-            let expected = alternating.after / max(single.after, 1e-9)
-            let slower = (ta / ts) / expected - 1
             let changes = built.toolpaths[TimingKind.allCases.firstIndex(of: .fChangeAlternating)!].motions
             let count = zip(changes, changes.dropFirst()).filter { $0.feed != $1.feed }.count
-            let lost = (ta - ts * expected) / Double(max(1, count))
             let dialectName = Dialect.for(built.project.machine)?.name ?? machine.controllerLabel
-            if slower <= fChangeTolerance {
-                result.fChange = FitResult.Verdict(passed: true, text: "the line with two feeds took \(String(format: "%.1f", ta)) s against "
-                    + "\(String(format: "%.1f", ts)) s at one feed (\(String(format: "%+.1f%%", 100 * slower)), within \(Int(100 * fChangeTolerance))%): "
-                    + "\(dialectName) kept constant velocity through the changes of F, so “Adjust feeds for load” won't slow the machine at them.")
-            } else {
-                result.fChange = FitResult.Verdict(passed: false, text: "the line with two feeds took \(String(format: "%.1f", ta)) s against "
-                    + "\(String(format: "%.1f", ts)) s at one feed, \(String(format: "%.0f%%", 100 * slower)) slower (more than "
-                    + "\(Int(100 * fChangeTolerance))%): \(dialectName) slows at each change of F, about \(String(format: "%.2f", lost)) s a change. "
-                    + "“Adjust feeds for load” would cost that at every change, and may mark the cut where it slows.")
-            }
+            result.fChange = fChangeVerdict(single: ts, alternating: ta, ratio: alternating.after / max(single.after, 1e-9),
+                                            changes: count, controller: dialectName)
         }
+    }
+
+    /// The F-change verdict. The two lines aren't meant to take the same time, so the single-feed line's time, scaled by
+    /// `ratio` (NativeCAM's estimate of the line with two feeds over its estimate of the single-feed line), is what the
+    /// line with two feeds should take at constant velocity. Every figure is rounded as the verdict quotes it, and the
+    /// verdict is worked out from those figures, so it can be checked by hand: the share slower is the line with two
+    /// feeds' time over the expected time, less one.
+    internal static func fChangeVerdict(single ts: Double, alternating ta: Double, ratio: Double, changes count: Int,
+                                        controller: String) -> FitResult.Verdict {
+        func tenth(_ v: Double) -> Double { (v * 10).rounded() / 10 }
+        func seconds(_ v: Double) -> String { String(format: "%.1f s", v) }
+        let single = tenth(ts), alternating = tenth(ta)
+        let expected = max(tenth(single * ratio), 0.1)
+        // Tenths of a percent, as quoted.
+        let slower = (1000 * (alternating / expected - 1)).rounded()
+        let tolerance = (1000 * fChangeTolerance).rounded()
+        let share = String(format: "%.1f%%", abs(slower) / 10)
+        let limit = "\(Int((100 * fChangeTolerance).rounded()))%"
+        let timed = "the line with two feeds took \(seconds(alternating)) against \(seconds(single)) at one feed; "
+            + "NativeCAM expected \(seconds(expected)) for it, so it was \(share) \(slower < 0 ? "quicker" : "slower") than expected"
+        if slower <= tolerance {
+            return FitResult.Verdict(passed: true, text: timed + (slower < 0 ? "" : " (within \(limit))") + ": \(controller) kept constant "
+                + "velocity through the changes of F, so “Adjust feeds for load” won't slow the machine at them.")
+        }
+        let lost = (alternating - expected) / Double(max(1, count))
+        return FitResult.Verdict(passed: false, text: timed + " (more than \(limit)): \(controller) slows at each change of F, about "
+            + "\(String(format: "%.2f", lost)) s at each of the line's \(count) changes. "
+            + "“Adjust feeds for load” would cost that at every change, and may mark the cut where it slows.")
     }
 
     private static func fitRotary(_ times: Times, machine: MachineProfile, into result: inout FitResult) throws {
@@ -499,12 +533,18 @@ public extension Calibration {
             }
         }
         let usable = machine.rotary != nil && machine.rotary?.turnsByHand != true
-        result.values.append(FitResult.Value(field: .turnSpeed, label: "Turn speed", before: before, after: usable ? after : before,
-                                             determined: usable && !turns.isEmpty))
+        var value = FitResult.Value(field: .turnSpeed, label: "Turn speed", before: before, after: usable ? after : before,
+                                    determined: usable && !turns.isEmpty)
         if !usable, !turns.isEmpty {
-            result.notes.append("Turn on the machine's rotary axis (Material & Machine ▸ Rotary Axis) to keep the fitted turn speed of "
-                + "\(String(format: "%.0f", after))°/min.")
+            // Timed and fitted, but there's no driven axis to keep it on: the row and the note quote the same speed.
+            let off = machine.rotary == nil
+            value.held = FitResult.Value.Held(value: after, reason: off ? "the rotary axis is off" : "the rotary axis is turned by hand")
+            let speed = value.text(after, .mm)
+            result.notes.append(off
+                ? "Turn on the machine's rotary axis (Material & Machine ▸ Rotary Axis) to keep the fitted turn speed of \(speed)."
+                : "Turn off Turn by hand (Material & Machine ▸ Rotary Axis) to keep the fitted turn speed of \(speed).")
         }
+        result.values.append(value)
         var fittedAxis = axis
         fittedAxis.turnSpeed = after
         let now = rotarySections(fittedAxis, letter: axis.letter.rawValue)

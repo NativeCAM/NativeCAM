@@ -390,7 +390,7 @@ struct CalibrationSheet: View {
                     HStack(spacing: 6) {
                         Text(v.text(v.before, units)).foregroundStyle(.secondary)
                         Image(systemName: "arrow.right").foregroundStyle(.tertiary).imageScale(.small)
-                        Text(v.determined ? v.text(v.after, units) : "not timed, stays").monospacedDigit()
+                        Text(v.afterText(units)).monospacedDigit()
                             .foregroundStyle(v.determined ? .primary : .secondary)
                     }
                 }
