@@ -111,14 +111,14 @@ public extension Project {
     }
 }
 
-/// A setting the two sides of an inlay share that differs between them.
+/// A setting the two sides of an inlay share that differs between them, so the plug won't fit as made. The end mill
+/// that clears each side's flats isn't one: the V walls and the depths decide the fit, so each side may clear with
+/// whichever end mill is quickest for it (`inlayClearanceTools(differingFrom:)`).
 public enum InlayDifference: Hashable, Sendable {
     /// P: a pocket's flat depth, a plug's pocket depth (this side's, the other's; nil for a pocket without a flat).
     case pocketDepth(Double?, Double?)
     /// The V-bit.
     case bit
-    /// The end mill that clears the flats.
-    case clearanceTool
 }
 
 public extension CAMOperation {
@@ -128,7 +128,7 @@ public extension CAMOperation {
         return inlay.role == .plug ? inlay.pocketDepth : p.flatDepth
     }
 
-    /// The settings the two sides share (P, the V-bit and the clearance tool) that differ between this side of an inlay
+    /// The settings the two sides share for the plug to fit (P and the V-bit) that differ between this side of an inlay
     /// and `other`.
     func inlayDifferences(from other: CAMOperation) -> [InlayDifference] {
         guard case let .vcarve(a) = kind, case let .vcarve(b) = other.kind, a.inlay != nil, b.inlay != nil else { return [] }
@@ -136,16 +136,22 @@ public extension CAMOperation {
         let p = inlayPocketDepth, q = other.inlayPocketDepth
         if (p == nil) != (q == nil) || abs((p ?? 0) - (q ?? 0)) > 0.005 { out.append(.pocketDepth(p, q)) }
         if !tool.isSameBit(as: other.tool) { out.append(.bit) }
-        switch (a.clearanceTool, b.clearanceTool) {
-        case (nil, nil): break
-        case let (x?, y?) where x.isSameBit(as: y): break
-        default: out.append(.clearanceTool)
-        }
         return out
     }
 
-    /// `other`, the other side of an inlay, given this side's shared settings: P, the V-bit and the clearance tool.
-    /// A pocket without a flat depth leaves its plug's pocket depth as it is.
+    /// The end mills clearing the flats on this side of an inlay and on `other` (nil: the V-bit clears them itself), when
+    /// they differ; nil when they're the same. Information only: which end mill clears the flats doesn't affect the fit.
+    func inlayClearanceTools(differingFrom other: CAMOperation) -> (mine: Tool?, theirs: Tool?)? {
+        guard case let .vcarve(a) = kind, case let .vcarve(b) = other.kind, a.inlay != nil, b.inlay != nil else { return nil }
+        switch (a.clearanceTool, b.clearanceTool) {
+        case (nil, nil): return nil
+        case let (x?, y?) where x.isSameBit(as: y): return nil
+        default: return (a.clearanceTool, b.clearanceTool)
+        }
+    }
+
+    /// `other`, the other side of an inlay, given this side's shared settings: P and the V-bit. Its clearance tool stays
+    /// its own, since it doesn't affect the fit. A pocket without a flat depth leaves its plug's pocket depth as it is.
     func inlayPartnerMatched(_ other: CAMOperation) -> CAMOperation {
         guard case let .vcarve(a) = kind, case var .vcarve(b) = other.kind, a.inlay != nil, var inlay = b.inlay else { return other }
         var out = other
@@ -157,7 +163,6 @@ public extension CAMOperation {
                 b.flatDepth = depth
             }
         }
-        b.clearanceTool = a.clearanceTool
         out.kind = .vcarve(b)
         if !tool.isSameBit(as: other.tool) { out.tool = tool }
         return out

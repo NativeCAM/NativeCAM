@@ -118,16 +118,41 @@ struct InlayPairTests {
         guard case var .vcarve(a) = pocket.kind else { return }
         a.clearanceTool = nil
         pocket.kind = .vcarve(a)
+        // The clearance tool isn't a difference (it doesn't affect the fit), only noted, and matching leaves it alone.
         let diffs = pocket.inlayDifferences(from: matched)
-        #expect(diffs.contains(.bit) && diffs.contains(.clearanceTool) && !diffs.contains { if case .pocketDepth = $0 { true } else { false } })
+        #expect(diffs == [.bit])
+        let noted = try #require(pocket.inlayClearanceTools(differingFrom: matched))
+        #expect(noted.mine == nil && noted.theirs?.id == Self.eighth.id)
         let plugNow = pocket.inlayPartnerMatched(matched)
         #expect(plugNow.tool.isSameBit(as: Self.vBit90))
         guard case let .vcarve(q) = plugNow.kind else { return }
-        #expect(q.clearanceTool == nil)
+        #expect(q.clearanceTool?.id == Self.eighth.id)
         // In the project, the fit check agrees once they match.
         project.operations = [pocket, plugNow]
         #expect(InlayTests.fitIssues(project).allSatisfy { !$0.contains("same V-bit") && !$0.contains("Pocket depth is") },
                 "\(InlayTests.fitIssues(project))")
+    }
+
+    /// #100: a plug clearing its flats with another end mill than its pocket's (or with none) still matches it, as the
+    /// fit check says: the end mill doesn't change the walls or the depths.
+    @Test func aDifferentClearanceToolStillMatches() throws {
+        // As added: the plug not included in the output, so the two aren't cut on top of each other.
+        var (project, pocket, plug) = Self.pair(Self.settings(), asAdded: true)
+        let quarter = try #require(ToolLibrary.starter.tool(number: 1))
+        for tool in [quarter, nil] as [Tool?] {
+            guard case var .vcarve(q) = plug.kind else { Issue.record("not a V-carve"); return }
+            q.clearanceTool = tool
+            plug.kind = .vcarve(q)
+            #expect(plug.inlayDifferences(from: pocket).isEmpty)
+            #expect(pocket.inlayDifferences(from: plug).isEmpty)
+            let noted = try #require(plug.inlayClearanceTools(differingFrom: pocket))
+            #expect(noted.mine?.id == tool?.id && noted.theirs?.id == Self.eighth.id)
+            project.operations = [pocket, plug]
+            let fit = InlayTests.fitIssues(project)
+            #expect(fit.isEmpty, "\(fit)")
+        }
+        // The same end mill on both sides: nothing to note.
+        #expect(pocket.inlayClearanceTools(differingFrom: pocket) == nil)
     }
 
     // MARK: Whole board

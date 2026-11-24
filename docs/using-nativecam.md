@@ -215,7 +215,7 @@ A V-carve inlay is a plug of contrasting wood glued into a V-carved pocket, then
 
 **Add Toolpaths** adds **Inlay pocket** and **Inlay plug** after the other toolpaths, as one step to undo. The plug starts with **Include in output** off, since the two are cut from separate boards: export the pocket, then swap them.
 
-**Keeping the two in line.** Each side's inspector names the other (click the name to select it). When a setting they share differs, the pocket's flat depth and the plug's pocket depth, the V-bit or the clearance tool, the inspector says what differs and offers **Update “Inlay plug”** (or “Inlay pocket”) to give the other side this one's settings, or **Match It** to take the other side's. Change the pocket depth on either side and the other is one click away. The glue gap, surface clearance and boundary belong to the plug alone; the pocket's inspector shows them.
+**Keeping the two in line.** Each side's inspector names the other (click the name to select it). When a setting the fit depends on differs, the pocket's flat depth and the plug's pocket depth or the V-bit, the inspector says what differs and offers **Update “Inlay plug”** (or “Inlay pocket”) to give the other side this one's settings, or **Match It** to take the other side's. Change the pocket depth on either side and the other is one click away. The end mill that clears the flats can differ between the sides, since it doesn't change the walls or the depths: the inspector notes which each side uses, and neither button changes it. The glue gap, surface clearance and boundary belong to the plug alone; the pocket's inspector shows them.
 
 **Or set them up by hand,** as two V-carves on the *same* design with the same V-bit:
 
