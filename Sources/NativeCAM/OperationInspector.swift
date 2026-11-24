@@ -793,14 +793,21 @@ struct PartnerRow: View {
                 HStack {
                     Spacer()
                     Button("Update “\(partner.name)”") { update(op.inlayPartnerMatched(partner)) }
-                        .help("Give “\(partner.name)” this toolpath's pocket depth, V-bit and clearance tool")
+                        .help("Give “\(partner.name)” this toolpath's pocket depth and V-bit")
                     Button("Match It") { op = partner.inlayPartnerMatched(op) }
-                        .help("Take “\(partner.name)”'s pocket depth, V-bit and clearance tool for this toolpath")
+                        .help("Take “\(partner.name)”'s pocket depth and V-bit for this toolpath")
                 }
                 .controlSize(.small)
             }
         }
+        if let tools = op.inlayClearanceTools(differingFrom: partner) {
+            Text("Flats cleared with \(clearing(tools.mine)) here and \(clearing(tools.theirs)) in “\(partner.name)”: "
+                 + "each side can use whichever is quickest for it, since the end mill doesn't affect the fit.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
+
+    private func clearing(_ t: Tool?) -> String { t.map(bit) ?? "the V-bit" }
 
     private func describe(_ d: InlayDifference) -> String {
         switch d {
@@ -809,12 +816,6 @@ struct PartnerRow: View {
             return "\(this) \(len(mine)), \(that) \(len(theirs))"
         case .bit:
             return "this uses \(bit(op.tool)), it uses \(bit(partner.tool))"
-        case .clearanceTool:
-            func name(_ o: CAMOperation) -> String {
-                if case let .vcarve(p) = o.kind, let t = p.clearanceTool { return bit(t) }
-                return "no clearance tool"
-            }
-            return "clearing with \(name(op)), it with \(name(partner))"
         }
     }
 }

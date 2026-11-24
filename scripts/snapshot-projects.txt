@@ -1,0 +1,8 @@
+# The projects scripts/snapshot-check.sh snapshots, one run a line: a project, from the repository's root, then any
+# snapshot flags for the run (-Key value pairs, as docs/development.md lists them). Each run must write a window.png
+# that's a real frame and log no failed check.
+examples/Demo Sign.nativecam
+examples/Demo Pawn.nativecam
+examples/Demo Table Leg.nativecam
+examples/Demo Relief.nativecam
+Tests/CAMCoreTests/Fixtures/projects/inlay-joy-v1.nativecam -NativeCAMSnapshotInlay YES -NativeCAMSnapshotInlayBoundary board

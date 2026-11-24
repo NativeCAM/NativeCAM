@@ -12,5 +12,8 @@ replaced). Each test asserts what NativeCAM does with its project:
   reference was cut, and the rest areas are worked out as if it had been.
 - `reference-runs-later.nativecam`: a rest pass that runs before its named reference. Checks says so, and Optimize Run
   Order puts the reference first.
+- `automatic-reference-smaller.nativecam`: a 1/4" ball rest pass with its references picked automatically, after a
+  tapered-ball finish whose tip is smaller (#108). It says the earlier finishes use smaller bits, so there's nothing for it
+  to rest from, as picking that reference by hand is refused, and posts nothing.
 - `pocket-nothing-left.nativecam`: a 1/8" pocket resting from a 1/4" one on a round pocket the 1/4" reaches all of. The
   rest toolpath is empty, says there's nothing left to cut, and posts nothing.

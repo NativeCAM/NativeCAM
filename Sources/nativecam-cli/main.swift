@@ -526,6 +526,8 @@ case "nest":
     if let t = option("--seconds", in: args) { settings.timeLimit = Double(t) ?? settings.timeLimit }
     if let t = option("--seed", in: args) { settings.seed = UInt64(t) ?? settings.seed }
     if let t = option("--evaluations", in: args) { settings.maxEvaluations = Int(t) }
+    // Up to 10 sheets, as Nest Parts in the app starts with, unless the job has more.
+    settings.maxSheets = max(settings.maxSheets, NestJob.defaultSheetLimit)
     if let t = option("--sheets", in: args) {
         guard let n = Int(t), n >= 1 else { fail("--sheets takes a number of sheets, 1 or more") }
         settings.maxSheets = n
@@ -548,9 +550,9 @@ case "nest":
         print("In other parts' holes: " + result.inHoles.map { "\(job.parts[$0].name) in \(result.insideOf[$0].map { job.parts[$0].name } ?? "")" }
             .joined(separator: ", "))
     }
-    print(String(format: "Parts fill %.0f%% of the %@ %@ of the %@ they use (%.0f%% of the whole of %@)", result.utilization * 100,
+    print(String(format: "Parts fill %.0f%% of the %@ %@ of the %@ they use (%.0f%% of %@)", result.utilization * 100,
                  u.format(result.usedLength), u.symbol, result.sheetCount > 1 ? "last sheet" : "sheet", result.sheetUtilization * 100,
-                 result.sheetCount > 1 ? "every sheet" : "the sheet"))
+                 result.sheetCount > 1 ? "all the sheets' area" : "the sheet"))
     for part in job.parts where part.reach > settings.spacing + 1e-6 {
         print("  \(part.name): “\(part.reachToolpath ?? "")” cuts \(u.format(part.reach)) \(u.symbol) outside it, so it keeps that far from the others")
     }
@@ -560,6 +562,10 @@ case "nest":
     }
     for name in applied.leftInPlace { print("  Didn't fit, stays where it is: \(name)") }
     for name in applied.movedAside { print("  Didn't fit, moved beside the sheet: \(name)") }
+    if !result.unplaced.isEmpty, result.sheetCount >= settings.sheetLimit {
+        let n = settings.sheetLimit
+        print("  \(counted(result.unplaced.count, "part")) didn't fit on \(counted(n, "sheet")); pass --sheets \(n + 1) to use another sheet")
+    }
     for note in job.notes { print("  \(note)") }
     if let svg = option("--svg", in: args) {
         // The sheets side by side, left to right.
