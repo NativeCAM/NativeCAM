@@ -93,13 +93,17 @@ enum AdaptiveClearing {
     // MARK: Planning
 
     /// The walk at each level for the tool-centre `boundary` (the pocket shrunk by the tool radius and allowance).
-    static func plan(boundary: [Region], tool: Tool, params: PocketParams, levels: [Double], context: GenerationContext) -> Plan {
+    /// `cleared`: material already gone at these levels (Clipper polygons), which the walk counts as cut from the start
+    /// and opens up from rather than boring a helix (3D roughing's layers, where earlier toolpaths cut some of it).
+    static func plan(boundary: [Region], tool: Tool, params: PocketParams, levels: [Double], context: GenerationContext,
+                     cleared seed: [Polyline] = []) -> Plan {
         let s = Settings(tool: tool, params: params, machine: context.machine, arcTolerance: context.arcTolerance)
         // The walk's own boundary: the wall pass takes the last `finish`.
         let walk = boundary.flatMap { $0.offset(by: -s.finish, arcTolerance: s.arcTolerance) }
         guard !levels.isEmpty else { return Plan(levels: []) }
         // The pocket's walls are straight down, so every level is the same walk.
         let walker = Walker(settings: s, areas: walk, bounds: boundary.reduce(Rect2.empty) { $0.union($1.bounds) })
+        if !seed.isEmpty { walker.cleared.add(seed) }
         walker.run()
         let cleared = walker.cleared.flushed()
         return Plan(levels: levels.map { Level(z: $0, moves: walker.moves, cleared: cleared) })
@@ -108,12 +112,13 @@ enum AdaptiveClearing {
     // MARK: Cutting
 
     /// Clears the tool-centre `boundary` adaptively at each of `levels` and finishes the walls (with `reliefs`), into `b`.
-    /// Returns warnings.
+    /// `cleared` is material already gone at the levels (see `plan`). Returns warnings.
     static func cut(boundary: [Region], tool: Tool, params: PocketParams, levels: [Double], context: GenerationContext,
-                    reliefs: [CornerRelief.Relief], safe: [Region], builder b: inout ToolpathBuilder) -> [String] {
+                    reliefs: [CornerRelief.Relief], safe: [Region], cleared seed: [Polyline] = [],
+                    builder b: inout ToolpathBuilder) -> [String] {
         let s = Settings(tool: tool, params: params, machine: context.machine, arcTolerance: context.arcTolerance)
         var warnings = loopWarnings(tool: tool, settings: s, context: context)
-        let plan = plan(boundary: boundary, tool: tool, params: params, levels: levels, context: context)
+        let plan = plan(boundary: boundary, tool: tool, params: params, levels: levels, context: context, cleared: seed)
         let r = tool.radius
         let tol = context.arcTolerance
         // The bit's ordinary cut, for what the walk leaves behind.
@@ -424,6 +429,12 @@ final class ClearedModel {
         trail.append(p)
         trailLength += p.distance(to: last)
         if trailLength >= 1.5 * radius || trailTurn >= .pi / 4 { flush() }
+    }
+
+    /// Counts `polygons` (Clipper polygons, outer loops CCW) as cleared.
+    func add(_ polygons: [Polyline]) {
+        flush()
+        merge(polygons)
     }
 
     /// Starts a new trail at `p` without sweeping anything between (after a lift or link that was merged on its own).

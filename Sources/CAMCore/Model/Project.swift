@@ -25,7 +25,9 @@ public struct Project: Hashable, Sendable {
     /// toolpath finds its vectors (`SizeFilter`): an older build would ignore one and pick up every shape on the layer or
     /// of the kind the next time it looks. Format 21 adds constant scallop, spiral and radial 3D finishing, which an older
     /// build can't read. Format 22 adds mouldings (a profile swept along rails), which an older build can't read.
-    public static let currentFormatVersion = 22
+    /// Format 26 adds adaptive clearing for 3D roughing's layers, which an older build would ignore and cut each layer in
+    /// offset rings.
+    public static let currentFormatVersion = 26
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

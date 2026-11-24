@@ -671,6 +671,18 @@ public enum ModelBoundary: String, Codable, Sendable, CaseIterable, Identifiable
     }
 }
 
+/// How 3D roughing clears each layer.
+public enum Rough3DClearing: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// Offset rings inward from the layer's walls (the original roughing).
+    case offset
+    /// Zig-zag raster lines at the raster angle, then a pass round the layer's walls.
+    case raster
+    /// Constant-engagement clearing (`AdaptiveClearing`) at each layer, then a pass round its walls. Format 26.
+    case adaptive
+    public var id: String { rawValue }
+    public var label: String { rawValue.capitalized }
+}
+
 public struct Rough3DParams: Hashable, Codable, Sendable {
     /// Material left on the model surface for the finishing pass, mm.
     public var allowance: Double
@@ -682,17 +694,66 @@ public struct Rough3DParams: Hashable, Codable, Sendable {
     /// How far beyond the selected vectors roughing may clear, mm; nil = tool diameter + 1 mm, enough for a
     /// finishing ball of the same size to reach right up to the vector.
     public var boundaryMargin: Double?
+    /// How each layer is cleared; nil = offset rings. Saved only when set.
+    ///
+    /// Raster needs no new file format: a build that doesn't know the key clears the same layers in rings, which
+    /// leaves the same part. Adaptive is format 26 (`requiredFormatVersion`): its layers are cut at the full
+    /// layer depth with the adaptive load's feeds, which an older build would push through offset rings.
+    public var clearing: Rough3DClearing?
+    /// Raster direction in degrees (raster clearing; nil = 0, along X).
+    public var rasterAngle: Double?
+    /// Adaptive clearing's settings (`clearing == .adaptive`); nil = the defaults.
+    public var adaptive: AdaptiveSettings?
+    /// Adaptive clearing: how deep each clearing pass goes, mm, in whole layers (`passDepth` stays the height of the
+    /// steps left on the model: the layers between are stepped up, clearing only the terraces). nil = automatic,
+    /// `automaticClearingDepth`.
+    public var clearingDepth: Double?
 
     public init(allowance: Double = 0.02.inch, passDepth: Double? = nil, stepoverFraction: Double? = nil, boundary: ModelBoundary = .model,
-                boundaryMargin: Double? = nil) {
+                boundaryMargin: Double? = nil, clearing: Rough3DClearing? = nil, rasterAngle: Double? = nil,
+                adaptive: AdaptiveSettings? = nil, clearingDepth: Double? = nil) {
         self.allowance = allowance
         self.passDepth = passDepth
         self.stepoverFraction = stepoverFraction
         self.boundary = boundary
         self.boundaryMargin = boundaryMargin
+        self.clearing = clearing
+        self.rasterAngle = rasterAngle
+        self.adaptive = adaptive
+        self.clearingDepth = clearingDepth
     }
 
     public static func autoMargin(tool: Tool) -> Double { tool.diameter + 1 }
+
+    /// The layer depth `tool` cuts at, mm.
+    public func layerDepth(_ tool: Tool) -> Double { max(0.05, passDepth ?? tool.cutting.stepdown) }
+
+    /// Adaptive clearing's automatic clearing depth: twice the bit's diameter, within its flute length. Deeper, the
+    /// chip-load chart's depth derate takes more off the feed than the light cut gains.
+    public static func automaticClearingDepth(tool: Tool) -> Double { min(2 * tool.diameter, tool.fluteLength) }
+
+    /// The clearing depth in use (adaptive clearing), mm: never less than a layer.
+    public func clearingDepthInUse(_ tool: Tool) -> Double {
+        max(layerDepth(tool), clearingDepth ?? Self.automaticClearingDepth(tool: tool))
+    }
+
+    /// The deepest single pass, mm, for the chip-load chart's depth derate: the layer depth, or with adaptive clearing
+    /// the clearing depth (its passes take as many whole layers as fit in it, so they're never deeper).
+    public func deepestPass(_ tool: Tool) -> Double {
+        clearingInUse == .adaptive ? clearingDepthInUse(tool) : layerDepth(tool)
+    }
+
+    /// The clearing in use.
+    public var clearingInUse: Rough3DClearing { clearing ?? .offset }
+
+    /// Adaptive clearing's settings in use.
+    public var adaptiveSettings: AdaptiveSettings { adaptive ?? AdaptiveSettings() }
+
+    /// Adaptive 3D roughing is format 26: a format-25 build can't read the clearing.
+    public static let adaptiveFormatVersion = 26
+
+    /// The project file format these settings need.
+    public var requiredFormatVersion: Int { clearingInUse == .adaptive ? Self.adaptiveFormatVersion : 1 }
 }
 
 /// How 3D finishing covers the surface.
@@ -1623,6 +1684,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case .edgeProfile: own = 18
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion
+        case let .rough3D(p): own = p.requiredFormatVersion
         case .moulding: own = MouldingParams.formatVersion
         default: own = 1
         }
@@ -1673,7 +1735,7 @@ public extension OperationKind {
         case let .pocket(p):
             return p.strategy == .adaptive ? nil : deepest(p.depth, p.passLevels(tool))
         case let .rough3D(p):
-            return max(0.05, p.passDepth ?? tool.cutting.stepdown)
+            return p.deepestPass(tool)
         default:
             return nil
         }
