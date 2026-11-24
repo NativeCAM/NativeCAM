@@ -28,7 +28,8 @@ struct OperationInspector: View {
             ToolSection(tool: $op.tool, units: units, library: library, material: project.stock.material, machine: project.machine,
                         kind: op.kind, loadFeeds: op.kind.takesLoadFeeds ? $op.adjustFeedsForLoad : nil,
                         wrapped: project.stock.rotary?.isWrapped == true, radialLoad: adaptiveLoad, loopFeedLimit: adaptiveLoopLimit,
-                        thickness: project.stock.thickness)
+                        thickness: project.stock.thickness, spindleSpeed: $op.spindleSpeed,
+                        automatic: workspace.job?.toolpaths.first { $0.sourceOperationID == op.id && $0.tool == op.tool }?.automaticSpindle)
             parameters
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
@@ -1600,6 +1601,12 @@ struct ToolSection: View {
     var loopFeedLimit: Double? = nil
     /// The material's thickness: an edge profile's passes are worked out against an edge that tall.
     var thickness: Double = 0
+    /// The operation's Spindle setting: the tool's RPM or Automatic (nil hides it).
+    var spindleSpeed: Binding<SpindleSpeedMode?>? = nil
+    /// The speed Automatic picked for the toolpath, from the last generated job.
+    var automatic: AutomaticSpindle? = nil
+
+    private var isAutomatic: Bool { spindleSpeed?.wrappedValue == .automatic }
 
     /// An edge profile's heaviest pass, mm²: its cross-section sets the recommended feed rather than a full pass's.
     private var passCrossSection: Double? {
@@ -1641,7 +1648,19 @@ struct ToolSection: View {
                 .font(.callout)
                 Spacer(minLength: 0)
             }
-            NumberField(title: "Spindle", value: $tool.cutting.spindleRPM, suffix: "RPM", decimals: 0, range: 1000...60000)
+            if let spindleSpeed, ChipLoad.applies(to: tool) || isAutomatic {
+                Picker("Spindle", selection: Binding(get: { spindleSpeed.wrappedValue ?? .tool },
+                                                     set: { spindleSpeed.wrappedValue = $0 == .tool ? nil : $0 })) {
+                    ForEach(SpindleSpeedMode.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Automatic picks this toolpath's spindle speed to put the chip in the chart's range at the feed the "
+                    + "machine reaches, within the spindle's range and the bit's speed limit")
+                NumberField(title: isAutomatic ? "Tool's RPM" : "RPM", value: $tool.cutting.spindleRPM, suffix: "RPM", decimals: 0,
+                            range: 1000...60000)
+                if isAutomatic { AutomaticSpindleRows(result: automatic, toolRPM: tool.cutting.spindleRPM, units: units) }
+            } else {
+                NumberField(title: "Spindle", value: $tool.cutting.spindleRPM, suffix: "RPM", decimals: 0, range: 1000...60000)
+            }
             FeedField(title: "Feed", mmPerMin: $tool.cutting.feedRate, units: units)
             FeedField(title: "Plunge", mmPerMin: $tool.cutting.plungeRate, units: units)
             if let loadFeeds { LoadFeedsToggle(on: loadFeeds, tool: tool, wrapped: wrapped) }
@@ -1649,9 +1668,33 @@ struct ToolSection: View {
             PercentField(title: tool.shape == .taperedBallNose ? "Stepover (of tip)" : "Stepover", fraction: $tool.cutting.stepoverFraction)
             if ChipLoad.applies(to: tool) {
                 ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad,
-                            loopFeedLimit: loopFeedLimit, depth: kind?.requestedDepth, crossSection: passCrossSection)
+                            loopFeedLimit: loopFeedLimit, depth: kind?.requestedDepth, crossSection: passCrossSection,
+                            passDepth: radialLoad == nil ? kind?.deepestPass(tool) : nil,
+                            automaticRPM: isAutomatic ? automatic?.rpm : nil)
             }
         }
+    }
+}
+
+/// Spindle ▸ Automatic: the speed picked for the toolpath and why, or that it's picked when the job is next generated.
+struct AutomaticSpindleRows: View {
+    let result: AutomaticSpindle?
+    let toolRPM: Double
+    let units: LengthUnit
+
+    var body: some View {
+        if let result {
+            LabeledContent("Automatic", value: "\(Int(result.rpm.rounded()).formatted()) RPM")
+            Text(result.reason(units)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let warning = result.warning(units) {
+                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            Text("The speed is picked when the toolpaths are generated.").font(.caption).foregroundStyle(.secondary)
+        }
+        Text("From the chip-load chart, not yet calibrated on your machine: one speed for the whole toolpath, written at its start.")
+            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -1670,15 +1713,20 @@ struct ChipLoadRow: View {
     var depth: Double? = nil
     /// An edge profile's heaviest pass, mm²: the cross-section rule reads it instead of a full pass at the depth.
     var crossSection: Double? = nil
+    /// The deepest single pass (mm), for the chart's depth derate (`ChipLoad.depthShare`).
+    var passDepth: Double? = nil
+    /// Spindle ▸ Automatic's speed: the chip is the one at it, and the feed the machine reaches.
+    var automaticRPM: Double? = nil
 
     var body: some View {
         let thin = radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         let rec = ChipLoad.recommendation(for: tool, material: material, machine: machine, thinning: thin, feedLimit: loopFeedLimit,
-                                          depth: depth, crossSection: crossSection)
+                                          depth: depth, crossSection: crossSection, passDepth: passDepth)
         let reading = rec.reading
         let r = reading.range
         let source = reading.source(units)
-        let chip = tool.chipLoad * thin
+        let chip = automaticRPM.map { min(tool.cutting.feedRate, machine.maxFeedRate) / ($0 * Double(max(1, tool.fluteCount))) * thin }
+            ?? tool.chipLoad * thin
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         let status: (String, Color) = chip < floor ? ("exclamationmark.triangle.fill", .orange)
             : chip > r.upperBound * 1.25 ? ("exclamationmark.circle", .secondary) : ("checkmark.circle.fill", .green)
@@ -1723,8 +1771,8 @@ struct ChipLoadRow: View {
             }
             .controlSize(.small)
             .help(reading.chart == .routerBit || reading.outsideChart
-                  ? "Chip load at the thin end of the chart range, the spindle no faster than the bit's speed limit, feed held within the machine's cutting cap by lowering RPM"
-                  : "Chip load a quarter into the chart range, feed held within the machine's cutting cap by lowering RPM")
+                  ? "Chip load at the thin end of the chart range, the spindle no faster than the bit's speed limit, feed held within the machine's cutting cap by lowering RPM. From makers' charts, not yet calibrated on your machine"
+                  : "Chip load a quarter into the chart range (less for a pass deeper than the bit's diameter), feed held within the machine's cutting cap by lowering RPM. From makers' charts, not yet calibrated on your machine")
         }
     }
 }
