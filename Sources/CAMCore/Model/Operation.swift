@@ -713,7 +713,8 @@ public enum Finish3DStrategy: String, Codable, Sendable, CaseIterable, Identifia
     /// the boundary inward, so neighbouring passes are the same distance apart along the surface and the scallop
     /// between them stays even however the slope changes. Format 21.
     case constantScallop
-    /// An Archimedean spiral from a centre out to the boundary, dropped onto the model as one continuous cut. Format 21.
+    /// An Archimedean spiral from a centre out to the boundary, dropped onto the model: one continuous cut out to where it
+    /// first meets the boundary, then the arcs left inside it, each from its nearer end. Format 21.
     case spiral
     /// Spokes from a centre at an angular step, thinned near the centre to a minimum spacing. Format 21.
     case radial
@@ -780,7 +781,7 @@ public struct Finish3DParams: Hashable, Sendable {
     /// Spiral: hold the scallop on slopes by closing the turns up where the surface tilts across them (the stepover
     /// measured along the surface); off = a constant stepover in plan.
     public var spiralHoldsScallop: Bool
-    /// Radial: the angle between spokes, degrees; nil = the stepover apart at the boundary's farthest point.
+    /// Radial: the angle between spokes, degrees; nil = automatic, a stepover apart where each spoke meets the boundary.
     public var radialStep: Double?
     /// Radial: how close spokes may come near the centre before every other one stops short, mm; nil = half the stepover
     /// (so between the centre and the boundary neighbouring spokes are between half a stepover and a stepover apart).
