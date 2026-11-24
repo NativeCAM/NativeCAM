@@ -74,7 +74,17 @@ struct FeedRPMCatalogTests {
             #expect(issues.isEmpty, "\(issues.map(\.text))", sourceLocation: sourceLocation)
             return (job, [text])
         }
-        let post = try #require(PostProcessors.post(for: p), sourceLocation: sourceLocation)
+        // A fixed date and time zone, so the header stays the same.
+        let post: any PostProcessor
+        if var sbp = PostProcessors.post(for: p, date: GoldenPostTests.date) as? OpenSBPPost {
+            sbp.timeZone = TimeZone(identifier: "UTC")!
+            post = sbp
+        } else {
+            var generic = try #require(PostProcessors.post(for: p, date: GoldenPostTests.date) as? GenericGCodePost,
+                                       sourceLocation: sourceLocation)
+            generic.timeZone = TimeZone(identifier: "UTC")!
+            post = generic
+        }
         let files = post.files(job.toolpaths)
         for (i, f) in files.enumerated() {
             try GoldenPostTests.check(Data(f.gcode.utf8), golden: files.count == 1 ? name : "\(name)-\(i + 1)", sourceLocation: sourceLocation)
