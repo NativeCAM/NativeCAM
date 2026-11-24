@@ -5,14 +5,35 @@ import Testing
 /// #99: Add Toolpath ▸ Inlay… starts each side clearing its flats with the flat end mill the run-time estimate says is
 /// quickest for it, and keeps a tool picked by hand. The design is `Fixtures/svg/inlay-joy.svg`: JOY in block capitals
 /// 2" tall with 0.42" strokes on a 7" × 4.5" board, where the pocket's flats are narrow and a whole-board plug's are wide.
+/// It's imported once into `Fixtures/projects/inlay-joy-v1.nativecam` (no toolpaths), which `scripts/snapshot-check.sh`
+/// also makes its inlay pair from.
 struct InlayClearanceTests {
-    /// The JOY drawing imported as File ▸ Import does, in an inch job on the default Avid PRO6060, all of it selected.
-    static func joy() throws -> (project: Project, selection: [UUID]) {
-        let url = try #require(Bundle.module.url(forResource: "inlay-joy", withExtension: "svg", subdirectory: "Fixtures/svg"))
+    /// The JOY drawing imported as File ▸ Import does, in an inch job on the default Avid PRO6060.
+    static func importedJOY() -> Project {
         let stock = Stock(width: 7.inch, height: 4.5.inch, thickness: 0.75.inch, materialName: "Walnut")
-        let shapes = try VectorImporter.importFile(at: url).shapes(name: "inlay-joy", stock: stock)
-        let project = Project(name: "JOY inlay", displayUnits: .inch, stock: stock, machine: .avidPRO6060, shapes: shapes)
-        return (project, shapes.map(\.id))
+        guard let url = Bundle.module.url(forResource: "inlay-joy", withExtension: "svg", subdirectory: "Fixtures/svg"),
+              let shapes = try? VectorImporter.importFile(at: url).shapes(name: "inlay-joy", stock: stock) else {
+            return Project(name: "JOY inlay", displayUnits: .inch, stock: stock, machine: .avidPRO6060, shapes: [])
+        }
+        return Project(name: "JOY inlay", displayUnits: .inch, stock: stock, machine: .avidPRO6060, shapes: shapes)
+    }
+
+    /// The saved JOY project, all of it selected.
+    static func joy() throws -> (project: Project, selection: [UUID]) {
+        let project = try GoldenPostTests.savedProject("inlay-joy-v1", make: importedJOY)
+        return (project, project.shapes.map(\.id))
+    }
+
+    @Test func theJOYDesignIsSavedAsImported() throws {
+        let (project, ids) = try Self.joy()
+        #expect(project.formatVersion == 1)
+        let imported = Self.importedJOY()
+        // Three letters, the O with its counter; the same outlines as the drawing gives today.
+        #expect(ids.count == imported.shapes.count)
+        #expect(project.inlayShapes(ids).count == ids.count)
+        let saved = project.shapes.flatMap { $0.polylines(tolerance: 0.01) }, fresh = imported.shapes.flatMap { $0.polylines(tolerance: 0.01) }
+        #expect(saved.count == 4 && saved.count == fresh.count)
+        #expect(abs(saved.bounds.width - 5.2.inch) < 0.01 && abs(saved.bounds.height - 2.inch) < 0.01, "\(saved.bounds)")
     }
 
     static let library = ToolLibrary.starter
@@ -27,21 +48,20 @@ struct InlayClearanceTests {
         return s
     }
 
-    static func times(_ boundary: VCarveInlay.Boundary) throws -> InlayClearanceTimes {
-        let (project, ids) = try joy()
-        return try #require(project.inlayClearanceTimes(settings(boundary), shapes: ids, tools: library.tools))
-    }
+    /// Every starter end mill timed on JOY with a whole-board plug, once for the suite. At the time of writing: the pocket
+    /// 14:14 with the 1/4" upcut and 3:00 with the 1/8"; the plug 5:04 with the 1/4" upcut, 3:36 with the 1/4"
+    /// compression (one pass where the upcut takes two), 2:56 with the 1/2" and 23:05 with the 1/8".
+    static let boardTimes: InlayClearanceTimes? = {
+        guard let (project, ids) = try? joy() else { return nil }
+        return project.inlayClearanceTimes(settings(.board), shapes: ids, tools: library.tools)
+    }()
 
-    static func describe(_ times: [InlayClearanceTime]) -> String {
-        times.map { "T\($0.tool.number) \(Int($0.seconds.rounded())) s" }.joined(separator: ", ")
+    static func times(_ boundary: VCarveInlay.Boundary) throws -> InlayClearanceTimes {
+        try #require(boundary == .board ? boardTimes : nil)
     }
 
     @Test func everyFlatEndMillIsTimedOnEachSide() throws {
-        let started = Date()
         let times = try Self.times(.board)
-        let elapsed = Date().timeIntervalSince(started)
-        print("JOY clearance times (\(String(format: "%.1f", elapsed)) s): pocket \(Self.describe(times.pocket)); "
-              + "whole-board plug \(Self.describe(times.plug))")
         let numbers = Self.endMills.map(\.number)
         #expect(times.pocket.map(\.tool.number) == numbers)
         #expect(times.plug.map(\.tool.number) == numbers)

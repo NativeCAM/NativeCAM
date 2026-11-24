@@ -73,37 +73,8 @@ enum DebugSnapshot {
             project = inlay(project, out: out, log: log, spin: spin)
         }
 
-        // 1. The whole window (sidebar, viewport, inspector) hosted offscreen.
-        let host = NSHostingView(rootView: ContentView(document: .constant(NativeCAMDocument(project: project)))
-            .environment(ToolLibraryStore.shared))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1500, height: 900),
-                              styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
-        window.contentView = host
-        // AppKit skips drawing fully off-screen (occluded) windows, so keep it on screen but invisible.
-        if let screen = NSScreen.main { window.setFrameOrigin(screen.visibleFrame.origin) }
-        window.alphaValue = 0
-        window.ignoresMouseEvents = true
-        window.orderFrontRegardless()
-        log("window created")
-        spin(4)
-        log("window rendered")
-        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-            host.cacheDisplay(in: host.bounds, to: rep)
-            try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("window.png"))
-        }
-        // Core Animation render of the whole frame view (includes titlebar/toolbar and layer-backed AppKit controls).
-        if let frameView = window.contentView?.superview, let layer = frameView.layer {
-            let scale = window.backingScaleFactor
-            let size = frameView.bounds.size
-            if let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
-                                   bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-                ctx.scaleBy(x: scale, y: scale)
-                layer.render(in: ctx)
-                if let img = ctx.makeImage() { write(img, to: out.appendingPathComponent("window-layer.png")) }
-            }
-        }
-        window.close()
+        // 1. The whole window (sidebar, viewport, inspector), as the window server composites it.
+        captureWindow(project, out: out, log: log, spin: spin)
 
         // 2. The finished simulation through the real Metal renderer.
         let ws = Workspace()
@@ -177,6 +148,91 @@ enum DebugSnapshot {
         interactionSelfCheck(project, log: log)
         print("snapshot: wrote PNGs to \(out.path)")
         exit(0)
+    }
+
+    /// A window AppKit leaves where it's put, even almost entirely off the screen.
+    private final class OffscreenWindow: NSWindow {
+        override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    }
+
+    /// The main window to window.png, once it has drawn a real frame.
+    ///
+    /// `cacheDisplay` and a Core Animation render can't draw the Metal viewport or the sidebar's and inspector's
+    /// materials (they came out white and pink, #101), so the picture is the window server's, as
+    /// `scripts/capture-window.sh` takes it. That needs the window opaque, on screen and drawn: it's put all but one
+    /// column of points past the screen's right edge, so it's on screen (AppKit doesn't draw a window it thinks is
+    /// hidden) without showing, and captured again until the frame passes `frameProblem` (up to a minute).
+    @MainActor
+    private static func captureWindow(_ project: Project, out: URL, log: (String) -> Void, spin: (Double) -> Void) {
+        let host = NSHostingView(rootView: ContentView(document: .constant(NativeCAMDocument(project: project)))
+            .environment(ToolLibraryStore.shared))
+        let window = OffscreenWindow(contentRect: NSRect(x: 0, y: 0, width: 1500, height: 900),
+                                     styleMask: [.titled, .resizable, .closable], backing: .buffered, defer: false)
+        window.contentView = host
+        window.isReleasedWhenClosed = false
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            window.setFrameOrigin(NSPoint(x: screen.frame.maxX - 1, y: screen.visibleFrame.minY))
+        }
+        window.ignoresMouseEvents = true
+        window.orderFrontRegardless()
+        log("window created")
+        let started = Date()
+        spin(2)
+        var image = DebugCapture.image(of: window)
+        var problem = image.map(frameProblem) ?? "the window server gave no picture"
+        while problem != nil, image != nil, Date().timeIntervalSince(started) < 60 {
+            spin(0.5)
+            image = DebugCapture.image(of: window)
+            problem = image.map(frameProblem) ?? "the window server gave no picture"
+        }
+        let waited = String(format: "%.1f", Date().timeIntervalSince(started))
+        if let image {
+            write(image, to: out.appendingPathComponent("window.png"))
+        } else if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            // No window server picture at all: the view as AppKit draws it, which may lack the viewport and materials.
+            host.cacheDisplay(in: host.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("window.png"))
+        }
+        log("window rendered after \(waited) s")
+        log("check \(problem == nil ? "PASS" : "FAIL"): window.png is a real frame\(problem.map { ": \($0)" } ?? "")")
+        window.close()
+    }
+
+    /// Why a capture of the main window isn't a real frame, or nil when it is: a sidebar or inspector with nothing drawn
+    /// in it, the pink of a material that wasn't drawn, or a see-through window.
+    static func frameProblem(_ image: CGImage) -> String? {
+        let w = image.width, h = image.height
+        guard w > 100, h > 100,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = ctx.data else { return "the picture is too small to read" }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        var opaque = 0, pink = 0
+        for i in stride(from: 0, to: w * h * 4, by: 4) {
+            let r = Int(px[i]), g = Int(px[i + 1]), b = Int(px[i + 2]), a = Int(px[i + 3])
+            if a > 240 { opaque += 1 }
+            if a > 240, r > 230, (90...170).contains(g), (90...170).contains(b), abs(g - b) < 30 { pink += 1 }
+        }
+        if Double(opaque) < 0.9 * Double(w * h) { return "the window is see-through" }
+        if Double(pink) > 0.02 * Double(w * h) { return "a pink block where a material wasn't drawn" }
+        // Text and controls in a column of the window: pixels well away from the column's typical brightness.
+        func drawn(_ x0: Double, _ x1: Double) -> Bool {
+            var lum: [Int] = []
+            let ys = Int(Double(h) * 0.12)..<Int(Double(h) * 0.88), xs = Int(Double(w) * x0)..<Int(Double(w) * x1)
+            for y in stride(from: ys.lowerBound, to: ys.upperBound, by: 2) {
+                for x in stride(from: xs.lowerBound, to: xs.upperBound, by: 2) {
+                    let i = (y * w + x) * 4
+                    lum.append((299 * Int(px[i]) + 587 * Int(px[i + 1]) + 114 * Int(px[i + 2])) / 1000)
+                }
+            }
+            guard !lum.isEmpty else { return false }
+            let median = lum.sorted()[lum.count / 2]
+            return Double(lum.filter { abs($0 - median) > 60 }.count) > 0.003 * Double(lum.count)
+        }
+        if !drawn(0.01, 0.17) { return "nothing drawn in the sidebar" }
+        if !drawn(0.80, 0.99) { return "nothing drawn in the inspector" }
+        return nil
     }
 
     /// Draws `view` offscreen at `size` to `out/name`.
