@@ -222,6 +222,47 @@ struct FinishingPatternsTests {
                 #expect(abs(2 * start[k] * sin(Double(gap) * step / 2) - spacing) < 1e-6)
             }
         }
+        // Unevenly spaced spokes (the automatic angles on an oval) keep the spacing too.
+        let angles = (0..<200).map { k -> Double in let t = 2 * Double.pi * Double(k) / 200; return t + 0.2 * sin(2 * t) }
+        let start = Model3DGenerator.spokeStarts(angles: angles, spacing: 0.5)
+        var closest = Double.infinity
+        for r in stride(from: 0.25, through: 60, by: 0.25) {
+            let visible = angles.indices.filter { start[$0] <= r }
+            for (x, i) in visible.enumerated() {
+                let j = visible[(x + 1) % visible.count]
+                guard i != j else { continue }
+                let d = (angles[j] - angles[i] + 2 * Double.pi).truncatingRemainder(dividingBy: 2 * Double.pi)
+                closest = min(closest, 2 * r * sin(d / 2))
+            }
+        }
+        #expect(closest >= 0.5 * (1 - 1e-9), "uneven spokes: \(closest) apart")
+    }
+
+    /// On the demo relief's oval (#127) a spiral's turns run off the boundary at both ends. Past the first, the arcs
+    /// left inside are cut each from its nearer end, linking along the surface, instead of lifting over the outside of
+    /// every turn; the radial's automatic spokes are a stepover apart where each meets the boundary rather than at its
+    /// farthest point, and are cut in rings, so their inner ends don't link half the oval apart. (Before: the spiral
+    /// lifted 230-odd times and ran 5:54, the radial 9:59, against the raster's 4:51.)
+    @Test func spiralAndRadialFitTheOvalDemoRelief() throws {
+        var p = Project.demoRelief()
+        let id = p.operations[1].id
+        guard case var .finish3D(fp) = p.operations[1].kind else { Issue.record("not a finish"); return }
+        let raster = try #require(CAMEngine.generate(p).estimatedSeconds(toolpath: id))
+        fp.strategy = .spiral
+        p.operations[1].kind = .finish3D(fp)
+        var job = CAMEngine.generate(p)
+        var tp = try #require(job.toolpaths.first { $0.id == id })
+        let spiral = try #require(job.estimatedSeconds(toolpath: id))
+        #expect(Self.plunges(tp).count < 10, "spiral plunges \(Self.plunges(tp).count) times")
+        #expect(spiral < raster, "spiral \(spiral) s, raster \(raster) s")
+        fp.strategy = .radial
+        p.operations[1].kind = .finish3D(fp)
+        job = CAMEngine.generate(p)
+        tp = try #require(job.toolpaths.first { $0.id == id })
+        let radial = try #require(job.estimatedSeconds(toolpath: id))
+        #expect(Self.plunges(tp).count < 4, "radial plunges \(Self.plunges(tp).count) times")
+        #expect(radial < 1.8 * raster, "radial \(radial) s, raster \(raster) s")
+        #expect(tp.warnings.isEmpty, "\(tp.warnings)")
     }
 
     // MARK: Helpers

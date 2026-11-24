@@ -12,6 +12,8 @@ extension Model3DGenerator {
         var closed: Bool
         /// Passes are cut a group at a time, in order; within a group the nearest goes next.
         var group: Int
+        /// An open pass that may be cut from either end (whichever is nearer).
+        var reversible = false
     }
 
     /// Constant scallop, spiral or radial passes inside the boundary; false when none fit.
@@ -250,7 +252,11 @@ extension Model3DGenerator {
         let runs = runsInside(pts, f)
         let dropped = ParallelResults<[Vec3]>(count: runs.count, initial: [])
         DispatchQueue.concurrentPerform(iterations: runs.count) { i in dropped[i] = drop(runs[i], f) }
-        return dropped.array.enumerated().map { Pass(points: $1, closed: false, group: $0) }
+        // The first run is the spiral from the centre to where it first meets the boundary. Past that (the ends of
+        // an oval, the corners of a rectangle, round a hole) a turn leaves the boundary and comes back in, so the rest
+        // are cut nearest first, each from whichever end is nearer: one arc and back along the next, linking along
+        // the surface, rather than lifting over the outside of every turn (#127).
+        return dropped.array.enumerated().map { i, p in Pass(points: p, closed: false, group: i == 0 ? 0 : 1, reversible: i > 0) }
     }
 
     /// Spokes from the centre at the angular step, alternately out and back in, clipped to the boundary. Near the
@@ -262,26 +268,41 @@ extension Model3DGenerator {
         let s = f.stepover
         let far = reach(from: centre, f)
         let spacing = max(f.cell, f.params.radialMinSpacing ?? s / 2)
-        let wanted = f.params.radialStep ?? (far > 1e-6 ? s / far * 180 / Double.pi : 45)
-        let n = max(4, min(3600, Int((360 / min(45, max(0.1, wanted))).rounded())))
-        let step = 2 * Double.pi / Double(n)
-        let start = spokeStarts(count: n, spacing: spacing)
-        var lines: [[Vec2]] = []
-        var spoke = 0
-        for k in 0..<n where start[k] < far {
-            let u = Vec2.fromAngle(Double(k) * step)
-            let a = centre + u * start[k], z = centre + u * (far + s)
-            let count = max(1, Int((a.distance(to: z) / f.ds).rounded(.up)))
-            let samples = (0...count).map { a.lerp(to: z, Double($0) / Double(count)) }
-            var runs = runsInside(samples, f)
-            // Every other spoke comes back in, so each starts near where the last ended.
-            if spoke % 2 == 1 { runs = runs.reversed().map { Array($0.reversed()) } }
-            lines += runs
-            spoke += 1
+        let angles: [Double]
+        if let wanted = f.params.radialStep {
+            let n = max(4, min(3600, Int((360 / min(45, max(0.1, wanted))).rounded())))
+            angles = (0..<n).map { 2 * Double.pi * Double($0) / Double(n) }
+        } else {
+            angles = spokeAngles(centre: centre, stepover: s, f)
+        }
+        let n = angles.count
+        let start = spokeStarts(angles: angles, spacing: spacing)
+        // Each round of thinning (every other spoke, every other of those, ...) starts its spokes about the same
+        // distance from the centre, so they're cut in rings between those distances, from the centre out: in each
+        // ring every spoke that runs through it, alternately out and back in, each starting beside where the last
+        // ended. (Cut whole, spoke after spoke, each one's inner end would link along the surface to the next's,
+        // often half the boundary's reach away.)
+        func rank(_ k: Int) -> Int { k == 0 ? Int.max : k.trailingZeroBitCount }
+        var firstStart: [Int: Double] = [:]
+        for k in 0..<n where start[k] < far { firstStart[rank(k)] = min(firstStart[rank(k)] ?? .infinity, start[k]) }
+        var edges = Array(Set(firstStart.values)).sorted()
+        edges.append(far + s)
+        var lines: [(points: [Vec2], ring: Int)] = []
+        for ring in 0..<(edges.count - 1) {
+            let lo = edges[ring], hi = edges[ring + 1]
+            for k in 0..<n where start[k] < hi {
+                let u = Vec2.fromAngle(angles[k])
+                let a = centre + u * max(lo, start[k]), z = centre + u * hi
+                let count = max(1, Int((a.distance(to: z) / f.ds).rounded(.up)))
+                let samples = (0...count).map { a.lerp(to: z, Double($0) / Double(count)) }
+                lines += runsInside(samples, f).map { ($0, ring) }
+            }
         }
         let dropped = ParallelResults<[Vec3]>(count: lines.count, initial: [])
-        DispatchQueue.concurrentPerform(iterations: lines.count) { i in dropped[i] = drop(lines[i], f) }
-        return dropped.array.enumerated().compactMap { i, p in p.count >= 2 ? Pass(points: p, closed: false, group: i) : nil }
+        DispatchQueue.concurrentPerform(iterations: lines.count) { i in dropped[i] = drop(lines[i].points, f) }
+        return dropped.array.enumerated().compactMap { i, p in
+            p.count >= 2 ? Pass(points: p, closed: false, group: lines[i].ring, reversible: true) : nil
+        }
     }
 
     /// How far from the centre each of `n` evenly spaced spokes starts so that no two come closer than `spacing`
@@ -289,22 +310,79 @@ extension Model3DGenerator {
     /// then by how many times 2 divides their number (every other spoke, then every other of the rest, ...), each
     /// starting where it's `spacing` from the nearest spoke placed before it.
     static func spokeStarts(count n: Int, spacing: Double) -> [Double] {
-        let step = 2 * Double.pi / Double(n)
+        spokeStarts(angles: (0..<n).map { 2 * Double.pi * Double($0) / Double(n) }, spacing: spacing)
+    }
+
+    /// `spokeStarts(count:spacing:)` for spokes at the given angles (radians, increasing, within one turn), which
+    /// needn't be evenly spaced: the gap to the nearest spoke placed before is measured as an angle.
+    static func spokeStarts(angles: [Double], spacing: Double) -> [Double] {
+        let n = angles.count
         func rank(_ k: Int) -> Int { k == 0 ? Int.max : k.trailingZeroBitCount }
         let order = (0..<n).sorted { rank($0) != rank($1) ? rank($0) > rank($1) : $0 < $1 }
         var start = [Double](repeating: 0, count: n)
         var placed: [Int] = []
         placed.reserveCapacity(n)
         for k in order {
-            var gap = Int.max
+            var gap = Double.infinity
             for j in placed {
-                let d = abs(j - k) % n
-                gap = min(gap, min(d, n - d))
+                let d = abs(angles[j] - angles[k]).truncatingRemainder(dividingBy: 2 * Double.pi)
+                gap = min(gap, min(d, 2 * Double.pi - d))
             }
-            if gap != Int.max { start[k] = spacing / (2 * sin(Double(gap) * step / 2)) }
+            if gap.isFinite { start[k] = spacing / (2 * sin(min(Double.pi, gap) / 2)) }
             placed.append(k)
         }
         return start
+    }
+
+    /// The automatic spoke angles: a stepover apart where each meets the boundary, so closer together in plan towards
+    /// the far ends of an oval or a rectangle's corners and wider apart across its short way (#127), never more than
+    /// 45°. How far the boundary reaches is taken along each of many rays (its farthest crossing, so past a notch
+    /// it's the far side) and the most of it within a ray either side.
+    static func spokeAngles(centre: Vec2, stepover s: Double, _ f: Finishing) -> [Double] {
+        let far = reach(from: centre, f)
+        guard far > 1e-6 else { return (0..<8).map { Double($0) * Double.pi / 4 } }
+        let segments = f.setup.boundary.flatMap(\.loops).flatMap { loop -> [(Vec2, Vec2)] in
+            let p = loop.points
+            return p.indices.map { (p[$0], p[($0 + 1) % p.count]) }
+        }
+        // Rays a quarter of a stepover apart at the farthest reach.
+        let rays = max(64, min(14_400, Int((2 * Double.pi * far / (s / 4)).rounded(.up))))
+        let found = ParallelResults<Double>(count: rays, initial: 0)
+        DispatchQueue.concurrentPerform(iterations: rays) { i in
+            let d = Vec2.fromAngle(2 * Double.pi * Double(i) / Double(rays))
+            var best = 0.0
+            for (a, b) in segments {
+                // centre + t d = a + u (b - a), t >= 0, 0 <= u <= 1
+                let e = b - a, w = a - centre
+                let den = d.x * e.y - d.y * e.x
+                guard abs(den) > 1e-12 else { continue }
+                let t = (w.x * e.y - w.y * e.x) / den, u = (w.x * d.y - w.y * d.x) / den
+                if t > best, u >= -1e-9, u <= 1 + 1e-9 { best = t }
+            }
+            found[i] = best
+        }
+        let reachAlong = found.array
+        let floor = s / (Double.pi / 4)
+        let rho = (0..<rays).map { i in
+            max(floor, reachAlong[(i + rays - 1) % rays], reachAlong[i], reachAlong[(i + 1) % rays])
+        }
+        // The angle measured in stepovers along each ray's reach: spokes go at whole steps of it.
+        var along = [0.0]
+        along.reserveCapacity(rays + 1)
+        let dTheta = 2 * Double.pi / Double(rays)
+        for i in 0..<rays { along.append(along[i] + rho[i] * dTheta) }
+        let n = max(8, min(3600, Int((along[rays] / s).rounded(.up))))
+        let unit = along[rays] / Double(n)
+        var angles: [Double] = []
+        angles.reserveCapacity(n)
+        var i = 0
+        for k in 0..<n {
+            let target = Double(k) * unit
+            while i < rays - 1, along[i + 1] < target { i += 1 }
+            let frac = (target - along[i]) / max(1e-12, along[i + 1] - along[i])
+            angles.append((Double(i) + min(1, max(0, frac))) * dTheta)
+        }
+        return angles
     }
 
     // MARK: Linking
@@ -326,7 +404,8 @@ extension Model3DGenerator {
         return Array(f.refined(out, hint: &hint).dropFirst())
     }
 
-    /// Cuts the passes a group at a time (nearest first within a group, a closed pass from its nearest point), each
+    /// Cuts the passes a group at a time (nearest first within a group, a closed pass from its nearest point, a
+    /// reversible one from its nearer end), each
     /// joined to the last along the surface when it's within `hop`, otherwise entered from above (ramping in along
     /// it with smooth links).
     static func cutPasses(_ passes: [Pass], _ f: Finishing, _ b: inout ToolpathBuilder, hop: Double) {
@@ -337,17 +416,21 @@ extension Model3DGenerator {
             var remaining = byGroup[g]!
             while !remaining.isEmpty {
                 let here = b.position.xy
-                var pick = (index: 0, start: 0, distance: Double.infinity)
+                var pick = (index: 0, start: 0, distance: Double.infinity, reversed: false)
                 for (n, i) in remaining.enumerated() {
                     let pts = passes[i].points
                     if passes[i].closed {
                         for (k, q) in pts.enumerated().dropLast() {
                             let d = first ? Double(k) : q.xy.distance(to: here)
-                            if d < pick.distance { pick = (n, k, d) }
+                            if d < pick.distance { pick = (n, k, d, false) }
                         }
                     } else {
                         let d = first ? 0 : pts[0].xy.distance(to: here)
-                        if d < pick.distance { pick = (n, 0, d) }
+                        if d < pick.distance { pick = (n, 0, d, false) }
+                        if passes[i].reversible, !first, let last = pts.last {
+                            let e = last.xy.distance(to: here)
+                            if e < pick.distance { pick = (n, 0, e, true) }
+                        }
                     }
                 }
                 let i = remaining.remove(at: pick.index)
@@ -355,6 +438,7 @@ extension Model3DGenerator {
                 if passes[i].closed, pick.start > 0 {
                     pts = Array(pts[pick.start..<(pts.count - 1)]) + Array(pts[0...pick.start])
                 }
+                if pick.reversed { pts.reverse() }
                 let start = pts[0]
                 if !first, b.position.z < f.setup.stock.plungeHeight,
                    let link = boundedLink(from: b.position, to: start, limit: hop, f) {
