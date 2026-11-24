@@ -107,6 +107,66 @@ struct NestingFixtureTests {
         try Self.checkFiles(p, golden: { "decoded-nesting-multisheet-v16-sheet-\($0 + 1)" }, count: 2)
     }
 
+    /// The frames and coasters demo nested as `nativecam-cli nest --sheets 10 --evaluations 300` does: 300 layouts with
+    /// the default seed, up to 10 sheets.
+    static func framesNest() throws -> (job: NestJob, result: Nesting.Result, settings: Nesting.Settings) {
+        let job = try NestJob.prepare(Project.demoNestingSheets(), selection: [])
+        var s = job.defaultSettings
+        s.maxSheets = 10
+        s.maxEvaluations = 300
+        return (job, job.nest(s), s)
+    }
+
+    /// `framesNest()` applied: 11 parts on the first sheet and 8 on the second, 7 of them in the frames' windows, as the
+    /// website's tutorial found it. Saved as `nesting-part-in-part-v16`.
+    static func nestedFramesAndCoasters() -> Project {
+        guard let (job, r, s) = try? framesNest() else { return Project.demoNestingSheets() }
+        return job.apply(r, to: Project.demoNestingSheets(), settings: s).project
+    }
+
+    /// #104: the setup sheet's cover counts the parts nesting placed on each sheet, those in the frames' windows too,
+    /// and nesting the job again finds each of them as a part of its own, cut in the same order.
+    @Test func partsInHolesAreCountedAndNestAgainOnTheirOwn() throws {
+        let p = try GoldenPostTests.savedProject("nesting-part-in-part-v16", make: Self.nestedFramesAndCoasters)
+        #expect(p.formatVersion == 16 && p.sheetCount == 2)
+        // What the nest placed on each sheet, and in the windows.
+        let placed = try Self.framesNest().result
+        let perSheet = placed.sheets.map(\.partCount)
+        #expect(perSheet == [11, 8])
+        #expect(placed.inHoles.count == 7)
+        // The cover's Sheets table lists the same (it once counted a part in a window as part of its frame).
+        let job = CAMEngine.generate(p)
+        let html = SetupSheet.html(project: p, job: job, gcodeFile: "Frames.tap", date: GoldenPostTests.date)
+        let table = try #require(html.components(separatedBy: "<h2>Sheets</h2>").dropFirst().first?.components(separatedBy: "</table>").first)
+        let counts = try Regex(#"class="num">(\d+)</td>"#)
+        let listed = table.matches(of: counts).compactMap { Int($0.output[1].substring ?? "") }
+        #expect(listed == perSheet, "\(listed) on the cover, \(perSheet) placed")
+        #expect(NestJob.parts(of: p.sheetProject(0)).count + NestJob.parts(of: p.sheetProject(1)).count == 12)
+        // Nesting it again: 19 parts, each frame, coaster and bracket on its own, and the frames' windows free to use.
+        let again = try NestJob.prepare(p, selection: [])
+        #expect(again.parts.count == 19)
+        let prefixes = ["Frame", "Coaster", "Bracket"]
+        let loose = again.parts.filter { part in prefixes.contains { part.name.hasPrefix($0) } }
+        #expect(loose.count == 12)
+        #expect(loose.allSatisfy { $0.shapeIDs.count == 1 })
+        #expect(again.partsWithHoles == 2)
+        // A frame nested on its own leaves what's in its window where it is.
+        let frame = try #require(p.shapes.first { $0.name == "Frame 1" })
+        let alone = try NestJob.prepare(p, selection: [frame.id])
+        #expect(alone.parts.map(\.shapeIDs) == [[frame.id]])
+        // The run order is the same, and it still cuts each part in a window before freeing the window.
+        #expect(OperationScheduler.optimize(p).outOfOrder.isEmpty)
+        var s = again.defaultSettings
+        s.maxEvaluations = 10
+        s.seed = 86
+        let r = again.nest(s)
+        #expect(r.placedCount == 19)
+        #expect(again.check(r, settings: s).isEmpty, "\(again.check(r, settings: s))")
+        let renested = again.apply(r, to: p, settings: s).project
+        #expect(renested.operations == p.operations)
+        #expect(OperationScheduler.optimize(renested).outOfOrder.isEmpty)
+    }
+
     // MARK: Edge cases
 
     /// `nest-too-big.svg`: the 700 mm rail fits no 600 × 400 sheet either way round. It's left out (where it was, or
