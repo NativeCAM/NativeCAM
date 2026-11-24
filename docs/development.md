@@ -20,7 +20,7 @@ Sources/
 Tests/CAMCoreTests/  Swift Testing suite and fixtures
 examples/         Demo projects and the G-code they produce
 docs/             These pages and the README images
-scripts/          build-app.sh, test.sh, capture-window.sh, snapshot-check.sh, make-icon.swift, measure/ (toolpath timing and part comparison)
+scripts/          build-app.sh, test.sh, test-times.sh, capture-window.sh, snapshot-check.sh, make-icon.swift, measure/ (toolpath timing and part comparison)
 ```
 
 Conventions inside `CAMCore`: all lengths are millimetres, design XY is relative to the material's lower-left corner, and Z = 0 is the material top. Posts convert to the chosen work origin and units. Each controller is described by a `Dialect` (what it accepts and how it reads files); `PostProcessors.post(for:)` picks the post for a project's machine, and `GCodeCheck` reads exported files back against the dialect.
@@ -34,6 +34,8 @@ scripts/test.sh
 ```
 
 The script adds the compiler and linker flags Swift Testing needs when only the Command Line Tools are installed, and builds the tests optimized in their own folder (`.build/tests`), because the geometry and simulation run about 100× slower unoptimized. Extra arguments pass through to `swift test`, for example `scripts/test.sh --filter PostTests`. For a debuggable, unoptimized run, use `NATIVECAM_TEST_DEBUG=1 scripts/test.sh`.
+
+The tests run in parallel, and the time printed for each one (`passed after … seconds`) runs from its `started` line to when its end is recorded. That includes the wait for a free thread before and after the test runs. While the long 3D and rotary tests hold every thread, that wait is most of the run, so nearly every test shows about the whole run's time. On GitHub's runners the log can also sit for minutes after a quick test's `started` line. To time one test, run it on its own by suite and name: `scripts/test.sh --filter NestingEngineTests/aPartFitsOnlyWhenItMayTurn`. The filter matches the suite's type name, not the file's, so `NestingTests/…` matches nothing. To find the slow ones, `scripts/test-times.sh` runs the suite one test at a time, so each time is the test's own, and lists the 20 slowest. It takes a count and `swift test` arguments, for example `scripts/test-times.sh 40 --filter Nesting`, and writes the whole log to `.build/test-times.log`.
 
 GitHub Actions runs the same script, then `swift build` for the app and the command-line tool, on every pull request and every push to `main` ([`.github/workflows/tests.yml`](../.github/workflows/tests.yml)). It uses GitHub's Apple-silicon macOS 26 image with Xcode 26. When a golden file differs, the run keeps the new output as a `golden-actual` download on the run's page.
 
