@@ -62,11 +62,12 @@ struct MouldingCatalogTests {
 
     static let trimStock = Stock(width: 350, height: 130, thickness: 19, clearanceHeight: 10, plungeHeight: 3)
 
-    /// The cove along the open curved rail, on its left, with the finish a new moulding starts with.
+    /// The cove along the open curved rail, on its left, with the finish a new moulding starts with (at a 25% stepover).
     static func trimProject() -> Project {
         let rail = shape("CurvedRail", id: id(3), corner: Vec2(20, 15))
         let profile = shape("TrimProfile", id: id(4), centre: Vec2(330, 115))
-        let finish = MouldingParams.suggestedFinish(rails: rail.polylines())
+        var finish = MouldingParams.suggestedFinish(rails: rail.polylines())
+        finish.stepoverFraction = 0.25 // coarser than a new one's, to keep the golden small
         let op = moulding(11, name: "Curved trim", profile: profile, rails: [rail]) { pid in
             MouldingParams(profileID: pid, side: .left, finish: finish)
         }
@@ -190,10 +191,11 @@ struct MouldingCatalogTests {
         // The finish a curved rail starts with follows it round.
         guard case let .moulding(params) = p.operations[0].kind else { return }
         #expect(params.finish.strategy == .constantScallop)
-        // Smooth: along a line across the trim near its middle, the surface follows the profile, with no facets steps.
+        // Cut to the swept surface everywhere, with no gouge; what stands above it at the 95th percentile is the scallops
+        // and the corner at the foot of the step where the cove meets the uncut wood beyond it, which a 1/4" ball can't reach.
         let r = try Self.compare(p, cell: 0.4, slack: 0.05)
         #expect(r.gouge <= 0, "cut \(r.gouge) mm past the surface")
-        #expect(r.left95 < 0.6)
+        #expect(r.left95 < 1.0, "\(r.left95) mm left at the 95th percentile")
     }
 
     @Test func aStraightOpenRailFinishesAlongItsLength() {
@@ -223,7 +225,7 @@ struct MouldingCatalogTests {
 
     // MARK: File format
 
-    @Test func mouldingsAreFormat22() {
+    @Test func mouldingsAreFormat22() throws {
         #expect(Project.currentFormatVersion >= 22)
         #expect(Self.frameProject().formatVersion == 22)
         var none = Self.frameProject()
@@ -257,13 +259,13 @@ struct MouldingCatalogTests {
         let ops = [
             moulding(20, name: "Frame", profile: ogee, rails: [rail]) { pid in
                 MouldingParams(profileID: pid, side: .left,
-                               finish: Finish3DParams(stepoverFraction: 0.2, allowance: 0.1, boundary: .model, strategy: .waterline,
+                               finish: Finish3DParams(stepoverFraction: 0.35, allowance: 0.1, boundary: .model, strategy: .waterline,
                                                       steepAngle: 30),
                                roughing: MouldingRoughing(tool: endMill, allowance: 0.8, passDepth: 4, stepoverFraction: 0.5))
             },
             moulding(21, name: "Outside cove", profile: cove, rails: [rail]) { pid in
                 MouldingParams(profileID: pid, side: .right, flipped: true, mirrored: true,
-                               finish: Finish3DParams(stepoverFraction: 0.25, rasterAngle: 30, boundary: .model))
+                               finish: Finish3DParams(stepoverFraction: 0.4, rasterAngle: 30, boundary: .model))
             },
         ]
         return Project(name: "Mouldings (format 22)", displayUnits: .inch, stock: stock, machine: .avidPRO6060,
@@ -345,15 +347,16 @@ struct MouldingCatalogTests {
     /// A closed shape chosen as the profile: refused, with an empty toolpath saying why.
     @Test func aClosedProfileIsRefused() throws {
         let p = try Self.edgeCase("closed-profile") {
-            let rail = shape("FrameRail", id: id(1), corner: Vec2(1.inch, 1.inch))
-            let profile = shape("ClosedProfile", id: id(6), centre: Vec2(7.inch, 6.inch))
-            let op = moulding(31, name: "Closed profile", profile: profile, rails: [rail]) { MouldingParams(profileID: $0) }
-            return Project(name: "Closed profile", displayUnits: .inch, stock: frameStock, machine: .avidPRO6060,
+            let rail = Self.shape("FrameRail", id: Self.id(1), corner: Vec2(1.inch, 1.inch))
+            let profile = Self.shape("ClosedProfile", id: Self.id(6), centre: Vec2(7.inch, 6.inch))
+            let op = Self.moulding(31, name: "Closed profile", profile: profile, rails: [rail]) { MouldingParams(profileID: $0) }
+            return Project(name: "Closed profile", displayUnits: .inch, stock: Self.frameStock, machine: .avidPRO6060,
                            shapes: [rail, profile], operations: [op])
         }
         let job = CAMEngine.generate(p)
         #expect(job.toolpaths.count == 1)
-        #expect(job.toolpaths.allSatisfy(\.isEmpty))
+        let allEmpty = job.toolpaths.allSatisfy { $0.isEmpty }
+        #expect(allEmpty)
         let refused = job.issues.contains { $0.severity == .warning && $0.message.contains("has to be an open cross-section") }
         #expect(refused, "\(job.issues.map(\.message))")
     }
