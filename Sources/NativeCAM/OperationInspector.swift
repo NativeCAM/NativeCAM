@@ -244,7 +244,8 @@ struct OperationInspector: View {
         case let .chamfer(p):
             ChamferSection(params: p, tool: op.tool, units: units, thickness: project.stock.thickness) { op.kind = .chamfer($0) }
         case let .fluting(p):
-            FlutingSection(params: p, tool: op.tool, units: units) { op.kind = .fluting($0) }
+            FlutingSection(params: p, tool: op.tool, units: units, models: project.shapes.filter { $0.modelSpec != nil && !$0.isKeepOut },
+                           rotary: project.stock.rotary) { op.kind = .fluting($0) }
         case let .prism(p):
             PrismSection(params: p, op: op, project: project, units: units) { op.kind = .prism($0) }
         case let .edgeProfile(p):
@@ -754,11 +755,17 @@ private struct FormChamferRows: View {
     }
 }
 
-/// Fluting: the flute's depth and how it ramps in and out (Vectric's flute type, ramp length or %, linear or smooth).
+/// Fluting: what the flute follows (the material top, a start depth or a 3D model's surface), its depth and how it
+/// ramps in and out (Vectric's flute type, ramp length or %, linear or smooth).
 struct FlutingSection: View {
     let params: FlutingParams
     let tool: Tool
     let units: LengthUnit
+    /// The model picker's value when no model is set.
+    static let noModel = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    /// The job's 3D models, which flutes can follow.
+    var models: [DesignShape] = []
+    var rotary: RotaryStock?
     let set: (FlutingParams) -> Void
 
     enum LengthKind: String, CaseIterable, Identifiable {
@@ -767,13 +774,57 @@ struct FlutingSection: View {
         var label: String { self == .distance ? "Distance" : "Percent" }
     }
 
+    /// Sets what the flutes follow. Choosing the start depth when it's 0 starts it at 1/8 in (3 mm), so the choice
+    /// shows; choosing a model picks the first one when none is set.
+    private func follow(_ f: FlutingParams.Follow) {
+        var q = params
+        switch f {
+        case .materialTop:
+            q.surfaceModelID = nil
+            q.startDepth = 0
+        case .startDepth:
+            q.surfaceModelID = nil
+            if q.startDepth <= 1e-9 { q.startDepth = units == .inch ? 0.125.inch : 3 }
+        case .model:
+            guard let first = models.first else { return }
+            if !models.contains(where: { $0.id == q.surfaceModelID }) { q.surfaceModelID = first.id }
+        }
+        set(q)
+    }
+
     var body: some View {
         let p = params
         Section("Fluting") {
+            Picker("Follow", selection: Binding(get: { p.follow }, set: follow)) {
+                ForEach(FlutingParams.Follow.allCases) { f in
+                    Text(f.label).tag(f).disabled(f == .model && models.isEmpty)
+                }
+            }
+            .help("What the flute depth is measured from: the material top, a start depth below it, or a 3D model's surface")
             LengthField(title: "Flute depth", mm: Binding(get: { p.depth }, set: { var q = p; q.depth = max(0.01, $0); set(q) }), units: units,
-                        help: "Measured down from the start depth")
-            LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }), units: units,
-                        help: "Where the flute is measured from: 0 on the material top, or the floor of a pocket or step", minimum: 0)
+                        help: p.follow == .model ? "Measured down from the model's surface under the bit" : "Measured down from the start depth")
+            switch p.follow {
+            case .materialTop:
+                EmptyView()
+            case .startDepth:
+                LengthField(title: "Start depth", mm: Binding(get: { p.startDepth }, set: { var q = p; q.startDepth = $0; set(q) }), units: units,
+                            help: "Where the flute is measured from: the floor of a pocket or step", minimum: 0)
+            case .model:
+                Picker("Model", selection: Binding(get: { p.surfaceModelID ?? Self.noModel }, set: { var q = p; q.surfaceModelID = $0; set(q) })) {
+                    if !models.contains(where: { $0.id == p.surfaceModelID }) { Text("Choose…").tag(p.surfaceModelID ?? Self.noModel) }
+                    ForEach(models) { m in Text(m.name).tag(m.id) }
+                }
+                .help("The 3D model whose surface the flutes follow")
+                if !models.contains(where: { $0.id == p.surfaceModelID }) {
+                    SectionNote(text: "The model these flutes followed isn't in the job: choose another, or follow the material top.", warning: true)
+                } else if let rotary, !rotary.isWrapped {
+                    SectionNote(text: "Flutes follow a model on a flat job or a wrapped rotary job, not on a rotary job cut on faces.", warning: true)
+                } else {
+                    SectionNote(text: "Each flute keeps its depth below the model's surface, its ramps following it: cut it after the 3D finish. "
+                        + (rotary == nil ? "" : "On the rotary, flutes along the blank follow the turning's profile. ")
+                        + "Where a flute runs off the model it's cut only where the bit reaches it.")
+                }
+            }
             Picker("Ramp", selection: Binding(get: { p.ramp }, set: { var q = p; q.ramp = $0; set(q) })) {
                 ForEach(FlutingParams.Ramp.allCases) { Text($0.label).tag($0) }
             }
@@ -804,7 +855,7 @@ struct FlutingSection: View {
             SectionNote(text: "A flute ramped at one end only starts at its vector's start point; one that's the same both ways is cut from the nearer end. Open and closed vectors both work; on a wrapped rotary job a line along the blank becomes a flute round a column.")
             if !FlutingParams.suits(tool.shape) {
                 SectionNote(text: "Fluting is meant for a ball nose, core box or V-bit: this bit leaves square-bottomed flutes.", warning: true)
-            } else if p.startDepth + p.depth > tool.fluteLength + 1e-6 {
+            } else if (p.follow == .model ? 0 : p.startDepth) + p.depth > tool.fluteLength + 1e-6 {
                 SectionNote(text: "Deeper than the tool's cutting length.", warning: true)
             }
         }

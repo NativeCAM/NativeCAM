@@ -13,3 +13,4 @@ Tests/CAMCoreTests/Fixtures/template-filters/size-finds-nothing.nativecam -Nativ
 Tests/CAMCoreTests/Fixtures/projects/finishing-v21.nativecam
 Tests/CAMCoreTests/Fixtures/projects/moulding-v22.nativecam
 Tests/CAMCoreTests/Fixtures/projects/tiled-grid-v9.nativecam
+Tests/CAMCoreTests/Fixtures/projects/flutes-on-model-v25.nativecam
