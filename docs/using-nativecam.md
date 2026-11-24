@@ -327,6 +327,8 @@ A part can go in another part's hole when the hole is cut right through, all the
 
 The inner part has to be cut before the hole sets its piece of material free, so every toolpath on it must run before the hole is cut free: earlier in the run order, or in the same profile, which cuts loops inside others first. With one **Cut out** profile on every part, that's how it already is: the inner part is cut out, then the hole, then the outside of the part round it. A hole cut by a profile of its own before the cut-out (**Cut holes**, then **Cut out**) can't take the parts that **Cut out** cuts: put them in the same profile, or after it in the run order, and nest again.
 
+A part sitting in a hole stays a part of its own: nest the job again and it can move out of the hole, or into another, and a frame nested on its own leaves what's in its window where it is. The setup sheet's cover counts it on its sheet too. Something inside a loop that isn't cut right through (a pocket's or an engraved ring's) still belongs to the part round it.
+
 **Turns and toolpaths.** A part turns about its own centre; its shapes keep their own geometry and settings, corner choices made on the canvas included. A raster pocket or 3D raster keeps its angle on the sheet rather than turning with the part.
 
 Rotary jobs can't be nested (nest the parts in a flat job, then copy them over). A tiled job is nested on the whole material. `nativecam-cli nest` does the same from the [command line](command-line.md#commands).
