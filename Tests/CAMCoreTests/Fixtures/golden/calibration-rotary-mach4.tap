@@ -1,0 +1,26 @@
+(NATIVECAM ROTARY CHECK: times the rotary A axis. Nothing but A moves: X, Y and Z stay where they)
+(are.)
+(Take any stock out of the chuck. Raise the bit well clear of the chuck and tailstock before)
+(starting.)
+(There's no tool change: leave any bit in, with Z zeroed on the work as usual. The first stop is)
+(there to confirm it.)
+(Zero A where it is now {any angle will do}. Keep the overrides at 100%.)
+(At each stop the message names the next turn. Press Cycle Start and time it from the first move)
+(until the machine stops. The first turn, in inverse time {G93 F10}, should take 6 s.)
+(NativeCAM rotary check)
+(Post: Avid CNC Mach4 - NativeCAM calibration)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, Avid Mach4, rotary axis A)
+G00 G94 G20 G17 G90 G40 G49 G80
+G00 A0.000
+(MSG,1/3 One turn in inverse time, G93 F10, about 6 s. Time it until it stops.)
+M00
+G93 G01 A360.000 F10.0000
+G94
+(MSG,2/3 Rapid turn of 360deg, about 4 s. Time it until it stops.)
+M00
+G00 A720.000
+(MSG,3/3 Rapid turn of 720deg back to A0, about 8 s. Time it until it stops.)
+M00
+G00 A0.000
+M30

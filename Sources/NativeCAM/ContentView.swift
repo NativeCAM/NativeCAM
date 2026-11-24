@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var debugPost: DebugPost?
     @State private var pendingTemplate: PendingTemplate?
     @State private var nesting: NestRequest?
+    @State private var calibrating = false
     @Environment(ToolLibraryStore.self) private var library
     @Environment(\.openWindow) private var openWindow
 
@@ -95,6 +96,9 @@ struct ContentView: View {
                 finishApplying(result, addTools: addTools)
             }
         }
+        .sheet(isPresented: $calibrating) {
+            CalibrationSheet(project: project, tools: library.tools) { fit, toLibrary in applyCalibration(fit, toLibrary: toLibrary) }
+        }
         .sheet(item: $nesting) { request in
             NestPartsSheet(session: request.session) { applied in finishNesting(applied) }
         }
@@ -168,6 +172,7 @@ struct ContentView: View {
             exportGCode: exportGCode,
             exportAirCut: exportAirCut,
             exportSetupSheet: exportSetupSheet,
+            calibrate: { calibrating = true },
             regenerate: recalculateAll,
             simulate: simulate,
             stopSimulation: { workspace.stopSimulation(project) },
@@ -276,6 +281,25 @@ struct ContentView: View {
 
     /// Toolpaths ▸ Nest Parts…: the selected parts (or every part), nested in a sheet with a preview; nothing moves
     /// until Apply.
+    /// Calibration Programs' Apply: the fitted values into this document's machine (one undoable change) and, when asked,
+    /// into its entry in the machine library, whose own other settings stay as they are.
+    private func applyCalibration(_ fit: Calibration.FitResult, toLibrary: Bool) {
+        var machine = document.project.machine
+        fit.apply(to: &machine)
+        if toLibrary, let id = machine.libraryID, let entry = MachineLibraryFile.library.machine(id: id) {
+            var profile = entry.profile
+            fit.apply(to: &profile)
+            if let saved = MachineLibraryFile.update(id, profile: profile) {
+                // Still the library's copy when nothing else differs: take its new revision, so no "has changed" note shows.
+                var mine = machine
+                mine.libraryID = nil
+                mine.libraryRevision = nil
+                if mine == saved.profile { machine.libraryRevision = saved.revision }
+            }
+        }
+        document.project.machine = machine
+    }
+
     private func nestParts() {
         if project.stock.rotary != nil {
             alert = AlertInfo(title: "Can't nest a rotary job", message: NestJob.Refusal.rotary.localizedDescription

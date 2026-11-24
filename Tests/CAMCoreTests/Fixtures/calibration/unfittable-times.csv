@@ -1,0 +1,35 @@
+# NativeCAM calibration times for the timing suite (calibration-timing.tap).
+# Write the seconds you timed in measured_s, leaving a section blank to skip it. Then open this file in
+# File > Calibration Programs > Enter Times, or run: nativecam-cli calibrate fit <this file> [project.nativecam]
+program,timing
+controller,avid-mach4
+units,inch
+window_mm,609.6,609.6
+air_height_mm,25.4
+z_stroke_mm,50.8
+feeds_mm_min,2540,5080,10160
+section,count,name,estimate_s,measured_s
+line-1,2,Line at 100 in/min,57.7,57.8
+line-2,3,Line at 200 in/min,43.6,44.3
+line-3,6,Line at 400 in/min,44.8,12.0
+square-1,9,Squares at 100 in/min,43.8,44.3
+square-2,16,Squares at 200 in/min,41.5,44.8
+square-3,25,Squares at 400 in/min,41.5,51.1
+arc-1,127,"Arcs, radius 0.125 in",40.1,51.4
+arc-2,90,"Arcs, radius 0.25 in",40.3,51.7
+arc-3,64,"Arcs, radius 0.5 in",40.6,52.9
+arc-4,42,"Arcs, radius 1 in",40.2,49.1
+arc-5,21,"Arcs, radius 2 in",40.5,40.2
+segments-1,269,"Segments, radius 0.125 in",40.1,79.9
+segments-2,136,"Segments, radius 0.25 in",40.0,79.8
+segments-3,70,"Segments, radius 0.5 in",40.4,77.8
+segments-4,36,"Segments, radius 1 in",40.2,73.8
+segments-5,19,"Segments, radius 2 in",40.4,70.7
+zigzag,6,Zig-zag of 0.02 in steps,46.8,68.1
+rapid-xy,5,"X/Y rapids, long",41.3,44.6
+rapid-xy-short,36,"X/Y rapids, 1 in",40.7,52.2
+rapid-z,36,"Z rapids, 2 in",40.8,53.2
+rapid-z-short,71,"Z rapids, 0.5 in",40.2,52.1
+helix,3,Helix at 200 in/min,45.8,45.5
+fchange-single,3,"F-change line, one feed",50.8,50.8
+fchange-alternating,3,"F-change line, two feeds",51.0,52.0

@@ -17,6 +17,7 @@
 - [Nesting parts](#nesting-parts)
 - [Rotary jobs](#rotary-jobs)
 - [Templates](#templates)
+- [Calibrating your machine](#calibrating-your-machine)
 
 ## Workflow
 
@@ -404,7 +405,7 @@ NativeCAM cuts rotary work two ways. **On faces** (indexed, 3+1), the blank turn
 
 **Checks** lists anything the job can't cut. A wrapped design is exact only at the wrap diameter: deeper in, the same angle spans less, so a cut deeper than a tenth of the radius gets a warning with how much narrower it comes out at the bottom.
 
-**Feeds on wrapped toolpaths.** When the blank turns during a cut, the right feed depends on how far the tool is from the axis. NativeCAM writes those moves in inverse-time mode (`G93`): each line's F is one over its time in minutes, worked out from the length of the path the tool tip traces. That's what Avid's own wrap posts do. No move asks the blank to turn faster than the **Turn speed**: a move that turns with the tool tip on the axis, whose tip path has no length, takes as long as the turn does at that speed. Moves that don't turn the blank stay in `G94` with an ordinary feed, and `G94` is back on before every tool change and the program end. Controllers whose rotary feeds aren't documented and that don't take `G93` (Centroid and Buildbotics, so far) can't cut wrapped jobs. Mach4's `G93` hasn't been tested on a machine yet: before your first wrapped job, with the tool raised and no blank in the chuck, run `G21 G90`, then `G93 G01 A360 F10`, then `G94` from MDI. The turn should take exactly 6 seconds.
+**Feeds on wrapped toolpaths.** When the blank turns during a cut, the right feed depends on how far the tool is from the axis. NativeCAM writes those moves in inverse-time mode (`G93`): each line's F is one over its time in minutes, worked out from the length of the path the tool tip traces. That's what Avid's own wrap posts do. No move asks the blank to turn faster than the **Turn speed**: a move that turns with the tool tip on the axis, whose tip path has no length, takes as long as the turn does at that speed. Moves that don't turn the blank stay in `G94` with an ordinary feed, and `G94` is back on before every tool change and the program end. Controllers whose rotary feeds aren't documented and that don't take `G93` (Centroid and Buildbotics, so far) can't cut wrapped jobs. Mach4's `G93` hasn't been tested on a machine yet: before your first wrapped job, run the [rotary check](#calibrating-your-machine), whose first turn is `G93 G01 A360 F10` and should take exactly 6 seconds.
 
 **⌘R** simulates the job on the blank itself. On faces it turns to each angle with the tool at safe Z, as the machine will, at the machine's turn speed, and slows down for each turn so you can follow it. Wrapped, the tool stays over the axis and the blank turns under it as it cuts, with the toolpaths wrapped round it; a wall cut straight along the blank (a flute's side) shows very slightly radial. The run-time estimate times wrapped moves by the path of the tool tip, as the `G93` feeds make them run, and the simulation plays at the estimate's pace, so it ends at the estimated time. Like the program, it turns the blank the short way to a toolpath that starts more than a turn from where the last one left it, and stops a long job on the nearest whole turn rather than winding back to A0. 3D rotary roughing and finishing simulate the same way, all the way round. Designs stay on the flat sheet. The setup sheet gives each angle in the run order, and on a blank turned by hand, a step for each pause. On a job that turns the blank as it cuts, its cutting extents are X along the blank, the range of A the program cuts at (as the Avid post's extents comment gives it) and Z from the axis, since Y stays on the axis centreline.
 
@@ -420,3 +421,37 @@ A template is a set of toolpaths saved with their tools and every setting, to ad
 6. **Job setup.** The template's job setup is used only if you turn on **Use the template's job setup** in the sheet, which lists what it changes. A change to the XY or Z zero is marked in orange: set up and touch off the machine to match. Off, the toolpaths cut this job's material: **Through** and **Thickness −** depths follow its thickness, and plain depths stay as saved. Applying a template never changes the machine; the sheet says when the template was made for another one.
 
 Templates carry the project file format they need, and a template from a newer NativeCAM than yours is refused, as projects are. `nativecam-cli template save` and `template apply` do the same from the [command line](command-line.md#commands).
+
+## Calibrating your machine
+
+Several numbers behind NativeCAM's estimates are class defaults that no one has checked on your machine: the accelerations, corner tolerance and Z rapid behind every run time, the rotary axis's turn speed (90° a second until it's set), whether your controller runs inverse time (`G93`) as written, and whether it keeps moving through a change of feed, which [Feeds that follow the load](#feeds-that-follow-the-load) is waiting on. **File ▸ Calibration Programs…** makes ready-to-run programs that measure them in one short session at the machine. They're optional: run them whenever suits you, and nothing about your machine changes until you enter the times and click **Apply**.
+
+Each program is written by NativeCAM's own post for your controller, checked like any export, and saved to a folder you choose with a printable recording sheet. The timing suite and the rotary check also get a times file (`…-times.csv`).
+
+- **Timing suite** (an air cut, about 17 minutes of moves). It has 24 sections, each about 40 seconds long, which is long enough to time with a stopwatch to a few percent. A stop (`M0`) comes before each one. Mach4 and LinuxCNC show its message on screen; other controllers show it as a comment. The sections are:
+  - a line back and forth across the window at a quarter, half and all of the machine's highest feed
+  - 2 in (50 mm) squares at the same three feeds
+  - circles of 1/8 to 2 in (3 to 50 mm) radius, as arcs and as 10° segments
+  - a zig-zag of tiny steps, which shows how far ahead the controller plans
+  - long and short X/Y rapids
+  - long and short Z rapids
+  - a helix
+  - the **F-change line**: a line of 1 in pieces at one feed, then the same pieces alternating between two feeds that take the same time if the controller keeps constant velocity through each change of F.
+
+  Every move stays inside the window, 24 × 24 in by default (600 × 600 mm on a metric machine), and at or above the air height, 1 in by default and never below 25 mm. Z rises to 2 in above that for the Z rapids. A window bigger than the machine's travel is refused. Zero X and Y at the window's front-left corner. There's no tool change: load any bit and zero Z on the work (the spoilboard, or the top of anything in the window) before starting. Keep the bit clear of the work and clamps, and keep the overrides at 100%. At each stop, press Cycle Start and time the section from its first move until the machine stops. The stops are for timing only: never re-zero at them.
+- **Rotary check** (A only, in the air). It turns `G93 G1 A360 F10`, which should take 6 seconds, then makes rapid turns of 360° and 720°, which time the turn speed. Nothing but A moves. Take any stock out of the chuck, raise the bit clear and zero A where it is. It's written for controllers that drive A and take `G93`: Avid Mach4, LinuxCNC and grblHAL. Elsewhere it's refused, with the reason.
+- **Chip-load ladder** (a real cut, in scrap). With one bit and a material you pick, a row of slots steps the chip load from below the [chart](#feeds-and-speeds-for-form-and-dovetail-bits)'s range to above it, at one spindle speed or, with **Also step the spindle speed**, at three. Each slot plunges in front of the scrap and cuts into it from its front edge, half the bit's diameter deep (a dovetail at its full height). The slots are a bit's width or 3/8 in apart, whichever is more. It changes tools as any job does (on the Avid, the M6 macro and the touch plate). The recording sheet lists each rung's feed, speed and chip load, with columns for how it cut. The ladder only reads the charts: NativeCAM's feeds and speeds stay as they are. Form bits cut an edge, not a slot, so they're refused, as are bits no chart covers.
+
+**Entering the times.** Open **File ▸ Calibration Programs… ▸ Enter Times** and type the seconds for each section you timed (leave the rest blank), or click **Open Times File…** to load the times file you filled in. The times file holds exactly what the program was made of, so it's the one to use if you've changed the machine since. Then click **Fit**:
+
+- The timing suite fits the X/Y and Z accelerations, the Z rapid rate and the corner tolerance (junction deviation) by least squares on each section's error. NativeCAM's own run-time estimate runs the same sections.
+- The rotary check fits the turn speed.
+- The sheet shows each value before and after, and every section's error before and after.
+- **The F-change verdict** says whether the line with two feeds ran as fast as the single-feed line, within 3%. If it did, the controller keeps constant velocity through changes of F, and **Adjust feeds for load** won't slow the machine at them. If not, the sheet says how much each change costs.
+- **The G93 verdict** says whether the inverse-time turn took its 6 seconds.
+- A value the sections you timed don't pin down stays as it is.
+- Times that can't be right are refused with the reason: a section faster than its moves allow at their feeds, one far slower than any machine setting explains, a 720° turn quicker than a 360° one, or times that no setting fits within 20%.
+
+**Apply** writes the fitted values into this document's machine, marked as measured, and, if you leave it ticked, into the same machine in your machine library for new documents. It only ever changes them on that click, and NativeCAM's built-in machine defaults (the PRO6060's included) stay as they are. The look-ahead (how many lines the controller plans ahead) and the X/Y rapid rate aren't fitted; when the zig-zag or the segments are still well off after the fit, the sheet says so.
+
+From the [command line](command-line.md#commands), `nativecam-cli calibrate timing|rotary|ladder [project]` writes the same files, and `nativecam-cli calibrate fit times.csv project.nativecam --apply` fits and applies the times.

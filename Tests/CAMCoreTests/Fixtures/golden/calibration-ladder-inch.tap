@@ -1,0 +1,87 @@
+(NATIVECAM CHIP-LOAD LADDER: 7 slots with 1/4in Upcut End Mill in hardwood, from below the end-mill)
+(chart's chip loads to above them. A REAL CUT: use scrap.)
+(Scrap at least 5.875 x 5 in and 0.75 in thick, clamped clear of the slots, with a straight front)
+(edge.)
+(Zero X and Y at the scrap's front-left corner, and Z on its top as for any job. Each slot plunges in)
+(front of the scrap and cuts 0.125 in deep into it from the front edge; rung 1 is on the left.)
+(Listen to each rung and keep its chips: the recording sheet lists each rung's feed, speed and chip)
+(load.)
+(NativeCAM chip-load ladder)
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
+(Material: Scrap hardwood X=5.8750 Y=5.0000 Z=0.7500 in)
+(Z zero: Material top   XY zero: Lower left)
+(Program extents: X1.0000 to X4.7500  Y-0.2500 to Y4.0000  Z-0.1250 to Z0.1000)
+(Safe Z = 0.5000)
+(Tools used:)
+(  T1 1/4in Upcut End Mill - D0.2500 End Mill)
+(Toolpaths:)
+(  1. Rung 1: 0.0048 in/tooth at 12900 RPM - T1)
+(  2. Rung 2: 0.0058 in/tooth at 12900 RPM - T1)
+(  3. Rung 3: 0.0071 in/tooth at 12900 RPM - T1)
+(  4. Rung 4: 0.0086 in/tooth at 12900 RPM - T1)
+(  5. Rung 5: 0.0104 in/tooth at 12900 RPM - T1)
+(  6. Rung 6: 0.0127 in/tooth at 12900 RPM - T1)
+(  7. Rung 7: 0.0154 in/tooth at 12900 RPM - T1)
+G00 G94 G20 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T1 1/4in Upcut End Mill)
+T1M6
+M07
+S12900 M03
+(Toolpath: Rung 1: 0.0048 in/tooth at 12900 RPM  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X1.0000 Y-0.2500
+G00 Z0.1000
+G01 Z-0.1250 F50.0
+G01 Y4.0000 F123.8
+G00 Z0.5000
+(Toolpath: Rung 2: 0.0058 in/tooth at 12900 RPM  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X1.6250 Y-0.2500
+G00 Z0.1000
+G01 Z-0.1250 F50.0
+G01 Y4.0000 F150.4
+G00 Z0.5000
+(Toolpath: Rung 3: 0.0071 in/tooth at 12900 RPM  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X2.2500 Y-0.2500
+G00 Z0.1000
+G01 Z-0.1250 F50.0
+G01 Y4.0000 F182.7
+G00 Z0.5000
+(Toolpath: Rung 4: 0.0086 in/tooth at 12900 RPM  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X2.8750 Y-0.2500
+G00 Z0.1000
+G01 Z-0.1250 F50.0
+G01 Y4.0000 F221.8
+G00 Z0.5000
+(Toolpath: Rung 5: 0.0104 in/tooth at 12900 RPM  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X3.5000 Y-0.2500
+G00 Z0.1000
+G01 Z-0.1250 F50.0
+G01 Y4.0000 F269.4
+G00 Z0.5000
+(Toolpath: Rung 6: 0.0127 in/tooth at 12900 RPM  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X4.1250 Y-0.2500
+G00 Z0.1000
+G01 Z-0.1250 F50.0
+G01 Y4.0000 F327.2
+G00 Z0.5000
+(Toolpath: Rung 7: 0.0154 in/tooth at 12900 RPM  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X4.7500 Y-0.2500
+G00 Z0.1000
+G01 Z-0.1250 F50.0
+G01 Y4.0000 F397.3
+G00 Z0.5000
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+M05
+M09
+M30
