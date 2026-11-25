@@ -127,6 +127,63 @@ public struct FinishLaps: Hashable, Codable, Sendable {
     }
 }
 
+/// One of a profile's tabs, for showing and changing it on the canvas (`Toolpath.tabMarks`).
+public struct TabMark: Hashable, Codable, Sendable {
+    /// The tab's middle on the drawn wall, design XY.
+    public var point: Vec2
+    /// Its ends on the drawn wall (the tab's length at its base), design XY.
+    public var from: Vec2
+    public var to: Vec2
+    /// Placed by hand (otherwise one of the evenly spaced ones).
+    public var placed: Bool
+    /// The shape it's on, and its middle in that shape's own coordinates: what a mark placed here would be.
+    public var shapeID: UUID
+    public var localPoint: Vec2
+    /// Cut: false for a tab placed by hand that's no longer on its shape (shown where it was, left off the cut).
+    public var cut: Bool
+    /// Why it's worth a look (drawn in orange): left off, or thinner than set; nil when it's fine.
+    public var flag: String?
+
+    public init(point: Vec2, from: Vec2, to: Vec2, placed: Bool, shapeID: UUID, localPoint: Vec2, cut: Bool = true, flag: String? = nil) {
+        self.point = point
+        self.from = from
+        self.to = to
+        self.placed = placed
+        self.shapeID = shapeID
+        self.localPoint = localPoint
+        self.cut = cut
+        self.flag = flag
+    }
+
+    /// The mark that places this tab.
+    public var mark: ContourMark { ContourMark(shapeID: shapeID, point: localPoint) }
+}
+
+/// Where a profile loop with a chosen start begins, for the canvas (`Toolpath.startMarks`).
+public struct StartMark: Hashable, Codable, Sendable {
+    /// The start as chosen, on the drawn wall, design XY.
+    public var requested: Vec2
+    /// Where the loop is entered: the first point of the cut on the tool-centre loop, design XY.
+    public var used: Vec2
+    /// The direction the cut runs from there (unit).
+    public var direction: Vec2
+    /// How far `used` is from the chosen start on the tool-centre loop, mm (a lead that didn't fit there, or a tab).
+    public var moved: Double
+    public var shapeID: UUID
+    public var localPoint: Vec2
+
+    public init(requested: Vec2, used: Vec2, direction: Vec2, moved: Double, shapeID: UUID, localPoint: Vec2) {
+        self.requested = requested
+        self.used = used
+        self.direction = direction
+        self.moved = moved
+        self.shapeID = shapeID
+        self.localPoint = localPoint
+    }
+
+    public var mark: ContourMark { ContourMark(shapeID: shapeID, point: localPoint) }
+}
+
 public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     public var id: UUID
     public var name: String
@@ -149,6 +206,11 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// The inside corners that get (or could get) a relief, for showing and changing them on the canvas; nil when the
     /// operation has no corner reliefs. Posts and checks don't read it.
     public var reliefCorners: [ReliefCorner]?
+    /// A profile with tabs: each tab on the finished wall, for showing and changing them on the canvas; nil when the
+    /// profile has no tabs. Posts and checks don't read it (the tabs are in the motions).
+    public var tabMarks: [TabMark]?
+    /// A profile with chosen starts: where each such loop starts, for the canvas; nil when none is chosen.
+    public var startMarks: [StartMark]?
     /// On a wrapped rotary job, the diameter the motions wrap around, mm; nil for flat and indexed toolpaths. The
     /// motions stay on the flat sheet: the posts and checks turn design Y into the A angle and Z into a distance
     /// from the axis as they write and read the file (`RotaryWrap`).

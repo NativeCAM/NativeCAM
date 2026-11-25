@@ -167,7 +167,7 @@ struct PartHoldTests {
         c.tabs = TabSettings(enabled: true, count: 4, thickness: 0)
         #expect(!PartHold.holdsPart(c))
         let cutOut = CAMOperation(name: "Cut out", kind: .profile(c), shapeIDs: [], tool: ToolLibrary.starter.tool(number: 1)!)
-        #expect(!OperationScheduler.clearsTabs(1, of: cutOut))
+        #expect(!OperationScheduler.clearsTabs(1, of: cutOut, in: Project.demoSign()))
         c.tabs.thickness = 3
         #expect(PartHold.holdsPart(c))
         c.tabs.count = 0

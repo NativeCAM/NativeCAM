@@ -40,6 +40,11 @@ final class CanvasController: ViewportInteractionDelegate {
     private var dragStart: Vec2?
     private var dragIDs: Set<UUID> = []
     private var downHit: UUID?
+    /// A tab or chosen start of the selected profile being dragged along its loop.
+    private var tabDrag: (operation: UUID, tab: TabMark)?
+    private var startDrag: (operation: UUID, start: StartMark)?
+    /// The click tolerance of the last mouse down (a dragged start snaps to vertices within it).
+    private var downTolerance = 0.0
 
     static let pasteboardType = NSPasteboard.PasteboardType("com.nativecam.shapes")
 
@@ -64,6 +69,21 @@ final class CanvasController: ViewportInteractionDelegate {
             setCorner(mark.corner, to: mark.corner.nextRelief, in: mark.operation)
             return true
         }
+        // The selected profile's start and tabs: drag the start square or a tab along its loop, click a tab to remove it
+        // (on mouse up, so a drag doesn't), click the cut to add one.
+        downTolerance = tolerance
+        if let hit = workspace.startHit(point, tolerance: tolerance, project: p) {
+            startDrag = (hit.marks.operation, hit.start)
+            return true
+        }
+        if let hit = workspace.tabHit(point, tolerance: tolerance, project: p) {
+            tabDrag = (hit.marks.operation, hit.tab)
+            return true
+        }
+        if let hit = workspace.cutHit(point, tolerance: tolerance, project: p), hit.marks.params.tabs.enabled {
+            editProfile(hit.marks.operation) { $0.addingTab(hit.mark, shown: hit.marks.tabs) }
+            return true
+        }
         guard let hit = workspace.hitTest(point, tolerance: tolerance, project: p) else { return false }
         let extend = modifiers.contains(.shift) || modifiers.contains(.command)
         if extend {
@@ -82,11 +102,51 @@ final class CanvasController: ViewportInteractionDelegate {
     }
 
     func viewportDragMoved(to point: Vec2) {
+        if tabDrag != nil || startDrag != nil {
+            let mark = workspace.cutHit(point, tolerance: 1e6, project: p)?.mark
+            if let mark, let shape = p.shape(id: mark.shapeID) {
+                workspace.markDragPreview = shape.transform.apply(mark.point)
+            } else {
+                workspace.markDragPreview = nil
+            }
+            workspace.rebuildLines(p)
+            return
+        }
         guard let start = dragStart, !dragIDs.isEmpty else { return }
         workspace.setDragPreview(dragIDs, offset: point - start, project: p)
     }
 
     func viewportDragEnded(at point: Vec2, moved: Bool, clickCount: Int, modifiers: NSEvent.ModifierFlags) {
+        if let drag = tabDrag {
+            tabDrag = nil
+            workspace.markDragPreview = nil
+            guard let marks = workspace.selectedProfileMarks(p) else { return }
+            if moved {
+                // Slid along the loop it's on: the nearest point of that shape's outline.
+                if let mark = workspace.cutHit(point, tolerance: 1e6, project: p)?.mark, mark.shapeID == drag.tab.shapeID {
+                    editProfile(drag.operation) { $0.movingTab(drag.tab, to: mark, shown: marks.tabs, tolerance: 1e-3) }
+                } else {
+                    workspace.rebuildLines(p)
+                }
+            } else {
+                editProfile(drag.operation) { $0.removingTab(drag.tab, shown: marks.tabs, tolerance: 1e-3) }
+            }
+            return
+        }
+        if let drag = startDrag {
+            startDrag = nil
+            workspace.markDragPreview = nil
+            guard moved, let marks = workspace.selectedProfileMarks(p) else { workspace.rebuildLines(p); return }
+            // Within the click tolerance of a vertex it snaps there; otherwise mid-edge.
+            let snap = downTolerance
+            if let mark = workspace.cutHit(point, tolerance: 1e6, snap: snap, project: p)?.mark {
+                editProfile(drag.operation) { q in
+                    q.settingStart(drag.start.mark, clear: true, index: marks.index, tolerance: marks.tolerance)
+                        .settingStart(mark, index: marks.index, tolerance: marks.tolerance)
+                }
+            }
+            return
+        }
         defer {
             dragStart = nil
             dragIDs = []
@@ -263,6 +323,70 @@ final class CanvasController: ViewportInteractionDelegate {
         project.wrappedValue = proj
     }
 
+    // MARK: Tabs and starts
+
+    /// Changes the profile toolpath `operation`'s settings. One undo step.
+    private func editProfile(_ operation: UUID, _ change: (ProfileParams) -> ProfileParams) {
+        var proj = p
+        guard let i = proj.operations.firstIndex(where: { $0.id == operation }), case let .profile(q) = proj.operations[i].kind else { return }
+        let new = change(q)
+        guard new != q else { return }
+        proj.operations[i].kind = .profile(new)
+        project.wrappedValue = proj
+    }
+
+    /// The right-click menu on the selected profile's tabs, start or cut, nil when the click isn't on one of them.
+    private func profileMarksMenu(at point: Vec2, tolerance: Double) -> NSMenu? {
+        let start = workspace.startHit(point, tolerance: tolerance, project: p)
+        let tab = start == nil ? workspace.tabHit(point, tolerance: tolerance, project: p) : nil
+        let cut = workspace.cutHit(point, tolerance: tolerance, snap: tolerance, project: p)
+        guard let marks = start?.marks ?? tab?.marks ?? cut?.marks, start != nil || tab != nil || cut != nil else { return nil }
+        let id = marks.operation
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        if let reason = tab?.tab.flag {
+            let item = NSMenuItem(title: reason, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+        if let tab = tab?.tab {
+            menu.addItem(ClosureMenuItem("Remove Tab") { [weak self] in
+                self?.editProfile(id) { $0.removingTab(tab, shown: marks.tabs, tolerance: 1e-3) }
+            })
+        } else if let mark = cut?.mark, start == nil {
+            menu.addItem(ClosureMenuItem("Add Tab Here") { [weak self] in
+                self?.editProfile(id) { $0.addingTab(mark, shown: marks.params.tabs.enabled ? marks.tabs : []) }
+            })
+        }
+        if let mark = cut?.mark, start == nil {
+            menu.addItem(ClosureMenuItem("Start Here") { [weak self] in
+                self?.editProfile(id) { $0.settingStart(mark, index: marks.index, tolerance: marks.tolerance) }
+            })
+        }
+        menu.addItem(.separator())
+        let removeAll = ClosureMenuItem("Remove All Tabs") { [weak self] in
+            self?.editProfile(id) { q in var q = q; q.tabs.placed = []; return q }
+        }
+        removeAll.isEnabled = marks.params.tabs.enabled && !(marks.params.tabs.placed?.isEmpty ?? false)
+        menu.addItem(removeAll)
+        let even = ClosureMenuItem("Use Evenly Spaced Tabs") { [weak self] in self?.editProfile(id) { $0.resettingTabs() } }
+        even.isEnabled = marks.params.tabs.isPlaced
+        menu.addItem(even)
+        menu.addItem(.separator())
+        if let start = start?.start {
+            menu.addItem(ClosureMenuItem("Clear Start Point") { [weak self] in
+                self?.editProfile(id) { $0.settingStart(start.mark, clear: true, index: marks.index, tolerance: marks.tolerance) }
+            })
+        }
+        let clearAll = ClosureMenuItem("Clear All Start Points") { [weak self] in
+            self?.editProfile(id) { q in var q = q; q.startPoints = nil; return q }
+        }
+        clearAll.isEnabled = marks.params.startPoints?.isEmpty == false
+        menu.addItem(clearAll)
+        return menu
+    }
+
     /// A wall as it looks in the Top view.
     static func wallName(_ wall: ReliefCorner.Wall) -> String {
         var angle = atan2(wall.direction.y, wall.direction.x) * 180 / .pi
@@ -311,6 +435,7 @@ final class CanvasController: ViewportInteractionDelegate {
         if let mark = workspace.cornerHit(point, tolerance: tolerance, project: p) {
             return cornerMenu(mark.corner, operation: mark.operation)
         }
+        if let menu = profileMarksMenu(at: point, tolerance: tolerance) { return menu }
         let menu = NSMenu()
         if let hit = workspace.hitTest(point, tolerance: tolerance, project: p) {
             // Mac convention: right-clicking an unselected item selects it first.

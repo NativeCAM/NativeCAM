@@ -107,14 +107,8 @@ struct OperationInspector: View {
                 FinishPassSection(finish: Binding(get: { p.finishPass }, set: { var q = p; q.finishPass = $0; set(q) }), tool: op.tool,
                                   cutDepth: p.depth.cutDepth, units: units)
             }
-            Section("Tabs") {
-                Toggle("Add tabs", isOn: Binding(get: { p.tabs.enabled }, set: { var q = p; q.tabs.enabled = $0; set(q) }))
-                if p.tabs.enabled {
-                    IntField(title: "Tabs per contour", value: Binding(get: { p.tabs.count }, set: { var q = p; q.tabs.count = $0; set(q) }), range: 1...40)
-                    LengthField(title: "Tab length", mm: Binding(get: { p.tabs.width }, set: { var q = p; q.tabs.width = max(0.1, $0); set(q) }), units: units)
-                    LengthField(title: "Tab thickness", mm: Binding(get: { p.tabs.thickness }, set: { var q = p; q.tabs.thickness = max(0.1, $0); set(q) }), units: units)
-                }
-            }
+            TabsSection(params: Binding(get: { p }, set: { set($0) }), tool: op.tool, stock: project.stock, units: units,
+                        shapes: project.shapes(for: op))
         case let .pocket(p):
             let set: (PocketParams) -> Void = { op.kind = .pocket($0) }
             Section("Pocket") {
@@ -2066,6 +2060,87 @@ struct FinishPassSection: View {
                 if f.depth == .fullDepth, tool.fluteLength > 0, cutDepth > tool.fluteLength + 1e-6 {
                     SectionNote(text: "Deeper than the bit's flutes (\(units.format(tool.fluteLength)) \(units.symbol)): a full-depth finish is refused. Use Each pass.", warning: true)
                 }
+            }
+        }
+    }
+}
+
+/// A profile's tabs (shape, placement, size) and its chosen start points.
+struct TabsSection: View {
+    @Binding var params: ProfileParams
+    let tool: Tool
+    let stock: Stock
+    let units: LengthUnit
+    let shapes: [DesignShape]
+
+    private func fmt(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+
+    var body: some View {
+        let p = params
+        Section("Tabs") {
+            Toggle("Add tabs", isOn: Binding(get: { p.tabs.enabled }, set: { params.tabs.enabled = $0 }))
+            if p.tabs.enabled {
+                Picker("Shape", selection: Binding(get: { p.tabs.shape }, set: { params.tabs.shape = $0 })) {
+                    ForEach(TabShape.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let placed = p.tabs.placed {
+                    let found = ContourMarks.matchedCount(placed, shapes: shapes, toolRadius: tool.radius)
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Placed by hand: \(found) tab\(found == 1 ? "" : "s")")
+                            if found < placed.count {
+                                Text("\(placed.count - found) no longer on \(placed.count - found == 1 ? "its shape" : "their shapes"), left off")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                        Spacer()
+                        Button("Reset") { params = params.resettingTabs() }
+                            .controlSize(.small)
+                            .help("Go back to evenly spaced tabs")
+                    }
+                } else {
+                    IntField(title: "Tabs per contour", value: Binding(get: { p.tabs.count }, set: { params.tabs.count = $0 }), range: 1...40)
+                }
+                LengthField(title: "Tab length", mm: Binding(get: { p.tabs.width }, set: { params.tabs.width = max(0.1, $0) }), units: units)
+                LengthField(title: "Tab thickness", mm: Binding(get: { p.tabs.thickness }, set: { params.tabs.thickness = max(0.1, $0) }), units: units)
+                if p.tabs.shape == .triangular {
+                    if tool.shape.hasFlatBottom {
+                        let angle = atan2(p.tabs.thickness, max(p.tabs.width / 2, 1e-9)) * 180 / .pi
+                        Text(angle > 45 + 1e-9
+                             ? "Ramps at \(Int(angle.rounded()))°, steeper than 45°: the tool comes down off each tab at the plunge rate."
+                             : "Ramps at \(Int(angle.rounded()))°; full thickness at the centre, for a bit diameter.")
+                            .font(.caption).foregroundStyle(angle > 45 + 1e-9 ? .orange : .secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Triangular tabs need a flat-bottomed bit; this one cuts them rectangular.")
+                            .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                // Into the spoilboard, the tab left on the part is thinner than set.
+                let below = p.depth.cutDepth - stock.thickness
+                if stock.rotary == nil, below > 1e-6 {
+                    Text("Leaves \(fmt(max(0, p.tabs.thickness - below))) above the material's bottom (the cut goes \(fmt(below)) into the spoilboard).")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Text(p.tabs.isPlaced
+                     ? "Click the cut on the canvas to add a tab, click a tab to remove it, or drag it along the cut."
+                     : "Click the cut on the canvas to place tabs by hand: the evenly spaced ones become the first placed.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if p.side != .on {
+                let starts = p.startPoints?.count ?? 0
+                HStack {
+                    Text(starts == 0 ? "Start: nearest the tool" : "Start: chosen on the canvas (\(starts) loop\(starts == 1 ? "" : "s"))")
+                    Spacer()
+                    if starts > 0 {
+                        Button("Clear") { params.startPoints = nil }
+                            .controlSize(.small)
+                            .help("Start every loop where it's nearest the tool again")
+                    }
+                }
+                Text("Right-click the cut on the canvas and choose Start Here to start a loop there; drag the green square to move it.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
     }

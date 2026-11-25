@@ -30,8 +30,10 @@ public struct Project: Hashable, Sendable {
     /// cut direction on the toolpaths whose passes run in rows or a pattern (`PassDirection`), which an older build would
     /// ignore and cut its own way. The default direction, each toolpath's old one, doesn't raise it. Format 28 adds a
     /// profile's separate finishing pass (`ProfileFinishPass`), which an older build would ignore and cut the part to the
-    /// roughing's size.
-    public static let currentFormatVersion = 28
+    /// roughing's size. Format 29 adds a profile's triangular tabs, tabs placed by hand and chosen start points
+    /// (`TabSettings.formatVersion`), which an older build would ignore and cut its own evenly spaced rectangular tabs,
+    /// starting each loop elsewhere.
+    public static let currentFormatVersion = 29
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

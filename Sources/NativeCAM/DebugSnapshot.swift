@@ -152,6 +152,21 @@ enum DebugSnapshot {
             }
             for corner in corners { if let reason = CanvasController.flagReason(corner) { log("corner \(op.name): \(reason)") } }
         }
+        // Each profile with tabs or chosen starts selected in the top view, so its tab and start marks show
+        // (tabs-op-N.png), with the reason for each flagged tab.
+        for (i, op) in project.operations.enumerated() {
+            let tps = ws.job?.toolpaths.filter { $0.sourceOperationID == op.id } ?? []
+            let tabs = tps.flatMap { $0.tabMarks ?? [] }, starts = tps.flatMap { $0.startMarks ?? [] }
+            guard !tabs.isEmpty || !starts.isEmpty else { continue }
+            ws.selection = [.operation(op.id)]
+            ws.rebuildLines(project)
+            if let img = ViewportRenderer.snapshot(scene: ws.viewportScene(project), width: 1600, height: 1000, preset: .top) {
+                write(img, to: out.appendingPathComponent("tabs-op-\(i).png"))
+            }
+            log("tabs \(op.name): \(tabs.filter(\.cut).count) cut (\(tabs.filter(\.placed).count) placed by hand), \(starts.count) starts")
+            for tab in tabs { if let flag = tab.flag { log("tab \(op.name): \(flag)") } }
+            for start in starts where start.moved > 0.5 { log("start \(op.name): moved \(String(format: "%.1f", start.moved)) mm") }
+        }
         // Each rest toolpath selected in the top view, so its rest areas are shaded (rest-op-N.png).
         for (i, op) in project.operations.enumerated() {
             guard let areas = ws.job?.toolpaths.last(where: { $0.sourceOperationID == op.id && $0.restAreas != nil })?.restAreas else { continue }

@@ -497,6 +497,24 @@ public enum SetupSheet {
             h += "</ul>\n"
         }
 
+        // Tabs: how many each profile leaves, their shape and size, so the operator knows the parts are held and how much
+        // cleanup to expect.
+        let tabbed = project.operations.compactMap { op -> (CAMOperation, ProfileParams, Int)? in
+            guard case let .profile(p) = op.kind, p.cutsTabs else { return nil }
+            // Once per toolpath: a tiled job's pieces of one toolpath share its ID and its tabs.
+            var seen = Set<UUID>()
+            let n = job.toolpaths.filter { $0.sourceOperationID == op.id && seen.insert($0.id).inserted }
+                .reduce(0) { $0 + ($1.tabMarks?.filter(\.cut).count ?? 0) }
+            return n > 0 ? (op, p, n) : nil
+        }
+        if !tabbed.isEmpty {
+            h += "<h2>Tabs</h2>\n<ul>\n"
+            for (op, p, n) in tabbed {
+                h += "<li><b>\(esc(op.name))</b>: \(tabsClause(p, count: n, units: u))</li>\n"
+            }
+            h += "</ul>\n"
+        }
+
         // V-carve inlays: which side each toolpath cuts and the depths that make the two fit.
         let inlays = project.operations.compactMap { op -> (CAMOperation, VCarveParams, VCarveInlay)? in
             guard case let .vcarve(p) = op.kind, let inlay = p.inlay, cut.contains(op.id) else { return nil }
@@ -566,6 +584,13 @@ public enum SetupSheet {
     /// from the rotation axis. Their sheet Y is an angle, not a move: Y stays on the axis centreline, so Y is given
     /// only for the toolpaths cut on faces. On an axis along Y (`RotaryFrame`) the blank runs along Y and X is the
     /// axis across it. nil on any other job.
+    /// A profile's tabs in a few words: "6 triangular, 0.375 × 0.125 in, placed by hand".
+    static func tabsClause(_ p: ProfileParams, count: Int, units u: LengthUnit) -> String {
+        let shape = p.tabs.shape == .triangular ? " triangular" : ""
+        let size = "\(u.format(p.tabs.width, decimals: u == .inch ? 3 : 1)) × \(u.format(p.tabs.thickness, decimals: u == .inch ? 3 : 1)) \(u.symbol)"
+        return "\(count)\(shape) \(count == 1 ? "tab" : "tabs"), \(size), \(p.tabs.isPlaced ? "placed by hand" : "evenly spaced")"
+    }
+
     static func wrappedExtents(project: Project, job: JobResult, len: (Double) -> String) -> String? {
         let stock = project.stock, machine = project.machine
         let frame = RotaryFrame(project)

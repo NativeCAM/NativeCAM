@@ -39,6 +39,9 @@ public enum ToolShape: String, Codable, Sendable, CaseIterable, Identifiable {
     }
 
     public var isTapered: Bool { self == .vBit || self == .engraving }
+    /// A flat bottom across the bit's tip (an end mill, a bull nose's flat, a surfacing bit), which can ramp over a
+    /// triangular tab and leave it as set.
+    public var hasFlatBottom: Bool { self == .flatEndMill || self == .bullNose || self == .surfacing }
     public var usesCornerRadius: Bool { self == .bullNose }
     public var usesAngle: Bool { self == .vBit || self == .engraving || self == .drill }
     /// Form and dovetail bits, which only cut edges (a profile toolpath at depth), never floors or 3D surfaces.

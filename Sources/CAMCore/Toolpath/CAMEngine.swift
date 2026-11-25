@@ -485,7 +485,7 @@ public enum CAMEngine {
                 if early.kind.is3D && later.kind.is3D {
                     issues.append(JobIssue(.warning, "Runs before its roughing (“\(early.name)”). "
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))
-                } else if case let .edgeProfile(ep) = early.kind, case let .profile(pp) = later.kind, pp.tabs.enabled {
+                } else if case let .edgeProfile(ep) = early.kind, case let .profile(pp) = later.kind, PartHold.holdsPart(later, in: project) || (pp.tabs.enabled && pp.tabs.placed == nil) {
                     // Left on tabs it reaches down to: it would cut into them.
                     let u = project.displayUnits
                     func fmt(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
@@ -719,9 +719,9 @@ public enum CAMEngine {
             guard case let .edgeProfile(e) = edge.kind else { continue }
             let depth = e.depth(for: edge.tool)
             for cutOut in ops[(i + 1)...] {
-                guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(p),
+                guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(cutOut, in: project),
                       project.stock.rotary == nil, p.depth.cutDepth >= project.stock.thickness - 0.01,
-                      !Set(cutOut.shapeIDs).isDisjoint(with: edge.shapeIDs), !OperationScheduler.clearsTabs(depth, of: cutOut) else { continue }
+                      !Set(cutOut.shapeIDs).isDisjoint(with: edge.shapeIDs), !OperationScheduler.clearsTabs(depth, of: cutOut, in: project) else { continue }
                 let top = max(0, OperationScheduler.tabTop(p))
                 let left = p.depth.cutDepth - depth
                 let what = left > 1e-6 ? "takes the top off them along the edge, leaving them \(fmt(left)) thick there instead of "

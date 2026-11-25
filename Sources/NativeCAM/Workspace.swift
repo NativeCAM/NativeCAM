@@ -478,6 +478,116 @@ final class Workspace {
         return v
     }
 
+    // MARK: Tab and start marks (the selected profile's tabs and chosen starts, placed and moved on the canvas)
+
+    /// The selected inside or outside profile's tabs and starts as it cut them, for showing and editing on the canvas.
+    struct ProfileMarks {
+        var operation: UUID
+        var params: ProfileParams
+        var tabs: [TabMark]
+        var starts: [StartMark]
+        var index: ContourMarks.Index
+        /// How far a mark may be off its shape's outline (`ContourMarks.tolerance`).
+        var tolerance: Double
+        /// How far the cut runs off the drawn wall (the bit's radius plus allowances), mm.
+        var reach: Double
+    }
+
+    /// A tab or start being dragged, and where it would go: drawn as a ghost until the drag ends.
+    var markDragPreview: Vec2?
+
+    func selectedProfileMarks(_ project: Project) -> ProfileMarks? {
+        guard !isSimulating, let id = selectedOperationID, let op = project.operations.first(where: { $0.id == id }),
+              case let .profile(p) = op.kind, p.side != .on else { return nil }
+        var seen = Set<UUID>()
+        let toolpaths = (shownJob?.toolpaths ?? []).filter { $0.sourceOperationID == id && seen.insert($0.id).inserted }
+        let reach = op.tool.radius + abs(p.allowance) + (p.finishPass?.allowance ?? 0)
+        return ProfileMarks(operation: id, params: p, tabs: toolpaths.flatMap { $0.tabMarks ?? [] },
+                            starts: toolpaths.flatMap { $0.startMarks ?? [] },
+                            index: ContourMarks.Index(project.shapes(for: op), flatten: 0.01),
+                            tolerance: ContourMarks.tolerance(toolRadius: op.tool.radius), reach: reach)
+    }
+
+    /// The selected profile's tab under `p`: on its bar along the wall.
+    func tabHit(_ p: Vec2, tolerance: Double, project: Project) -> (marks: ProfileMarks, tab: TabMark)? {
+        guard let marks = selectedProfileMarks(project), marks.params.tabs.enabled else { return nil }
+        var best: (TabMark, Double)?
+        for tab in marks.tabs {
+            let d = Polyline([tab.from, tab.point, tab.to], closed: false).closestPoint(to: p).distance
+            if d <= max(tolerance * 1.5, marks.reach), d < (best?.1 ?? .infinity) { best = (tab, d) }
+        }
+        return best.map { (marks, $0.0) }
+    }
+
+    /// The selected profile's start square under `p`.
+    func startHit(_ p: Vec2, tolerance: Double, project: Project) -> (marks: ProfileMarks, start: StartMark)? {
+        guard let marks = selectedProfileMarks(project) else { return nil }
+        let hit = marks.starts.filter { $0.used.distance(to: p) <= max(tolerance * 2, marks.reach) }
+            .min { $0.used.distance(to: p) < $1.used.distance(to: p) }
+        return hit.map { (marks, $0) }
+    }
+
+    /// A point on the selected profile's cut under `p`, as a mark on the drawn wall it runs round (snapped to a vertex
+    /// within `snap`).
+    func cutHit(_ p: Vec2, tolerance: Double, snap: Double = 0, project: Project) -> (marks: ProfileMarks, mark: ContourMark)? {
+        guard let marks = selectedProfileMarks(project),
+              let mark = marks.index.mark(near: p, within: marks.reach + 2 * tolerance, snap: snap) else { return nil }
+        return (marks, mark)
+    }
+
+    /// Line geometry for the selected profile's tabs and starts: each tab a box along the wall, as long as the tab is at
+    /// its base (hollow light blue when evenly spaced, accent when placed by hand, orange when flagged); each chosen
+    /// start a square on the cut with an arrow the way the cut runs, and a thin line back to the start as chosen when
+    /// the entry had to move.
+    private func tabMarkLines(_ project: Project) -> [LineVertex] {
+        guard let marks = selectedProfileMarks(project) else { return [] }
+        var v: [LineVertex] = []
+        let z: Float = 0.06
+        let placed = Workspace.accent, standard = SIMD4<Float>(0.6, 0.9, 1, 1), warning = SIMD4<Float>(1, 0.6, 0.2, 1)
+        let startColor = SIMD4<Float>(0.3, 0.9, 0.4, 1)
+        func line(_ a: Vec2, _ b: Vec2, _ c: SIMD4<Float>) {
+            v.append(LineVertex(SIMD3(Float(a.x), Float(a.y), z), c))
+            v.append(LineVertex(SIMD3(Float(b.x), Float(b.y), z), c))
+        }
+        let w = max(0.6, marks.reach * 0.6)
+        if marks.params.tabs.enabled {
+            for tab in marks.tabs {
+                let color = tab.flag != nil ? warning : (tab.placed ? placed : standard)
+                var along = tab.to - tab.from
+                if along.length < 1e-6 { along = Vec2(1, 0) }
+                let n = along.normalized.perpLeft * w
+                if tab.from.distance(to: tab.to) < 1e-6 {
+                    // Not on its shape: a cross where it was.
+                    line(tab.point + Vec2(-w, -w), tab.point + Vec2(w, w), color)
+                    line(tab.point + Vec2(-w, w), tab.point + Vec2(w, -w), color)
+                    continue
+                }
+                let a = tab.from - n, b = tab.to - n, c = tab.to + n, d = tab.from + n
+                line(a, b, color); line(b, c, color); line(c, d, color); line(d, a, color)
+                if tab.placed { line(a, c, color); line(b, d, color) }
+            }
+        }
+        for start in marks.starts {
+            let s = w * 1.2
+            let u = start.direction.length > 1e-6 ? start.direction.normalized : Vec2(1, 0)
+            let n = u.perpLeft
+            let p = start.used
+            let corners = [p + (u + n) * s, p + (n - u) * s, p - (u + n) * s, p + (u - n) * s]
+            for k in 0..<4 { line(corners[k], corners[(k + 1) % 4], startColor) }
+            let tip = p + u * (4 * s)
+            line(p + u * s, tip, startColor)
+            line(tip, tip - u * s + n * (0.7 * s), startColor)
+            line(tip, tip - u * s - n * (0.7 * s), startColor)
+            if start.moved > 0.5 { line(start.requested, p, startColor) }
+        }
+        if let ghost = markDragPreview {
+            let s = w * 1.2
+            line(ghost + Vec2(-s, 0), ghost + Vec2(s, 0), placed)
+            line(ghost + Vec2(0, -s), ghost + Vec2(0, s), placed)
+        }
+        return v
+    }
+
     // MARK: Rest areas (the selected rest toolpath's)
 
     /// The selected toolpath's rest areas: where a 3D rest pass's bit goes, or what a pocket resting from earlier
@@ -590,6 +700,7 @@ final class Workspace {
             }
         }
         v += reliefMarkLines(project)
+        v += tabMarkLines(project)
         v += restAreaLines(project)
         v += wrapGuideLines(project)
         v += tileLines(project)
