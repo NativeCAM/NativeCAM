@@ -37,7 +37,7 @@ M05
 (MSG,Restart: check the tool is over the restart point, then go on)
 M00
 S13000 M03
-G04 P2.00
+G04 P3.00
 G00 Z12.700
 G00 Z2.540
 G01 Z-9.525 F1270

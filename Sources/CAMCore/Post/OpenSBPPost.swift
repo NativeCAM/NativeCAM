@@ -198,7 +198,8 @@ public struct OpenSBPPost: PostProcessor {
                 line("PAUSE")
                 line("TR,\(Int(rpm.rounded()))")
                 line("C6")
-                if machine.spindleSpinUpDwell > 0 { line("PAUSE \(String(format: "%.2f", machine.spindleSpinUpDwell))") }
+                // At least 3 s, whatever the machine's spin-up dwell: NativeCAM turned the spindle off for this stop.
+                line("PAUSE \(String(format: "%.2f", Restart.stopDwell(machine)))")
                 line("JZ,\(f(round(safe)))")
             }
             // A calibration program's section: stop over its start with its message, then restate safe Z.

@@ -37,7 +37,7 @@ M05
 M00
 (Set router speed dial to about 13000 RPM)
 S13000 M03
-G04 P2.00
+G04 P3.00
 G00 Z0.5000
 G00 Z0.2000
 G00 Z-0.1481

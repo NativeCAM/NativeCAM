@@ -246,13 +246,16 @@ public struct AvidMach4Post: Sendable {
     }
 
     /// A restart's stop with the tool over the restart point at safe Z, after the blank has turned: the spindle off (as
-    /// for every program stop), Mach4's on-screen message, then the spindle and its spin-up dwell again, then safe Z
+    /// for every program stop), Mach4's on-screen message, then the spindle and a dwell of at least 3 s, then safe Z
     /// restated, which also brings the tool back if Z was jogged during the stop.
     private func restartStop(_ message: String, rpm: Double, tool: Tool, safe: Double, writer w: inout Writer) {
         w.line("M05")
         w.comment("MSG,\(message)")
         w.line("M00")
-        spindleOn(rpm: rpm, tool: tool, writer: &w)
+        if machine.spindle == .router { w.comment("Set router speed dial to about \(Int(rpm.rounded())) RPM") }
+        w.line("S\(Int(rpm.rounded())) M03")
+        // At least 3 s, whatever the machine's spin-up dwell: NativeCAM turned the spindle off for this stop.
+        w.line("G04 P\(String(format: "%.2f", Restart.stopDwell(machine)))")
         w.line("G00 Z\(num(safe, isZ: true))")
     }
 

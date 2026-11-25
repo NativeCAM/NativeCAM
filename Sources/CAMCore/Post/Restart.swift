@@ -127,6 +127,14 @@ public enum Restart {
         public var fileCount: Int
     }
 
+    /// The least spin-up dwell after the restart's own stop above the restart point, seconds. NativeCAM adds that stop
+    /// and turns the spindle off for it, so it never feeds down with the spindle still coming up to speed, whatever the
+    /// machine's dwell is set to. The file's first spin-up keeps the machine's setting.
+    public static let minimumStopDwell = 3.0
+
+    /// The dwell after the restart's stop: the machine's spin-up dwell, and at least `minimumStopDwell`.
+    public static func stopDwell(_ machine: MachineProfile) -> Double { max(machine.spindleSpinUpDwell, minimumStopDwell) }
+
     /// The message of the stop above the restart point.
     public static let pauseMessage = "Restart: check the tool is over the restart point, then go on"
 
@@ -270,8 +278,9 @@ public enum Restart {
 
         var issues: [GCodeCheck.Issue] = []
         if project.machine.spindleSpinUpDwell <= 0 {
-            issues.append(GCodeCheck.Issue(.warning, "The machine's spin-up dwell is 0 s, so the restart feeds in as soon as the spindle "
-                + "is told to start. Wait for it to reach speed at the stop, or set a dwell in Material & Machine."))
+            issues.append(GCodeCheck.Issue(.warning, "The machine's spin-up dwell is 0 s, so the restart's first spindle start doesn't "
+                + "wait for the spindle to reach speed. The stop above the restart point dwells \(Int(minimumStopDwell)) s anyway. "
+                + "Set a dwell in Material & Machine."))
         }
         if request.pauseAbove, project.machine.customPost != nil {
             issues.append(GCodeCheck.Issue(.warning, "An imported Vectric post can't write the stop above the restart point: "

@@ -57,7 +57,7 @@ struct RestartTests {
         // The spindle is off for the stop, as for every program stop.
         #expect(section[5] == "G00 Z0.5000" && section[6].hasPrefix("G00 X") && section[7] == "M05" && section[8].hasPrefix("(MSG,Restart:"),
                 "\(section)")
-        #expect(Array(section[9...12]) == ["M00", "S13000 M03", "G04 P2.00", "G00 Z0.5000"], "\(section)")
+        #expect(Array(section[9...12]) == ["M00", "S13000 M03", "G04 P3.00", "G00 Z0.5000"], "\(section)")
         #expect(section[13].hasPrefix("G00 Z0.") && !section[13].contains("X"), "\(section)")
         // The header's advice.
         for advice in ["RESTART of Ramped pocket", "pass 2 of 2", "re-home, check XY zero", "Re-zero Z with the touch plate",
@@ -79,7 +79,8 @@ struct RestartTests {
         let b = try #require(mine.firstIndex { $0.hasPrefix("(Toolpath: Pocket plaque") })
         #expect(Array(full[a...]) == Array(mine[b...]))
         // The zero spin-up dwell of the default PRO6060 is a warning, not a forced minimum.
-        #expect(r.issues.contains { $0.severity == .warning && $0.message.contains("spin-up dwell is 0 s") })
+        #expect(r.issues.contains { $0.severity == .warning && $0.message.contains("spin-up dwell is 0 s")
+            && $0.message.contains("dwells 3 s anyway") })
         #expect(!mine.contains { $0.hasPrefix("G04") })
         try Self.golden(r, "restart-toolpath-start-inch")
     }
@@ -496,6 +497,42 @@ struct RestartTests {
         #expect(request.file == 0 && request.toolpath == 0 && request.start == .pass(2))
         let second = try #require(Restart.request(at: job.toolpaths[1], start: job.toolpaths[1].start, project: p, job: job))
         #expect(second.toolpath == 1 && second.start == .toolpath)
+    }
+
+    /// The restart's own stop (spindle off) is always followed by the spindle and a dwell of at least 3 s, even on a
+    /// machine with no spin-up dwell; the file's first spin-up keeps the machine's setting.
+    @Test(arguments: [0.0, 2.0, 5.0])
+    func theStopAboveTheRestartPointDwellsAtLeastThreeSeconds(_ setting: Double) throws {
+        let cases: [(String, Restart.Request, (inout Project) -> Void)] = [
+            ("sign", Restart.Request(toolpath: 1, start: .pass(2)), { _ in }),
+            ("sign", Restart.Request(start: .line(200), exact: true), { _ in }),
+            ("pocket-ramp", Restart.Request(start: .pass(2)), { $0.machine.outputUnits = .mm }),
+            ("split-per-tool-grbl", Restart.Request(file: 1, start: .pass(2)), { _ in }),
+            ("wrapped-rectangle", Restart.Request(start: .pass(2)), ControllerPostTests.controller(.linuxCNC, units: .mm)),
+            ("wrapped-rounding", Restart.Request(toolpath: 1), { _ in }),
+        ]
+        var failures: [String] = []
+        for (name, request, configure) in cases {
+            let p = try Self.fixture(name) { configure(&$0); $0.machine.spindleSpinUpDwell = setting }
+            let r = try Self.restart(p, request)
+            let l = Self.lines(r.file.gcode)
+            guard let msg = l.firstIndex(where: { $0.contains("Restart: check the tool") }) else { failures.append("\(name): no stop"); continue }
+            // The restart's stop: spindle off, message, M0, then every M3 after it before the first cut has its dwell.
+            let stop = try #require(l[msg...].firstIndex { $0 == "M00" || $0 == "M0" })
+            let start = try #require(l[stop...].firstIndex { $0.hasSuffix("M03") || $0.hasSuffix("M3") })
+            let dwell = l[start + 1]
+            let seconds = Double(dwell.split(separator: "P").last ?? "") ?? 0
+            if !dwell.hasPrefix("G04") && !dwell.hasPrefix("G4") || seconds < max(setting, 3) - 1e-9 {
+                failures.append("\(name) at \(setting) s: “\(dwell)” after the stop")
+            }
+            #expect(l[msg - 1] == "M05" || l[msg - 1] == "M5", "\(name): \(l[msg - 1])")
+            // The first spin-up is the machine's own.
+            let first = try #require(l.firstIndex { $0.hasSuffix("M03") || $0.hasSuffix("M3") })
+            let firstDwell = l[first + 1].hasPrefix("G04") || l[first + 1].hasPrefix("G4")
+            #expect(firstDwell == (setting > 0), "\(name) at \(setting) s: \(l[first + 1])")
+            #expect(Self.errors(r.issues).isEmpty, "\(name): \(Self.errors(r.issues))")
+        }
+        #expect(failures.isEmpty, "\(failures)")
     }
 
     // MARK: Command line

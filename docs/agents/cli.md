@@ -183,7 +183,7 @@ Estimated run time of the restart: H:MM:SS
 - an exact plunge into material;
 - an approach the simulation shows rapiding through material.
 
-`--force` doesn't override a refusal. 1 with `Not written: …` when the restart's own checks or the export checks find an error, as for a normal `post`. A spin-up dwell of 0 s is a warning.
+`--force` doesn't override a refusal. 1 with `Not written: …` when the restart's own checks or the export checks find an error, as for a normal `post`. A spin-up dwell of 0 s is a warning. The file's first spin-up keeps the machine's setting; the stop above the restart point dwells at least 3 s whatever it is.
 
 **An agent may write a restart file. Running it is the human's,** as for every file (see [AGENTS.md](../../AGENTS.md#hard-safety-rules)). Hand it over with its header, every warning, and the line the human said the controller showed. Never guess the line or the pass: ask the human where the job stopped.
 

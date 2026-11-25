@@ -566,10 +566,10 @@ A broken bit, a power cut or an E-stop can stop a job halfway. **File ▸ Export
 
 1. The usual start: units, `G94`, the tool change (always, even if the bit didn't change, so Z is measured again), the dust collector, and the spindle with its spin-up dwell.
 2. Up to safe Z, over the restart point, then the turn of the blank on a rotary job.
-3. A stop, on by default, with the tool over the restart point at safe Z and the spindle off, so you can check the position. On Mach4 its message shows on screen. After the stop the spindle starts again with its dwell.
+3. A stop, on by default, with the tool over the restart point at safe Z and the spindle off, so you can check the position. On Mach4 its message shows on screen. After the stop the spindle starts again, with a dwell of the machine's spin-up dwell or 3 s, whichever is longer: NativeCAM turned the spindle off for this stop, so it never feeds down before the spindle is back to speed.
 4. Down to the plunge height, then the pass's own entry (or, exact, a feed straight down).
 
-It's never a diagonal move and never a rapid to depth. A spin-up dwell of 0 s gets a warning. An air cut of the restart is an option on the sheet.
+It's never a diagonal move and never a rapid to depth. A spin-up dwell of 0 s gets a warning: the file's first spindle start keeps your setting, and only the stop above the restart point dwells 3 s anyway. An air cut of the restart is an option on the sheet.
 
 **Before you run it.** The file's header says this too:
 

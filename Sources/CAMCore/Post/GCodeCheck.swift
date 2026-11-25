@@ -497,9 +497,9 @@ public enum GCodeCheck {
                 out.append(ExpectedMove(kind: .dwell, end: s, start: s, center: .zero, feed: machine.spindleSpinUpDwell,
                                         tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: angle(tp.start), toolpathIndex: index))
             }
-            // A restart's stop above the restart point starts the spindle again, with its dwell.
-            if restarting?.pause != nil && machine.spindleSpinUpDwell > 0 {
-                out.append(ExpectedMove(kind: .dwell, end: s, start: s, center: .zero, feed: machine.spindleSpinUpDwell,
+            // A restart's stop above the restart point starts the spindle again, with a dwell of at least 3 s.
+            if restarting?.pause != nil {
+                out.append(ExpectedMove(kind: .dwell, end: s, start: s, center: .zero, feed: Restart.stopDwell(machine),
                                         tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: angle(tp.start), toolpathIndex: index))
             }
             tool = tp.tool.number

@@ -34,7 +34,7 @@ M5
 (Restart: check the tool is over the restart point, then go on)
 M0
 S18000 M3
-G4 P2.00
+G4 P3.00
 G0 Z1.4843
 G0 Z1.0843
 G1 Z0.9055 F25.0

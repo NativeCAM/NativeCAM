@@ -39,7 +39,7 @@ M5
 (MSG,Restart: check the tool is over the restart point, then go on)
 M0
 S18000 M3
-G4 P2.00
+G4 P3.00
 G0 Z37.700
 G0 Z27.540
 G1 Z23.000 F635

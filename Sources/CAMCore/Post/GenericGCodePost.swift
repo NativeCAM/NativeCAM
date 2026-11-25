@@ -228,14 +228,15 @@ public struct GenericGCodePost: PostProcessor {
     }
 
     /// A restart's stop with the tool over the restart point at safe Z: the spindle off (as for every program stop), its
-    /// message, then the spindle and its spin-up dwell again, then safe Z restated.
+    /// message, then the spindle and a dwell of at least 3 s, then safe Z restated.
     private func restartStop(_ message: String, rpm: Double, safe: Double, writer w: inout Writer) {
         w.line("M5")
         w.comment(dialect.showsMessages ? "MSG,\(message)" : message)
         w.line("M0")
         if machine.spindle == .router { w.comment("Set router speed dial to about \(Int(rpm.rounded())) RPM") }
         w.line("S\(Int(rpm.rounded())) M3")
-        if machine.spindleSpinUpDwell > 0 { w.line(dwell(machine.spindleSpinUpDwell)) }
+        // At least 3 s, whatever the machine's spin-up dwell: NativeCAM turned the spindle off for this stop.
+        w.line(dwell(Restart.stopDwell(machine)))
         w.line("G0 Z\(fmt(round(safe)))")
     }
 
