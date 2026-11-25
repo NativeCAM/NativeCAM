@@ -825,9 +825,14 @@ public enum CAMEngine {
             issues.append(JobIssue(.info, "Cuts through the material (\(fmt(breakthrough)) into the spoilboard).", operation: tp.name))
         }
         // Tool reach. 3D rotary roughing and finishing measure their own, from the stock they cut rather than the sheet's top.
+        // Flutes that follow a model go no deeper than their depth below its surface (the 3D finish before them has
+        // cleared the wood above it), so that's what the bit's cutting length has to reach, not the depth below the
+        // sheet's top or the blank's surface (#139).
+        var reach = deepest
+        if case let .fluting(f) = op.kind, f.surfaceModelID != nil { reach = f.depth }
         if op.kind.is3D && op.kind.turnsWholeBlank {
-        } else if deepest > tp.tool.fluteLength + 1e-6 {
-            issues.append(JobIssue(.warning, "Depth \(fmt(deepest)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))).",
+        } else if reach > tp.tool.fluteLength + 1e-6 {
+            issues.append(JobIssue(.warning, "Depth \(fmt(reach)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))).",
                                    operation: tp.name))
         }
         // On rotary stock the chuck and tailstock are past the ends of the blank: the whole cutter stays inside it.

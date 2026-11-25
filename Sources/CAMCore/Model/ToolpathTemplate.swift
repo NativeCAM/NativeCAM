@@ -398,6 +398,18 @@ extension Project {
         return .selection
     }
 
+    /// The line under a toolpath's vectors saying how a template would find them, for a toolpath without a rule of its
+    /// own. Flutes set to follow a 3D model that's no longer in the job say so instead: what's left of their shapes is
+    /// only the flute lines, so the inferred rule would read as a layer that wasn't chosen (#139).
+    public func templateLine(for op: CAMOperation, units: LengthUnit) -> String? {
+        if case let .fluting(f) = op.kind, let id = f.surfaceModelID,
+           !shapes.contains(where: { $0.id == id && $0.modelSpec != nil && !$0.isKeepOut }) {
+            return "In a template: nothing yet, as the 3D model these flutes follow is missing. Choose one under Follow."
+        }
+        guard let inferred = inferredVectorSelection(for: op) else { return nil }
+        return inferred == .selection ? "In a template: the vectors selected when it's applied." : "In a template: \(inferred.label(units))."
+    }
+
     /// How a template saved from this project finds a toolpath's shapes: its own rule, or the inferred one.
     public func templateVectorSelection(for op: CAMOperation) -> VectorSelection? {
         guard op.kind.needsShapes else { return nil }

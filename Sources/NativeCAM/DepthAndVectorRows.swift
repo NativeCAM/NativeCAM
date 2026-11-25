@@ -110,8 +110,8 @@ struct VectorRows: View {
         }
         .disabled(selected.isEmpty)
         .help("Select shapes in the Design list, then click to assign them to this toolpath")
-        if rule == nil, let inferred = project.inferredVectorSelection(for: op) {
-            Text(inferred == .selection ? "In a template: the vectors selected when it's applied." : "In a template: \(inferred.label(units)).")
+        if rule == nil, let line = project.templateLine(for: op, units: units) {
+            Text(line)
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
