@@ -1727,8 +1727,12 @@ struct ToolSection: View {
                     if !detail.isEmpty {
                         Text(detail.trimmingCharacters(in: CharacterSet(charactersIn: " ()"))).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text("Chip load \(units.format(tool.chipLoad, decimals: 4)) \(units.symbol)")
-                        .foregroundStyle(.secondary)
+                    // At the speed that will be posted, as the Chip load row is.
+                    let autoRPM = isAutomatic ? automatic?.rpm : nil
+                    let chip = ChipLoad.feedPerTooth(tool, machine: machine, automaticRPM: autoRPM)
+                    Text("Chip load \(units.format(chip, decimals: 4)) \(units.symbol)"
+                        + (autoRPM.map { " at \(Int($0.rounded()).formatted()) RPM" } ?? ""))
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.callout)
                 Spacer(minLength: 0)
@@ -1742,7 +1746,7 @@ struct ToolSection: View {
                     + "machine reaches, within the spindle's range and the bit's speed limit")
                 NumberField(title: isAutomatic ? "Tool's RPM" : "RPM", value: $tool.cutting.spindleRPM, suffix: "RPM", decimals: 0,
                             range: 1000...60000)
-                if isAutomatic { AutomaticSpindleRows(result: automatic, toolRPM: tool.cutting.spindleRPM, units: units) }
+                if isAutomatic { AutomaticSpindleRows(result: automatic, tool: tool, units: units) }
             } else {
                 NumberField(title: "Spindle", value: $tool.cutting.spindleRPM, suffix: "RPM", decimals: 0, range: 1000...60000)
             }
@@ -1761,14 +1765,17 @@ struct ToolSection: View {
     }
 }
 
-/// Spindle ▸ Automatic: the speed picked for the toolpath and why, or that it's picked when the job is next generated.
+/// Spindle ▸ Automatic: the speed picked for the toolpath and why, or that it's picked when the job is next generated,
+/// or, for a bit no chart covers, that it keeps the tool's RPM.
 struct AutomaticSpindleRows: View {
     let result: AutomaticSpindle?
-    let toolRPM: Double
+    let tool: Tool
     let units: LengthUnit
 
     var body: some View {
-        if let result {
+        if let keeps = AutomaticSpindle.keepsToolRPMNote(for: tool) {
+            Text(keeps).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } else if let result {
             LabeledContent("Automatic", value: "\(Int(result.rpm.rounded()).formatted()) RPM")
             Text(result.reason(units)).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let warning = result.warning(units) {
@@ -1778,8 +1785,10 @@ struct AutomaticSpindleRows: View {
         } else {
             Text("The speed is picked when the toolpaths are generated.").font(.caption).foregroundStyle(.secondary)
         }
-        Text("From the chip-load chart, not yet calibrated on your machine: one speed for the whole toolpath, written at its start.")
-            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        if AutomaticSpindle.keepsToolRPMNote(for: tool) == nil {
+            Text("From the chip-load chart, not yet calibrated on your machine: one speed for the whole toolpath, written at its start.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -1810,8 +1819,7 @@ struct ChipLoadRow: View {
         let reading = rec.reading
         let r = reading.range
         let source = reading.source(units)
-        let chip = automaticRPM.map { min(tool.cutting.feedRate, machine.maxFeedRate) / ($0 * Double(max(1, tool.fluteCount))) * thin }
-            ?? tool.chipLoad * thin
+        let chip = ChipLoad.feedPerTooth(tool, machine: machine, automaticRPM: automaticRPM) * thin
         let floor = r.lowerBound * (tool.shape == .flatEndMill ? 0.9 : 0.8)
         let status: (String, Color) = chip < floor ? ("exclamationmark.triangle.fill", .orange)
             : chip > r.upperBound * 1.25 ? ("exclamationmark.circle", .secondary) : ("checkmark.circle.fill", .green)

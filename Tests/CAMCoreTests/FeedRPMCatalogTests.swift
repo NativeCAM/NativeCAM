@@ -306,9 +306,47 @@ struct FeedRPMCatalogTests {
         let warnings = job.issues.filter { $0.severity == .warning }.map(\.message)
         let w = warnings.filter { $0.hasPrefix("Automatic spindle speed can't keep the chip") }
         #expect(w.count == 1, "\(warnings)")
-        #expect(w.first?.contains("it needs 1,600 RPM, and the spindle turns no slower than 6,000 RPM") == true, "\(w)")
+        #expect(w.first?.contains("it needs about 1,600 RPM, and the spindle turns no slower than 6,000 RPM") == true, "\(w)")
         #expect(!warnings.contains { $0.hasPrefix("Chip load") }, "one warning, not two: \(warnings)")
         #expect(Self.lines(files[0]).contains("S6000 M03"))
+    }
+
+    /// The reason quotes the speed the chart wants rounded to 100 RPM, as the speed picked is, and the speed it opens
+    /// with is the S the file posts (#134).
+    @Test func theReasonsSpeedsAreRounded() throws {
+        // The 1/2" end mill at 61 in/min: about 1,630 RPM wanted, off the hundred.
+        var tool = ToolLibrary.starter.tool(number: 10)!
+        tool.cutting.feedRate = 61.inch
+        let op = CAMOperation(name: "Slow cut out", kind: Self.profile(depth: 0.25.inch), shapeIDs: [Self.board.id],
+                              tool: tool, spindleSpeed: .automatic)
+        let p = Self.project("Unreachable speed", [op], shapes: [Self.board])
+        let job = CAMEngine.generate(p)
+        let files = [String(decoding: GoldenPostTests.post(p, job.toolpaths), as: UTF8.self)]
+        let auto = try #require(job.toolpaths.first?.automaticSpindle)
+        let exact = Int(auto.wanted.rounded())
+        try #require(exact % 100 != 0, "the case needs a speed off the hundred: \(auto.wanted)")
+        let reason = auto.reason(.inch)
+        let hundred = Int((auto.wanted / 100).rounded()) * 100
+        #expect(reason.contains("the chart's chip would need about \(hundred.formatted()) RPM, below the spindle's slowest"), "\(reason)")
+        #expect(!reason.contains(exact.formatted()), "\(reason)")
+        let s = try #require(Self.lines(files[0]).first { $0.hasPrefix("S") && $0.hasSuffix(" M03") })
+        let posted = try #require(Int(s.dropFirst().prefix { $0.isNumber }))
+        #expect(reason.hasPrefix("\(posted.formatted()) RPM puts the chip at"), "\(s) / \(reason)")
+    }
+
+    /// The chip under the bit picture and the Chip load row's are worked out at the same speed: Automatic's when it's on,
+    /// the tool's otherwise (#134).
+    @Test func theBitPictureAndChipLoadRowAgree() throws {
+        let job = CAMEngine.generate(Self.automaticJob())
+        let cut = try #require(job.toolpaths.first { $0.name == "Cut out" })
+        let auto = try #require(cut.automaticSpindle)
+        let machine = MachineProfile.avidPRO6060
+        // The row multiplies the picture's feed per tooth by the thinning, 1 for this profile.
+        let shown = ChipLoad.feedPerTooth(cut.tool, machine: machine, automaticRPM: auto.rpm)
+        #expect(abs(shown - auto.chip) < 1e-12, "\(shown) vs \(auto.chip)")
+        #expect(abs(shown - auto.feed / (auto.rpm * Double(cut.tool.fluteCount))) < 1e-12)
+        #expect(abs(ChipLoad.feedPerTooth(cut.tool, machine: machine, automaticRPM: nil) - cut.tool.chipLoad) < 1e-12)
+        #expect(abs(shown - cut.tool.chipLoad) > 1e-4, "the tool's RPM gives another chip, so the two would have disagreed")
     }
 
     /// A 1-1/2" cove (18,000 RPM limit) fed fast enough that the chart's chip would need more: it runs at its limit.
@@ -337,5 +375,10 @@ struct FeedRPMCatalogTests {
         let job = CAMEngine.generate(Self.project("V-bit", [op], shapes: [Self.board]))
         #expect(job.toolpaths.allSatisfy { $0.spindleRPM == vbit.cutting.spindleRPM && $0.automaticSpindle == nil })
         #expect(job.issues.contains { $0.severity == .info && $0.message.hasPrefix("Automatic spindle speed: no chip-load chart covers") })
+        // The inspector says so up front, rather than that a speed is picked (#134).
+        let note = try #require(AutomaticSpindle.keepsToolRPMNote(for: vbit))
+        #expect(note == "No chip-load chart covers a \(vbit.shape.label.lowercased()), so Automatic keeps the tool's "
+            + "\(Int(vbit.cutting.spindleRPM).formatted()) RPM for this toolpath.")
+        #expect(AutomaticSpindle.keepsToolRPMNote(for: Self.quarter()) == nil, "a charted bit gets a speed picked")
     }
 }
