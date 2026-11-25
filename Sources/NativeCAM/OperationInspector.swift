@@ -598,7 +598,9 @@ struct CutDirectionSection: View {
                     LabeledContent("Against Both ways", value: extra >= 0 ? "+\(formatDuration(extra))" : "−\(formatDuration(-extra))")
                     SectionNote(text: "The planner's estimate: \(formatDuration(time.seconds)) one way, \(formatDuration(time.bothWaysSeconds)) "
                         + "both ways. Each pass links back from its end to the next one's start over the material.")
-                } else if rotary {
+                }
+                // Alongside the time too: one way is where how the direction is judged matters most.
+                if rotary {
                     SectionNote(text: "Judged on the unrolled blank, from outside: turning forward, climbing keeps the material still "
                         + "to come on the bit's right.")
                 }
