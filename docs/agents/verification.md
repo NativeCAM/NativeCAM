@@ -37,18 +37,20 @@ What each severity means, and what to do:
 |---|---|---|
 | `error` | Writes no G-code, exits 1 | Fix the project. If you can't, report it. **Never `--force`** |
 | `warning` | Writes the file | Read it, fix it when the fix is clear (a feed the chip-load check suggests, a design too big for the board), and report any you leave |
-| `info` | Writes the file | Pass on the ones that ask the human to do something (measure the rotary's centre height, jog the rotary to check its direction, change the bit between files) |
+| `info` | Writes the file | Pass on the ones that ask the human to do something (measure the rotary's centre height, jog the rotary to check its direction, change the bit between files) | `Cuts through the material (…)` is reported for a cut down to exactly the material's bottom too, not only past it. `Holds its floor at … deep, …` means a 3D toolpath was stopped above a cut-out's tabs: check the model is meant to be left uncut below that, for the cut-out to finish.
 
 **Errors about the machine and the bit** ([#151](https://github.com/NativeCAM/NativeCAM/issues/151)). `post` refuses these and exits 1; in the app, Export lists them and asks "Export Anyway?":
 
 - `The program moves … in X, retracts and park included, … more than the machine's … of X travel.` (or Y). The program can't fit on the machine, wherever the work is zeroed. Make it smaller, nest or tile it, or check the machine's travel.
 - `The program spans … in Z; with … of tool sticking out that's … more than the machine's … of Z travel.` The lowest move is out of reach of the highest with that bit. Check the Z travel, the park and safe heights, and the stickout.
 - `Depth … is more than … sticks out of the collet (…), so the collet nut would hit the stock.` On a 2.5D toolpath. Cut shallower, or ask the human to let the bit out further and set its stickout.
+- `Cuts round the model to within a tab thickness of the material's bottom, … and its floor can't be held a tab thickness up` / `Cuts to … deep, below the floor held for the tabs of “…”`. A 3D roughing or finishing would cut the part free before its tabbed cut-out holds it ([#155](https://github.com/NativeCAM/NativeCAM/issues/155)). Make the tabs thinner, lift the model, or set the 3D toolpath's boundary to `model`. Never `--force` it.
 
 **Warnings that should stop a hand-over until the human has seen them**, because the file is written anyway:
 
 - `Toolpath extends beyond the material edges.` Often a part off the material: nest it, or move it.
 - `Cuts … into the spoilboard (material is … thick).` A depth or thickness is wrong.
+- `Cuts down to the material's bottom, and 3D toolpaths leave no tabs, …` A 3D toolpath frees whatever it cuts round while it's still cutting. Add a tabbed cut-out (which holds the 3D floor above its tabs), lift the model, or use the `model` boundary.
 - `Depth … exceeds the cutting length of …, so the shank rubs below the flutes.` The bit can't cut that deep without its shank rubbing.
 - `No vectors on layer …` / `No shapes selected.` A toolpath that cuts nothing.
 - On a rotary job, the direction note (`jog the rotary axis positive…`). Wrapped work comes out mirrored if the direction is wrong.

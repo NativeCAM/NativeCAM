@@ -168,7 +168,8 @@ extension Model3DGenerator {
         let stepover = max(0.02, tool.stepoverBasis * params.stepoverFraction)
         let cell = restCell(tool: tool, stepover: stepover)
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
-                            reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
+                            reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold,
+                            warnings: &warnings) else {
             return nil
         }
         var surface = targets(s, allowance: params.allowance)
@@ -209,7 +210,10 @@ extension Model3DGenerator {
                                          visiting: &visiting, warnings: &ignoredToo) else { continue }
                 centres = sub.areas
             }
-            let base = models.compactMap { $0.modelSpec?.bottomZ }.min() ?? 0
+            // Held off the material's bottom for a cut-out's tabs (`PartHold`), a reference is taken to have stopped at
+            // this toolpath's held floor too (the rest pass goes no lower anyway).
+            let lowest = models.compactMap { $0.modelSpec?.bottomZ }.min() ?? 0
+            let base = context.floorHold.map { max(lowest, $0) } ?? lowest
             reaches.append(Reach(name: ref.name, profile: profile, cutter: cutter, centres: Mask(centres, pitch: max(0.05, cell / 2)),
                                  floor: base + rp.allowance, left: rp.allowance - params.allowance))
         }

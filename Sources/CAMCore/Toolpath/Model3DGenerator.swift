@@ -17,15 +17,18 @@ enum Model3DGenerator {
         let surface: SurfaceGrid
         /// Cells inside the boundary (vectors/material modes): cut down to the model base where there's no model.
         let inside: [Bool]
-        /// Lowest model bottom (design Z).
+        /// Lowest model bottom (design Z), raised to `floorHold` when that's higher.
         let baseZ: Double
         let stock: Stock
+        /// The lowest design Z the toolpath may cut to anywhere, to keep a part on the tabs of its cut-out
+        /// (`PartHold`); nil = no limit.
+        var floorHold: Double? = nil
     }
 
     /// `reach` widens the "cut down to the base" area beyond where the tool centre may go: finishing passes the tool
     /// radius, because the band its flank touches was cleared by roughing (whose automatic margin is wider).
     static func setup(shapes: [DesignShape], boundary: ModelBoundary, margin: Double, reach: Double = 0, tool: Tool, stock: Stock,
-                      preferredCell: Double, warnings: inout [String]) -> Setup? {
+                      preferredCell: Double, hold: Double? = nil, warnings: inout [String]) -> Setup? {
         guard let (models, regions, mode) = boundaryRegions(shapes: shapes, boundary: boundary, margin: margin, stock: stock,
                                                             warnings: &warnings) else { return nil }
         let pad = tool.radius + preferredCell * 2
@@ -38,7 +41,8 @@ enum Model3DGenerator {
         if base < -stock.thickness - 1e-6 {
             warnings.append("The model is deeper than the material; the bottom of the model will be cut off.")
         }
-        return Setup(models: models, boundary: regions, mode: mode, surface: surface, inside: inside, baseZ: base, stock: stock)
+        return Setup(models: models, boundary: regions, mode: mode, surface: surface, inside: inside,
+                     baseZ: hold.map { max(base, $0) } ?? base, stock: stock, floorHold: hold)
     }
 
     /// The models among `shapes` and where the tool centre may go over them (`Setup.boundary`), with the boundary
@@ -135,6 +139,7 @@ enum Model3DGenerator {
                 guard stockRect.contains(g.center(c, r)) else { t[i] = -.infinity; continue } // no material out here
                 if g.covered[i] {
                     t[i] = min(0, g.heights[i] + a)
+                    if let h = s.floorHold { t[i] = max(t[i], Float(h) + a) } // the allowance above the held floor, as `base`
                 } else if s.mode == .model {
                     t[i] = .infinity
                 } else {
@@ -159,7 +164,7 @@ enum Model3DGenerator {
         }
         let cell = max(0.2, min(1.0, tool.diameter / 10))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Rough3DParams.autoMargin(tool: tool),
-                            tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
+                            tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, warnings: &warnings) else {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         if tool.shape == .taperedBallNose {
@@ -363,7 +368,7 @@ enum Model3DGenerator {
         let tool = op.tool
         let cell = max(0.2, min(1.0, tool.diameter / 10))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Rough3DParams.autoMargin(tool: tool),
-                            tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else { return [] }
+                            tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, warnings: &warnings) else { return [] }
         let target = targets(s, allowance: params.allowance)
         guard let deepest = target.filter({ $0.isFinite }).min().map(Double.init), deepest < -1e-3 else { return [] }
         let layers = roughLayers(s, target: target, deepest: deepest, params: params, tool: tool)
@@ -382,7 +387,7 @@ enum Model3DGenerator {
         let stepover = params.stepoverInUse(tool: tool)
         let cell = max(0.08, min(0.5, min(stepover / 2, tool.radius / 6)))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
-                            reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
+                            reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, warnings: &warnings) else {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         if tool.shape == .flatEndMill || tool.shape == .surfacing {

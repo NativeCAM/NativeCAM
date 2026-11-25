@@ -60,9 +60,20 @@ public enum OperationScheduler {
         }
         // On rotary stock a profile to the full thickness only reaches the axis, and the blank stays in the chuck.
         let flat = project.stock.rotary == nil
+        // Anything that reaches the material's bottom frees what it cuts round: a profile, a pocket's islands, and a 3D
+        // toolpath cutting round its model down to its base there. A 3D toolpath a tabbed cut-out holds stops above the
+        // tabs (`PartHold`), so it frees nothing; one that can't be held is an error in the checks, and is kept after
+        // what it would free here too.
         func cutsThrough(_ op: CAMOperation) -> Bool {
-            if flat, case let .profile(p) = op.kind { return p.depth.cutDepth >= thickness - 0.01 }
-            return false
+            guard flat else { return false }
+            switch op.kind {
+            case let .profile(p): return p.depth.cutDepth >= thickness - 0.01
+            case let .pocket(p): return p.depth.cutDepth >= thickness - 0.01
+            case .rough3D, .finish3D:
+                guard PartHold.reachesBottom(op, in: project) else { return false }
+                return PartHold.hold(for: op, in: project)?.possible != true
+            default: return false
+            }
         }
         /// An edge profile on a part a cut-out leaves on tabs, clear of them: the tabs still hold the part after the
         /// cut-out, so the edge profile may run on either side of it (the user's order stands).
@@ -96,6 +107,9 @@ public enum OperationScheduler {
             for i in 0..<m where i != j {
                 let a = ops[enabled[i]], b = ops[enabled[j]]
                 let aFreesB = cutsThrough(a) && inside(parts[j], boxes[i]) && !heldByTabs(b, a)
+                // Each frees the other (a 3D toolpath to the bottom round a part and the part's cut-out): whichever runs
+                // first frees it, so neither order is safe and the user's stands.
+                let both = aFreesB && cutsThrough(b) && inside(parts[i], boxes[j]) && !heldByTabs(a, b)
                 var hard = false
                 if cutsThrough(b), inside(parts[i], boxes[j]), !aFreesB, !heldByTabs(a, b) {
                     hard = true
@@ -107,7 +121,7 @@ public enum OperationScheduler {
                 } else if !a.kind.needsShapes, b.kind.needsShapes {
                     // Rounding turns the blank down before anything is cut on it.
                     hard = true
-                } else if i < j, !aFreesB, !roughs(b, before: a), !restsOn[i].contains(b.id), overlaps(boxes[i], boxes[j]) {
+                } else if i < j, !aFreesB || both, !roughs(b, before: a), !restsOn[i].contains(b.id), overlaps(boxes[i], boxes[j]) {
                     before[j] |= 1 << UInt64(i)
                 }
                 if hard {
@@ -143,7 +157,7 @@ public enum OperationScheduler {
     /// profile with tabs whose tops are at least that deep. Tabs are at the bottom of the cut, so a top-edge profile
     /// normally clears them.
     public static func clearsTabs(_ depth: Double, of cutOut: CAMOperation) -> Bool {
-        guard case let .profile(p) = cutOut.kind, p.side != .on, p.tabs.enabled, p.tabs.count > 0 else { return false }
+        guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(p) else { return false }
         return depth <= tabTop(p) + 1e-6
     }
 

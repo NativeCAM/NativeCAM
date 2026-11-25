@@ -28,6 +28,9 @@ public struct GenerationContext: Sendable {
     /// The whole project, for toolpaths that follow what earlier ones cut (rest machining, `RestMachining`). nil when an
     /// operation is generated on its own: a rest toolpath then has no references.
     public var project: Project?
+    /// The lowest design Z a flat 3D roughing or finishing may cut to, to keep its part on the tabs of the cut-out that
+    /// holds it (`PartHold`). nil = no limit.
+    public var floorHold: Double?
 
     public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005,
                 units: LengthUnit = .mm) {
@@ -293,6 +296,9 @@ public enum CAMEngine {
                     opContext.rotaryMaterial = { x, a, r in grid.highest(x: x, angle: a, reach: r) + between }
                 }
                 opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
+                // A 3D toolpath that would cut a part free before the tabs of its cut-out hold it stops above them (#155).
+                let hold = PartHold.hold(for: op, in: project)
+                if let hold, hold.possible { opContext.floorHold = hold.z }
                 if layout != nil, case let .profile(p) = op.kind {
                     breakLeads[op.id] = ProfileGenerator.breakLeads(op: op, params: p, shapes: shapes, context: opContext)
                 }
@@ -317,6 +323,7 @@ public enum CAMEngine {
                     }
                 }
                 generated = generated.map { withDirectionNote($0, operation: op) }
+                if let hold { generated = generated.map { withHoldCheck($0, hold: hold, project: project) } }
                 // Spindle ▸ Automatic: one speed per toolpath, set before anything reads it (feeds that follow the
                 // load hold their chip floor at it; tiles and sheets copy it).
                 if op.usesAutomaticSpindle {
@@ -712,7 +719,7 @@ public enum CAMEngine {
             guard case let .edgeProfile(e) = edge.kind else { continue }
             let depth = e.depth(for: edge.tool)
             for cutOut in ops[(i + 1)...] {
-                guard case let .profile(p) = cutOut.kind, p.side != .on, p.tabs.enabled, p.tabs.count > 0,
+                guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(p),
                       project.stock.rotary == nil, p.depth.cutDepth >= project.stock.thickness - 0.01,
                       !Set(cutOut.shapeIDs).isDisjoint(with: edge.shapeIDs), !OperationScheduler.clearsTabs(depth, of: cutOut) else { continue }
                 let top = max(0, OperationScheduler.tabTop(p))
@@ -725,6 +732,22 @@ public enum CAMEngine {
             }
         }
         return issues
+    }
+
+    /// A 3D toolpath held off the material's bottom for a cut-out's tabs (`PartHold`), with the note saying so, or the
+    /// error when the floor couldn't be held or the toolpath still cuts below it.
+    static func withHoldCheck(_ tp: Toolpath, hold: PartHold.Hold, project: Project) -> Toolpath {
+        guard let ext = tp.cuttingExtents else { return tp }
+        var t = tp
+        let units = project.displayUnits
+        if !hold.possible {
+            t.errors = (t.errors ?? []) + [PartHold.impossible(hold, stock: project.stock, units: units)]
+        } else if ext.min.z < hold.z - 0.01 {
+            t.errors = (t.errors ?? []) + [PartHold.stillCutsThrough(hold, deepest: -ext.min.z, units: units)]
+        } else {
+            t.notes = (t.notes ?? []) + [PartHold.note(hold, stock: project.stock, units: units)]
+        }
+        return t
     }
 
     /// An empty toolpath saying why, when the operation's bit is one its kind of toolpath can't cut with
@@ -863,12 +886,19 @@ public enum CAMEngine {
             }
         }
         // Material thickness: through-cuts are fine, but flag anything that digs well into the spoilboard.
-        let breakthrough = stock.rotary == nil ? deepest - stock.thickness : 0
+        // Reaching the bottom face is cutting through it, within the tolerance a depth fitted to the material has (#155).
+        let breakthrough = stock.rotary == nil ? deepest - stock.thickness : -.infinity
         if breakthrough > 0.04.inch {
             issues.append(JobIssue(.warning, "Cuts \(fmt(breakthrough)) into the spoilboard (material is \(fmt(stock.thickness)) thick).",
                                    operation: tp.name))
-        } else if breakthrough > 1e-6 {
-            issues.append(JobIssue(.info, "Cuts through the material (\(fmt(breakthrough)) into the spoilboard).", operation: tp.name))
+        } else if breakthrough > -0.01 {
+            issues.append(JobIssue(.info, "Cuts through the material (\(fmt(max(0, breakthrough))) into the spoilboard).", operation: tp.name))
+        }
+        // A 3D toolpath leaves no tabs: whatever it cuts round down to the bottom comes loose while it's still cutting.
+        if breakthrough > -0.01, op.kind.is3D, !op.kind.turnsWholeBlank {
+            issues.append(JobIssue(.warning, "Cuts down to the material's bottom, and 3D toolpaths leave no tabs, so whatever it cuts "
+                + "round comes loose while it's still cutting. Lift the model, set Boundary to Model outline, or cut the part out "
+                + "afterwards with a tabbed profile, which holds this toolpath's floor above its tabs.", operation: tp.name))
         }
         // Tool reach. 3D rotary roughing and finishing measure their own, from the stock they cut rather than the sheet's top.
         // Flutes that follow a model go no deeper than their depth below its surface (the 3D finish before them has
