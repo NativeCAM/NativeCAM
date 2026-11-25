@@ -18,13 +18,13 @@ G64
 (Change to Tool: T2 1/8in Upcut End Mill)
 T2M6
 M07
+G00 Z0.5000
+(MSG,Tile 4 of 4, spindle off: fit dowels in holes 5, 6, 7 and 8, see the setup sheet, clamp the material, then resume.)
+M00
 S18000 M03
 (Toolpath: Holes  Tool: T2 1/8in Upcut End Mill)
 G00 Z0.5000
 G00 X8.0000 Y8.0000
-(MSG,Tile 4 of 4: check dowels are in holes 5, 6, 7 and 8, see the setup sheet, then resume. If they aren't, stop the spindle before fitting them.)
-M00
-G00 Z0.5000
 G00 Z0.1000
 G01 Z-0.5000 F25.0
 G00 Z0.5000

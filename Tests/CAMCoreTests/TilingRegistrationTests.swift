@@ -94,17 +94,66 @@ struct TilingRegistrationTests {
         let p = Self.gridSheet()
         let job = CAMEngine.generate(p)
         let tiles = try #require(job.tiling).tiles
-        #expect(tiles[0].allSatisfy { $0.stopMessage == nil })
-        let messages = tiles.dropFirst().map { $0.first?.stopMessage }
-        #expect(messages[0]?.hasPrefix("Tile 2 of 4: check dowels are in holes 1 and 2,") == true)
-        #expect(messages[1]?.hasPrefix("Tile 3 of 4: check dowels are in holes 3 and 4,") == true)
-        #expect(messages[2]?.hasPrefix("Tile 4 of 4: check dowels are in holes 5, 6, 7 and 8,") == true)
+        #expect(tiles[0].allSatisfy { $0.spindleOffStop == nil })
+        let messages = tiles.dropFirst().map { $0.first?.spindleOffStop }
+        #expect(messages[0]?.hasPrefix("Tile 2 of 4, spindle off: fit dowels in holes 1 and 2,") == true)
+        #expect(messages[1]?.hasPrefix("Tile 3 of 4, spindle off: fit dowels in holes 3 and 4,") == true)
+        #expect(messages[2]?.hasPrefix("Tile 4 of 4, spindle off: fit dowels in holes 5, 6, 7 and 8,") == true)
         // Only the first toolpath of each file stops, and the message fits in a comment.
-        for tps in tiles { #expect(tps.dropFirst().allSatisfy { $0.stopMessage == nil }) }
+        for tps in tiles { #expect(tps.dropFirst().allSatisfy { $0.spindleOffStop == nil }) }
         #expect(messages.allSatisfy { $0?.contains("(") == false && $0?.contains(")") == false })
         // Feed-through stops for nothing.
         let fed = CAMEngine.generate(TilingTests.longBoard())
-        #expect(fed.toolpaths.allSatisfy { $0.stopMessage == nil })
+        #expect(fed.toolpaths.allSatisfy { $0.spindleOffStop == nil })
+    }
+
+    /// The dowel stop is made with the spindle off on every controller that writes it, even when the spindle is
+    /// already turning (issue #141): safe Z, spindle off, the stop, then the spindle on again with its spin-up dwell.
+    @Test func dowelStopsAreMadeWithTheSpindleOff() throws {
+        var machine = MachineProfile.avidPRO6060
+        machine.model = .custom
+        machine.spindleSpinUpDwell = 2
+        let tool = Self.lib.tool(number: 1)!
+        func toolpath(_ n: Int, stop: String?) -> Toolpath {
+            var tp = Toolpath(id: Self.id(40 + n), name: "Cut \(n)", tool: tool, spindleRPM: 16000, start: Vec3(10, 10, 12),
+                              motions: [.rapid(Vec3(10, 10, 2)), .feed(Vec3(10, 10, -1), 500), .feed(Vec3(30, 10, -1), 1000),
+                                        .rapid(Vec3(30, 10, 12))], operationID: Self.id(40 + n))
+            tp.spindleOffStop = stop
+            return tp
+        }
+        // The second toolpath stops, after the first has started the spindle.
+        let paths = [toolpath(1, stop: nil), toolpath(2, stop: "Fit dowels in holes 1 and 2, then resume.")]
+        var avid = Project(name: "Stop", machine: machine)
+        avid.stock = Stock(width: 100, height: 100, thickness: 18)
+        var linux = avid
+        linux.machine.controller = ControllerProfile(family: .linuxCNC)
+        var shopBot = avid
+        shopBot.machine.controller = ControllerProfile(family: .openSBP)
+        let cases: [(String, String, Set<String>, Set<String>, String, String)] = [
+            ("Mach4", AvidMach4Post(project: avid, date: GoldenPostTests.date).post(paths), ["M00"], ["M05"], "M03", "G04"),
+            ("LinuxCNC", GenericGCodePost(project: linux, dialect: .linuxCNC, date: GoldenPostTests.date).post(paths), ["M0"], ["M5"], "M3", "G4"),
+            ("OpenSBP", OpenSBPPost(project: shopBot, date: GoldenPostTests.date).post(paths), ["PAUSE"], ["C7"], "C6", "PAUSE "),
+        ]
+        for (name, text, stopWords, offWords, onWord, dwellWord) in cases {
+            // Mach4 and OpenSBP files end lines in CR LF (one Character in Swift, so normalise first).
+            let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            let message = try #require(lines.firstIndex { $0.contains("Fit dowels in holes 1 and 2") }, "\(name)")
+            let stop = message + 1
+            try #require(stop + 1 < lines.count, "\(name)")
+            #expect(stopWords.contains(lines[stop]), "\(name): \(lines[stop])")
+            // The spindle went off after it last started, before the stop...
+            let lastOn = try #require(lines[..<message].lastIndex { $0.contains(onWord) }, "\(name)")
+            let off = lines[lastOn..<message].contains { offWords.contains($0) }
+            #expect(off, "\(name)")
+            // ...and starts again after it, with the spin-up dwell, before the next cut.
+            let nextOn = try #require(lines[stop...].firstIndex { $0.contains(onWord) }, "\(name)")
+            try #require(nextOn + 1 < lines.count, "\(name)")
+            let dwell = lines[nextOn + 1].hasPrefix(dwellWord)
+            #expect(dwell, "\(name): \(lines[nextOn + 1])")
+            let firstCut = lines[stop...].firstIndex { $0.hasPrefix("G01") || $0.hasPrefix("G1 ") || $0.hasPrefix("M3,") } ?? lines.count
+            #expect(nextOn < firstCut, "\(name)")
+        }
     }
 
     @Test func setupSheetNumbersTheHolesForEachTile() throws {
@@ -160,7 +209,7 @@ struct TilingRegistrationTests {
             let data = post.post(file.toolpaths).data(using: .ascii, allowLossyConversion: true)!
             try GoldenPostTests.check(data, golden: "decoded-tiled-grid-v9-tile-\(k + 1)")
             let text = String(decoding: data, as: UTF8.self)
-            #expect(k == 0 || text.contains("(MSG,Tile \(k + 1) of 4: check dowels are in holes"))
+            #expect(k == 0 || text.contains("(MSG,Tile \(k + 1) of 4, spindle off: fit dowels in holes"))
             let issues = GCodeCheck.run(text, toolpaths: file.toolpaths, project: file.project, dialect: .avidMach4)
             #expect(issues.filter { $0.severity != .info }.isEmpty, "\(issues.map(\.text))")
         }
@@ -268,7 +317,7 @@ struct TilingRegistrationTests {
         let p = Self.gridSheet { $0.tiling?.registration = nil }
         let job = CAMEngine.generate(p)
         #expect(!job.issues.contains { $0.message.hasPrefix("There's no room for a lead") })
-        #expect(job.toolpaths.allSatisfy { $0.stopMessage == nil })
+        #expect(job.toolpaths.allSatisfy { $0.spindleOffStop == nil })
         #expect(job.tiling?.layout.registration == nil)
     }
 }

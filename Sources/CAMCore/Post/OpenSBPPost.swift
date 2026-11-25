@@ -153,6 +153,21 @@ public struct OpenSBPPost: PostProcessor {
                 currentRPM = nil
                 state = nil
             }
+            // A stop the operator works at the material for (an individual tile's dowels): the tool at safe Z and the
+            // spindle off. The spindle starts again below, with its spin-up pause.
+            if let message = tp.spindleOffStop {
+                if let s = state {
+                    if s.z < round(safe) { jog(Vec3(units.toMM(s.x), units.toMM(s.y), safe)) }
+                } else {
+                    line("JZ,\(f(round(safe)))")
+                }
+                if currentRPM != nil {
+                    line("C7")
+                    currentRPM = nil
+                }
+                comment(message)
+                line("PAUSE")
+            }
             if currentRPM != rpm {
                 if machine.spindle == .router { comment("Set the router speed dial to about \(Int(rpm.rounded())) RPM") }
                 line("TR,\(Int(rpm.rounded()))")

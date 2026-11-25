@@ -141,6 +141,22 @@ public struct GenericGCodePost: PostProcessor {
                 w.line("M0")
                 dial = rotary.position(angle)
             }
+            // A stop the operator works at the material for (an individual tile's dowels): the tool at safe Z and the
+            // spindle off, with its message (on screen where the controller reads `(MSG,…)`). The spindle starts again
+            // below, with its spin-up dwell.
+            if let message = tp.spindleOffStop {
+                let safe = round(workZ(stock.clearanceHeight))
+                if state.z != safe {
+                    w.line("G0 Z\(fmt(safe))")
+                    state.z = safe
+                }
+                if currentRPM != nil {
+                    w.line("M5")
+                    currentRPM = nil
+                }
+                w.comment(dialect.showsMessages ? "MSG,\(message)" : message)
+                w.line("M0")
+            }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             if currentRPM != rpm || toolChanged {
                 if machine.spindle == .router { w.comment("Set router speed dial to about \(Int(rpm.rounded())) RPM") }
