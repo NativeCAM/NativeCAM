@@ -185,24 +185,26 @@ struct TilingSection: View {
             Text("First").tag(true)
         }
         .help("Where the remainder tile goes when the material isn't a whole number of tiles long")
-        if t.mode.isFeedThrough {
-            Toggle("Registration holes", isOn: Binding(get: { t.registration?.enabled == true }, set: { on in
-                var r = tiling.wrappedValue.registration ?? RegistrationHoles()
-                r.enabled = on
-                tiling.wrappedValue.registration = r
-            }))
-            .help("Drill dowel holes into the spoilboard and through the material one tile apart, so each move lands exactly")
-            if let reg = t.registration, reg.enabled { registration(reg) }
-        }
+        Toggle("Registration holes", isOn: Binding(get: { t.registration?.enabled == true }, set: { on in
+            var r = tiling.wrappedValue.registration ?? RegistrationHoles()
+            r.enabled = on
+            tiling.wrappedValue.registration = r
+        }))
+        .help(t.mode.isFeedThrough
+            ? "Drill dowel holes into the spoilboard and through the material one tile apart, so each move lands exactly"
+            : "Drill a numbered pair of dowel holes at every tile line, and the spoilboard holes under them, so each tile lands exactly")
+        if let reg = t.registration, reg.enabled { registration(reg, grid: !t.mode.isFeedThrough) }
     }
 
     @ViewBuilder
-    private func registration(_ reg: RegistrationHoles) -> some View {
+    private func registration(_ reg: RegistrationHoles, grid: Bool) -> some View {
         let set: (RegistrationHoles) -> Void = { tiling.wrappedValue.registration = $0 }
         LengthField(title: "Dowel diameter", mm: Binding(get: { reg.diameter }, set: { var r = reg; r.diameter = $0; set(r) }),
                     units: units, help: "The hole size: the dowel or pin you'll register with.", minimum: 1)
         LengthField(title: "In from the edges", mm: Binding(get: { reg.edgeOffset }, set: { var r = reg; r.edgeOffset = $0; set(r) }),
-                    units: units, help: "How far the pair of holes is in from each side of the material. Keep them in waste, clear of the design.",
+                    units: units, help: grid
+                        ? "How far each pair of holes is in from the ends of its tile line. Holes that land on a part slide along the line to clear it."
+                        : "How far the pair of holes is in from each side of the material. Keep them in waste, clear of the design.",
                     minimum: 0)
         LengthField(title: "Into the spoilboard", mm: Binding(get: { reg.spoilboardDepth }, set: { var r = reg; r.spoilboardDepth = $0; set(r) }),
                     units: units, help: "How deep the holes go into the spoilboard below the material.", minimum: 1)

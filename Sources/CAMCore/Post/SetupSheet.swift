@@ -607,7 +607,9 @@ public enum SetupSheet {
             h += "<dt>File\(files.count > 1 ? "s" : "")</dt><dd>\(files.map(esc).joined(separator: "<br>"))</dd>\n"
         }
         h += "<dt>Before it</dt><dd>\(esc(moveText(layout, to: k, stock: stock, len: len)))</dd>\n"
-        if let reg = layout.registration {
+        if let reg = layout.registration, !reg.holes.isEmpty {
+            h += gridRegistration(reg, tile: k, layout: layout, work: work, len: len)
+        } else if let reg = layout.registration {
             let dowels = reg.dowels[k], drilled = reg.drilled[k]
             if !dowels.isEmpty {
                 h += "<dt>Dowels</dt><dd>Line the holes tile \(k) drilled up over the spoilboard holes and drop a \(len(2 * reg.radius)) "
@@ -642,6 +644,43 @@ public enum SetupSheet {
         h += "</table>\n"
         h += preview(project: project, tiled: tiled, tile: tile)
         h += "</section>\n"
+        return h
+    }
+
+    /// "1", "1 and 2", "1, 2 and 5".
+    static func numberList(_ numbers: [Int]) -> String {
+        let s = numbers.map(String.init)
+        return s.count < 2 ? s.joined() : s.dropLast().joined(separator: ", ") + " and " + s[s.count - 1]
+    }
+
+    /// Individual tiles: the numbered holes a tile stands on dowels through, and the ones it drills.
+    static func gridRegistration(_ reg: RegistrationLayout, tile k: Int, layout: TileLayout, work: (Vec2) -> String,
+                                 len: (Double) -> String) -> String {
+        var h = ""
+        let tile = layout.tiles[k]
+        let pinned = reg.holes.filter { $0.pinnedFor == k }
+        if !pinned.isEmpty {
+            // Grouped by the tile that drilled them.
+            let groups = Dictionary(grouping: pinned, by: \.drilledBy).sorted { $0.key < $1.key }
+            let which = groups.map { "\(numberList($0.value.map(\.number))) (tile \($0.key + 1) drilled \($0.value.count == 1 ? "it" : "them"))" }
+            let at = pinned.map { "\($0.number) at \(work($0.point - tile.offset))" }
+            h += "<dt>Dowels</dt><dd>Line holes \(which.joined(separator: " and ")) up over the spoilboard holes and drop a "
+                + "\(len(2 * reg.radius)) dowel through each: \(at.joined(separator: ", ")). Clamp the material, then tap the "
+                + "dowels flush or pull them out before starting. The file stops at its start to name them.</dd>\n"
+        }
+        let own = reg.numbered(drilledBy: k)
+        var what: [String] = []
+        if k == 0, !reg.spoilboard.isEmpty {
+            what.append("the spoilboard holes in front of the material at \(reg.spoilboard.map(work).joined(separator: ", "))")
+        }
+        for (next, holes) in Dictionary(grouping: own, by: \.pinnedFor).sorted(by: { $0.key < $1.key }) {
+            what.append("holes \(numberList(holes.map(\.number))) for tile \(next + 1)'s dowels at "
+                + holes.map { work($0.point - tile.offset) }.joined(separator: " and "))
+        }
+        if !what.isEmpty {
+            let text = what.joined(separator: ", then ")
+            h += "<dt>Drills</dt><dd>\(esc(text.prefix(1).uppercased() + text.dropFirst())), \(len(reg.depth)) deep, before it cuts.</dd>\n"
+        }
         return h
     }
 
@@ -709,6 +748,12 @@ public enum SetupSheet {
             }
             for p in reg.drilled[tile.index].map({ $0 + tile.offset }) {
                 s += "<circle cx=\"\(n(p.x))\" cy=\"\(n(y(p.y)))\" r=\"\(n(r))\" fill=\"none\" stroke=\"#c0392b\" stroke-width=\"\(n(stroke * 1.5))\"/>\n"
+            }
+            // Individual tiles: the numbers of the holes this tile stands on or drills, as the page names them.
+            let size = max(size.x, size.y) / 45
+            for hole in reg.holes where hole.drilledBy == tile.index || hole.pinnedFor == tile.index {
+                s += "<text x=\"\(n(hole.point.x + 1.5 * r))\" y=\"\(n(y(hole.point.y) - 1.5 * r))\" font-size=\"\(n(size))\" "
+                    + "font-family=\"sans-serif\" fill=\"#222\">\(hole.number)</text>\n"
             }
         }
         // The XY zero: where the tile's frame puts the stock's origin.

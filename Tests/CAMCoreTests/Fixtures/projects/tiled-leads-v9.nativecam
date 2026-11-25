@@ -1,0 +1,199 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 9,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Long board",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "71E50000-0000-0000-0000-000000000014",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 19.558,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "leads" : {
+              "angle" : 45,
+              "kind" : "arc",
+              "leadOut" : true,
+              "length" : 6.35,
+              "overlap" : 0,
+              "radius" : 6.35,
+              "sweep" : 90
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Cut out panel",
+      "shapeIDs" : [
+        "71E50000-0000-0000-0000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "71E50000-0000-0000-0000-000000000001",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 25.4,
+          "height" : 2286,
+          "width" : 203.2
+        }
+      },
+      "layer" : "Default",
+      "name" : "Panel",
+      "position" : {
+        "x" : 152.39999999999998,
+        "y" : 1219.1999999999998
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "71E50000-0000-0000-0000-000000000002",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 508,
+          "width" : 50.8
+        }
+      },
+      "layer" : "Default",
+      "name" : "Slot",
+      "position" : {
+        "x" : 101.6,
+        "y" : 1498.6
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "71E50000-0000-0000-0000-000000000003",
+      "kind" : {
+        "star" : {
+          "innerRadius" : 17.779999999999998,
+          "outerRadius" : 38.099999999999994,
+          "points" : 5
+        }
+      },
+      "layer" : "Default",
+      "name" : "Star",
+      "position" : {
+        "x" : 203.2,
+        "y" : 1498.6
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "71E50000-0000-0000-0000-000000000004",
+      "kind" : {
+        "circle" : {
+          "radius" : 1.5875
+        }
+      },
+      "layer" : "Default",
+      "name" : "Hole 1",
+      "position" : {
+        "x" : 101.6,
+        "y" : 508
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "71E50000-0000-0000-0000-000000000005",
+      "kind" : {
+        "circle" : {
+          "radius" : 1.5875
+        }
+      },
+      "layer" : "Default",
+      "name" : "Hole 2",
+      "position" : {
+        "x" : 203.2,
+        "y" : 1905
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 2438.3999999999996,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Poplar",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 304.79999999999995,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  },
+  "tiling" : {
+    "enabled" : true,
+    "mode" : "feedThroughY",
+    "smallestFirst" : false
+  }
+}

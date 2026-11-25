@@ -352,9 +352,9 @@ struct TilingTests {
         #expect(vBit.issues.contains { $0.severity == .error && $0.message.contains("tapered") })
         let wide = CAMEngine.generate(Self.longBoard { $0.tiling?.registration?.tool = Self.lib.tool(number: 10) })
         #expect(wide.issues.contains { $0.severity == .error && $0.message.contains("wider than") })
-        // Individual tiles have no registration holes.
+        // Individual tiles have their own (see TilingRegistrationTests), numbered.
         let grid = Self.longBoard { $0.tiling?.mode = .grid }
-        #expect(TileLayout(grid)?.registration == nil)
+        #expect(TileLayout(grid)?.registration?.holes.isEmpty == false)
     }
 
     // MARK: Export
