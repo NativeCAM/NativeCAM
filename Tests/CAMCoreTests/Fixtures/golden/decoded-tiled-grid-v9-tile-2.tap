@@ -19,13 +19,13 @@ G64
 (Change to Tool: T1 1/4in Upcut End Mill)
 T1M6
 M07
+G00 Z0.5000
+(MSG,Tile 2 of 4, spindle off: fit dowels in holes 1 and 2, see the setup sheet, clamp the material, then resume.)
+M00
 S13000 M03
 (Toolpath: Registration holes  Tool: T1 1/4in Upcut End Mill)
 G00 Z0.5000
 G00 X1.0000 Y17.6250
-(MSG,Tile 2 of 4: check dowels are in holes 1 and 2, see the setup sheet, then resume. If they aren't, stop the spindle before fitting them.)
-M00
-G00 Z0.5000
 G00 Z0.1000
 G01 Z-0.1875 F50.0
 G00 Z0.1000

@@ -116,6 +116,21 @@ public struct AvidMach4Post: Sendable {
                 w.line("M00")
                 dial = rotary.position(angle)
             }
+            // A stop the operator works at the material for (an individual tile's dowels): the tool at safe Z and the
+            // spindle off, with Mach4's on-screen message. The spindle starts again below, with its spin-up dwell.
+            if let message = tp.spindleOffStop {
+                let safe = workZ(stock.clearanceHeight)
+                if state.z != round(safe) {
+                    w.line("G00 Z\(num(safe, isZ: true))")
+                    state.z = round(safe)
+                }
+                if currentRPM != nil {
+                    w.line("M05")
+                    currentRPM = nil
+                }
+                w.comment("MSG,\(message)")
+                w.line("M00")
+            }
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             if currentRPM != rpm || toolChanged {
                 spindleOn(rpm: rpm, tool: tp.tool, writer: &w)

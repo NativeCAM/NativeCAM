@@ -139,12 +139,16 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// goes; what a pocket resting from earlier toolpaths has left to clear). Empty when nothing is left; nil for every
     /// other toolpath. Posts and checks don't read it.
     public var restAreas: [Polyline]?
-    /// Calibration programs (`Calibration`), and the first toolpath of each individual tile after the first (naming its
-    /// dowels, see `TileSplitter`): the program stops (M0) once the tool is over this toolpath's start at
-    /// safe Z, showing this message, and goes back to safe Z when the operator resumes. nil everywhere else. The
-    /// G-code and OpenSBP posts write it for flat and indexed toolpaths; imported Vectric posts and wrapped toolpaths
-    /// ignore it.
+    /// Calibration programs (`Calibration`): the program stops (M0) once the tool is over this toolpath's start at
+    /// safe Z, showing this message, and goes back to safe Z when the operator resumes. The spindle keeps turning: the
+    /// operator only times the run, nowhere near the tool. nil everywhere else. The G-code and OpenSBP posts write it
+    /// for flat and indexed toolpaths; imported Vectric posts and wrapped toolpaths ignore it.
     public var stopMessage: String?
+    /// A stop before this toolpath for the operator to work at the material (an individual tile's dowels, see
+    /// `TileSplitter`): the posts raise the tool to safe Z, turn the spindle off, stop (M0, or PAUSE) showing this
+    /// message, and start the spindle again with its spin-up dwell afterwards. nil everywhere else. The G-code and
+    /// OpenSBP posts write it; imported Vectric posts ignore it.
+    public var spindleOffStop: String?
     /// What Checks notes about the toolpath as information rather than a warning (an edge profile's inside corners
     /// sharper than its bit). nil for none.
     public var notes: [String]?

@@ -138,9 +138,9 @@ enum TileSplitter {
                 operation: s.toolpath.name))
         }
         if let reg = layout.registration, !reg.holes.isEmpty {
-            // Each tile's file stops at the start to say which dowels it stands on.
+            // Each tile's file stops at the start, spindle off, to say which dowels it stands on.
             for k in 1..<layout.count where !reg.pinned(k).isEmpty && !tiles[k].isEmpty {
-                tiles[k][0].stopMessage = pinMessage(reg.pinned(k), tile: k, of: layout.count)
+                tiles[k][0].spindleOffStop = pinMessage(reg.pinned(k), tile: k, of: layout.count)
             }
         }
         issues.append(contentsOf: travelIssues(tiles, layout: layout, project: project))
@@ -482,8 +482,8 @@ enum TileSplitter {
     static func pinMessage(_ holes: [Int], tile: Int, of count: Int) -> String {
         let list = holes.count < 2 ? holes.map(String.init).joined()
             : holes.dropLast().map(String.init).joined(separator: ", ") + " and \(holes[holes.count - 1])"
-        return "Tile \(tile + 1) of \(count): check dowels are in holes \(list), see the setup sheet, then resume. "
-            + "If they aren't, stop the spindle before fitting them."
+        return "Tile \(tile + 1) of \(count), spindle off: fit dowels in holes \(list), see the setup sheet, "
+            + "clamp the material, then resume."
     }
 
     /// What a registration hole may not go on, as Checks names it: the design, a part another toolpath leaves, where a
