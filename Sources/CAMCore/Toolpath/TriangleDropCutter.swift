@@ -67,6 +67,12 @@ struct TriangleDropCutter: Sendable {
         }
     }
 
+    /// A probe with no width: finite exactly where a vertical line meets a (non-vertical) triangle, so where a point
+    /// is over the model's footprint.
+    init?(probe triangles: [Double]) {
+        self.init(kind: .flat, radius: 0, allowance: 0, profile: nil, triangles: triangles)
+    }
+
     /// A cutter of any convex profile (a tapered ball nose, say), leaving `allowance` square to the surface.
     init?(profile shape: CutterProfile, allowance: Double, triangles: [Double]) {
         self.init(kind: .profile, radius: shape.radius, allowance: allowance, profile: shape.grown(by: max(0, allowance)),

@@ -139,7 +139,7 @@ struct FlutesOnModelCatalogTests {
 
     /// Six flutes along the leg from 25 mm to 185 mm along it (over the taper, the bead and the last taper), 1.5 mm
     /// deep below its surface with smooth 12 mm ramps, in one pass with the 1/4" ball nose.
-    static func rotaryProject() -> Project {
+    static func rotaryProject(from along: Double = 25, length: Double = 160) -> Project {
         var stock = Stock(materialName: "Maple", materialKind: .hardwood)
         stock.setRotary(legBlank)
         var machine = MachineProfile.avidPRO6060
@@ -147,8 +147,8 @@ struct FlutesOnModelCatalogTests {
         machine.outputUnits = .mm
         let around = Double.pi * legBlank.diameter
         let lines = (0..<6).map { k in
-            DesignShape(id: id(30 + k), name: "Flute \(k + 1)", kind: .paths([Polyline([Vec2(0, 0), Vec2(160, 0)], closed: false)]),
-                        position: Vec2(legStart + 25, around * (Double(k) + 0.5) / 6))
+            DesignShape(id: id(30 + k), name: "Flute \(k + 1)", kind: .paths([Polyline([Vec2(0, 0), Vec2(length, 0)], closed: false)]),
+                        position: Vec2(legStart + along, around * (Double(k) + 0.5) / 6))
         }
         var tool = ball
         tool.cutting.spindleRPM = 16000
@@ -161,9 +161,14 @@ struct FlutesOnModelCatalogTests {
 
     // MARK: Helpers
 
-    static func checkGolden(_ p: Project, _ name: String, sourceLocation: SourceLocation = #_sourceLocation) throws {
+    /// Checks `p`'s posted file against its golden. Warnings other than the rotary axis's speed fail, unless they
+    /// contain `allowing`.
+    static func checkGolden(_ p: Project, _ name: String, allowing: String? = nil, sourceLocation: SourceLocation = #_sourceLocation) throws {
         let job = CAMEngine.generate(p)
-        let unexpected = job.issues.filter { $0.severity != .info && !$0.message.contains("rotary axis turns at most") }
+        let unexpected = job.issues.filter { issue in
+            issue.severity != .info && !issue.message.contains("rotary axis turns at most")
+                && !(allowing.map { issue.message.contains($0) } ?? false)
+        }
         #expect(unexpected.isEmpty, "\(unexpected.map(\.message))", sourceLocation: sourceLocation)
         #expect(job.toolpaths.allSatisfy { !$0.isEmpty }, sourceLocation: sourceLocation)
         let data = GoldenPostTests.post(p, job.toolpaths)
@@ -488,26 +493,218 @@ struct FlutesOnModelCatalogTests {
         return try Project.decode(Data(contentsOf: url))
     }
 
-    /// A flute drawn past both ends of the column: cut only where the bit reaches the model, ramping in and out at its
-    /// ends, with a warning in Checks, and never past its depth below the surface.
+    /// The column's footprint in design coordinates: min and max corners.
+    static var columnFootprint: (min: Vec2, max: Vec2) {
+        (Vec2(columnCentre.x - columnLength / 2, columnCentre.y - columnWidth / 2),
+         Vec2(columnCentre.x + columnLength / 2, columnCentre.y + columnWidth / 2))
+    }
+
+    /// The points every `step` mm along every move of `tp`, rapids and plunges included.
+    static func allPoints(_ tp: Toolpath, step: Double = 0.02) -> [Vec3] {
+        var points: [Vec3] = []
+        tp.forEachMotion { s, m in
+            guard m.kind != .dwell else { return }
+            if m.kind.isArc {
+                points.append(s)
+                points += m.samples(from: s, maxStep: step)
+            } else {
+                let n = max(1, Int((s.distance(to: m.end) / step).rounded(.up)))
+                for k in 0...n { points.append(s + (m.end - s) * (Double(k) / Double(n))) }
+            }
+        }
+        return points
+    }
+
+    /// A flat flute running off the column (#138), as generated and as posted: no move goes deeper than the flute's
+    /// depth below the drop-cutter surface it's over, and nothing past the column's footprint goes below the material
+    /// top, where a ball centred past the column's end would slide down the end wall and notch the board.
+    static func checkFlatRunOff(_ p: Project, sourceLocation: SourceLocation = #_sourceLocation) throws {
+        let job = CAMEngine.generate(p)
+        let warned = job.issues.contains { $0.severity == .warning && $0.message.contains("runs off the edge of the 3D model") }
+        #expect(warned, "\(job.issues.map(\.message))", sourceLocation: sourceLocation)
+        let tp = try #require(job.toolpaths.first, sourceLocation: sourceLocation)
+        #expect(!tp.isEmpty, sourceLocation: sourceLocation)
+        let cutter = try Self.flatCutter(p)
+        let generated = Self.flatGouge(tp, cutter, depth: Self.fluteDepth).gouge
+        #expect(generated < ArcFitter.surfaceEpsilon + 0.0001, "\(generated) mm past the flute depth", sourceLocation: sourceLocation)
+        // The generated cut starts and ends with the bit's centre on the footprint.
+        let ext = try #require(tp.cuttingExtents, sourceLocation: sourceLocation)
+        let foot = Self.columnFootprint
+        let inX = ext.min.x >= foot.min.x - 1e-6 && ext.max.x <= foot.max.x + 1e-6
+        #expect(inX, "cuts X \(ext.min.x) to \(ext.max.x), the column is \(foot.min.x) to \(foot.max.x)", sourceLocation: sourceLocation)
+        // As posted: the inch file rounds to 0.0001 in (0.00254 mm), so points within that of the footprint count as on it.
+        var gouge = -Double.infinity, outsideLowest = Double.infinity, outsideCount = 0
+        var hint: Int32 = -1
+        for t in try Self.posted(p) {
+            for q in Self.allPoints(t) {
+                let z = cutter.z(at: q.xy, hint: &hint)
+                if z.isFinite { gouge = max(gouge, z - Self.fluteDepth - q.z) }
+                let inX = q.x >= foot.min.x - 0.003 && q.x <= foot.max.x + 0.003
+                let inY = q.y >= foot.min.y - 0.003 && q.y <= foot.max.y + 0.003
+                if !(inX && inY) {
+                    outsideLowest = min(outsideLowest, q.z)
+                    outsideCount += 1
+                }
+            }
+        }
+        #expect(gouge < 0.003, "posted: \(gouge) mm past the flute depth", sourceLocation: sourceLocation)
+        #expect(outsideCount > 0, sourceLocation: sourceLocation)
+        #expect(outsideLowest > -0.003, "posted: \(outsideLowest) mm off the column's footprint", sourceLocation: sourceLocation)
+    }
+
+    /// A flute drawn past both ends of the column: cut only where the bit's centre is over the model, ramping in and
+    /// out at its ends, with a warning in Checks; never past its depth below the surface, and never below the material
+    /// top past the column's ends (#138: it plunged to Z-0.3698 at X0.8751, a radius past the end, against the end wall).
     @Test func aFluteRunningOffTheModelIsCutOnlyOnIt() throws {
         let p = try Self.edgeCase("runs-off-edge") {
             Self.flatProject(lines: [Self.fluteLine(11, y: 0, from: 0.25.inch, to: 9.75.inch)])
         }
-        let job = CAMEngine.generate(p)
-        #expect(job.issues.contains { $0.severity == .warning && $0.message.contains("runs off the edge of the 3D model") },
-                "\(job.issues.map(\.message))")
-        let tp = try #require(job.toolpaths.first)
-        #expect(!tp.isEmpty)
-        let ext = try #require(tp.cuttingExtents)
-        let modelMin = Self.columnCentre.x - Self.columnLength / 2, modelMax = Self.columnCentre.x + Self.columnLength / 2
-        #expect(ext.min.x > modelMin - Self.ball.radius - 0.01 && ext.min.x < modelMin + 0.01, "starts at \(ext.min.x)")
-        #expect(ext.max.x < modelMax + Self.ball.radius + 0.01 && ext.max.x > modelMax - 0.01, "ends at \(ext.max.x)")
+        try Self.checkFlatRunOff(p)
+        let tp = try #require(CAMEngine.generate(p).toolpaths.first)
         let cutter = try Self.flatCutter(p)
-        #expect(Self.flatGouge(tp, cutter, depth: Self.fluteDepth).gouge < ArcFitter.surfaceEpsilon + 0.0001)
-        // The cut ends with the bit just touching the model at its edge (the end of the ramp), not at full depth.
+        // The cut starts and ends with the bit just touching the model at its edge (the ends of the ramps), not at
+        // full depth, and with its centre on the column's end.
+        let firstFeed = try #require(tp.motions.first { $0.kind == .feed })
         let lastFeed = try #require(tp.motions.last { $0.kind == .feed })
+        #expect(abs(cutter.z(at: firstFeed.end.xy) - firstFeed.end.z) < 1e-6)
         #expect(abs(cutter.z(at: lastFeed.end.xy) - lastFeed.end.z) < 1e-6)
+        let foot = Self.columnFootprint
+        #expect(abs(firstFeed.end.x - foot.min.x) < 0.01, "starts at X \(firstFeed.end.x)")
+        #expect(abs(lastFeed.end.x - foot.max.x) < 0.01, "ends at X \(lastFeed.end.x)")
+        try Self.checkGolden(p, "flutes-on-model-runs-off-edge", allowing: "runs off the edge of the 3D model")
+    }
+
+    /// A flute drawn past the column's start end only, ramping at its far end: it plunges straight to full depth, with
+    /// the bit's centre on the column's end, not past it.
+    @Test func aFluteRunningOffTheModelsStartPlungesOnIt() throws {
+        let p = try Self.edgeCase("runs-off-start") {
+            Self.flatProject(FlutingParams(depth: Self.fluteDepth, ramp: .end, rampLength: 1.inch, rampShape: .smooth,
+                                           passDepth: Self.fluteDepth, surfaceModelID: Self.id(2)),
+                             lines: [Self.fluteLine(11, y: 0, from: 0.25.inch, to: 6.inch)])
+        }
+        try Self.checkFlatRunOff(p)
+        let tp = try #require(CAMEngine.generate(p).toolpaths.first)
+        let ext = try #require(tp.cuttingExtents)
+        #expect(abs(ext.min.x - Self.columnFootprint.min.x) < 0.01, "starts at X \(ext.min.x)")
+        try Self.checkGolden(p, "flutes-on-model-runs-off-start", allowing: "runs off the edge of the 3D model")
+    }
+
+    /// A flute drawn past the column's far end only, ramping at its start: it runs at full depth to the column's end
+    /// and lifts off there, with the bit's centre on it.
+    @Test func aFluteRunningOffTheModelsEndStopsOnIt() throws {
+        let p = try Self.edgeCase("runs-off-end") {
+            Self.flatProject(FlutingParams(depth: Self.fluteDepth, ramp: .start, rampLength: 1.inch, rampShape: .smooth,
+                                           passDepth: Self.fluteDepth, surfaceModelID: Self.id(2)),
+                             lines: [Self.fluteLine(11, y: 0, from: 4.inch, to: 9.75.inch)])
+        }
+        try Self.checkFlatRunOff(p)
+        let tp = try #require(CAMEngine.generate(p).toolpaths.first)
+        let ext = try #require(tp.cuttingExtents)
+        #expect(abs(ext.max.x - Self.columnFootprint.max.x) < 0.01, "ends at X \(ext.max.x)")
+        try Self.checkGolden(p, "flutes-on-model-runs-off-end", allowing: "runs off the edge of the 3D model")
+    }
+
+    /// Flutes drawn past both ends of the turned leg on the wrapped rotary job: cut only along the leg, ramping in and
+    /// out at its ends. As posted, no move goes deeper than the flute's depth below the rotary drop-cutter surface,
+    /// and nothing past the leg's ends comes in from the blank's surface.
+    @Test func rotaryFlutesRunningOffTheModelAreCutOnlyOnIt() throws {
+        let p = try Self.edgeCase("runs-off-rotary") { Self.rotaryProject(from: -10, length: 220) }
+        let job = CAMEngine.generate(p)
+        let warned = job.issues.contains { $0.severity == .warning && $0.message.contains("run off the edge of the 3D model") }
+        #expect(warned, "\(job.issues.map(\.message))")
+        let tp = try #require(job.toolpaths.first)
+        let ext = try #require(tp.cuttingExtents)
+        let legEnd = Self.legStart + 200
+        #expect(ext.min.x >= Self.legStart - 1e-6 && ext.min.x < Self.legStart + 0.01, "starts at X \(ext.min.x)")
+        #expect(ext.max.x <= legEnd + 1e-6 && ext.max.x > legEnd - 0.01, "ends at X \(ext.max.x)")
+
+        let cutter = try Self.rotaryCutter(p)
+        let top = try #require(p.stock.rotary).topRadius
+        let text = String(decoding: GoldenPostTests.post(p), as: UTF8.self)
+        let motions = try GCodeParser.parse(text).segments.flatMap(\.motions)
+        var worst = -Double.infinity, outsideLowest = Double.infinity
+        var outsideCount = 0, checked = 0
+        var previous: Motion?
+        var angle: Double?
+        for m in motions {
+            defer {
+                previous = m
+                if let a = m.a { angle = a }
+            }
+            guard m.kind != .dwell, let s = previous else { continue }
+            let a0 = angle, a1 = m.a ?? angle
+            let dx: Double = abs(m.end.x - s.end.x)
+            let dr: Double = abs(m.end.z - s.end.z)
+            var round = 0.0
+            if let from = a0, let to = a1 { round = abs(to - from) * Double.pi / 180 * top }
+            let n = max(1, Int((max(dx, dr, round) / 0.05).rounded(.up)))
+            for k in 0...n {
+                let t = Double(k) / Double(n)
+                let x: Double = s.end.x + (m.end.x - s.end.x) * t
+                let r: Double = s.end.z + (m.end.z - s.end.z) * t
+                if x < Self.legStart - 0.002 || x > legEnd + 0.002 {
+                    outsideLowest = min(outsideLowest, r)
+                    outsideCount += 1
+                }
+                guard m.kind == .feed, let from = a0, let to = a1 else { continue }
+                let degrees: Double = from + (to - from) * t
+                let touch = cutter.tipRadius(x: x, angle: degrees * Double.pi / 180)
+                if touch.isFinite { worst = max(worst, touch - Self.legDepth - r) }
+            }
+            checked += 1
+        }
+        #expect(checked > 100)
+        #expect(worst < 0.002, "\(worst) mm past the flute depth")
+        // The mm file rounds to 0.001 mm.
+        #expect(outsideCount > 0)
+        #expect(outsideLowest > top - 0.002, "\(outsideLowest) mm from the axis past the leg's ends; the blank's is \(top) mm")
+        try Self.checkGolden(p, "flutes-on-model-runs-off-rotary", allowing: "run off the edge of the 3D model")
+    }
+
+    // MARK: #139
+
+    /// On a blank much bigger than the leg, flutes following it are measured from the leg's surface for the bit's
+    /// cutting length, not from the blank's (the 3D finish before them has cleared the wood between); a flute deeper
+    /// than the cutting length below the surface still warns.
+    @Test func theCuttingLengthCheckCountsFromTheModel() throws {
+        var p = Self.rotaryProject()
+        var blank = try #require(p.stock.rotary)
+        blank.diameter = 3.inch
+        p.stock.setRotary(blank)
+        let job = CAMEngine.generate(p)
+        let tp = try #require(job.toolpaths.first)
+        let deepest = -(try #require(tp.cuttingExtents)).min.z
+        #expect(deepest > Self.ball.fluteLength, "the flutes are \(deepest) mm in from the blank's surface")
+        let warns = job.issues.contains { $0.message.contains("exceeds the cutting length") }
+        #expect(!warns, "\(job.issues.map(\.message))")
+
+        var deep = p
+        guard case var .fluting(f) = deep.operations[0].kind else { Issue.record("not fluting"); return }
+        f.depth = Self.ball.fluteLength + 1
+        f.passDepth = f.depth
+        deep.operations[0].kind = .fluting(f)
+        let deepJob = CAMEngine.generate(deep)
+        let deepWarns = deepJob.issues.contains { $0.message.contains("exceeds the cutting length") }
+        #expect(deepWarns, "\(deepJob.issues.map(\.message))")
+    }
+
+    /// The setup sheet names the model flutes follow and says their depth is below its surface.
+    @Test func theSetupSheetNamesTheModel() {
+        let p = Self.flatProject()
+        let html = SetupSheet.html(project: p, job: CAMEngine.generate(p), date: GoldenPostTests.date)
+        #expect(html.contains("flutes 0.100 in below the surface of “Column”"), "\(html)")
+    }
+
+    /// The template line under the vectors of flutes whose model has been deleted says the model is missing, not the
+    /// layer the flute lines happen to be on.
+    @Test func theTemplateLineSaysTheModelIsMissing() throws {
+        let missing = try Self.edgeCase("missing-model") { Project() }
+        let line = try #require(missing.templateLine(for: missing.operations[0], units: .inch))
+        #expect(line.contains("3D model these flutes follow is missing"), "\(line)")
+        let present = Self.flatProject()
+        let ok = try #require(present.templateLine(for: present.operations[0], units: .inch))
+        #expect(!ok.contains("missing"), "\(ok)")
+        #expect(ok.hasPrefix("In a template: "), "\(ok)")
     }
 
     /// Flutes set to follow a model that's no longer in the job: refused, with one empty toolpath and a warning saying

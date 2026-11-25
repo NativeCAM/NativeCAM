@@ -17,7 +17,9 @@ import Foundation
 /// under it instead of from the start depth: the bit is dropped onto the model with the exact drop-cutter at closely
 /// spaced stations (`onSurface`), so the flute keeps its depth into a curved surface and its ramps follow the surface. On
 /// a wrapped rotary job the rotary drop-cutter does the same on the model laid along the axis, for fluting a turning
-/// after its 3D rotary finish. Where a vector runs off the model the flute is cut only where the bit reaches it.
+/// after its 3D rotary finish. Where a vector runs off the model the flute is cut only where the bit's centre is over
+/// the model's footprint (and the bit reaches it), so its ramps start and end on the model: a ball centred past the
+/// model's end would touch its top edge with its side and slide down the end wall, notching the stock beyond (#138).
 enum FlutingGenerator {
     /// How closely a smooth ramp is sampled along the flute, mm.
     static let smoothSpacing = 0.5
@@ -74,7 +76,7 @@ enum FlutingGenerator {
             }
             if trimmed > 0 {
                 warnings.append("\(trimmed == 1 ? "A flute runs" : "\(trimmed) flutes run") off the edge of the 3D model "
-                    + "'\(surface.name)'. \(trimmed == 1 ? "It's" : "They're") cut only where the bit reaches the model, ramping "
+                    + "'\(surface.name)'. \(trimmed == 1 ? "It's" : "They're") cut only where the bit is over the model, ramping "
                     + "at its edge.")
             }
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
@@ -172,10 +174,13 @@ enum FlutingGenerator {
     /// The surface of the 3D model flutes follow: the tool-tip height (sheet Z) at which the bit just touches the model,
     /// from the exact drop-cutter (`TriangleDropCutter`) on a flat job, or the rotary one (`RotaryDropCutter`) on a
     /// wrapped rotary job, where sheet Y is the angle round the blank and Z the distance out from the wrap radius.
+    /// Probes with no width (`flatProbe`, `rotaryProbe`) say where the bit's centre is over the model's footprint.
     struct Surface: Sendable {
         let name: String
         let flat: TriangleDropCutter?
         let rotary: RotaryDropCutter?
+        let flatProbe: TriangleDropCutter?
+        let rotaryProbe: RotaryDropCutter?
         /// Wrapped jobs: the sheet's radius (its Z = 0) and the line across the sheet that's on top at A0.
         let top: Double, centreY: Double
 
@@ -190,6 +195,19 @@ enum FlutingGenerator {
         func z(at p: Vec2) -> Double {
             var hint: Int32 = -1
             return z(at: p, hint: &hint)
+        }
+
+        /// Whether `p` on the sheet is over the model's footprint: a vertical line through it (on a wrapped job, a ray
+        /// from the axis) meets the model.
+        func over(_ p: Vec2, hint: inout Int32) -> Bool {
+            if let flatProbe { return flatProbe.z(at: p, hint: &hint).isFinite }
+            guard let rotaryProbe else { return false }
+            return rotaryProbe.tipRadius(x: p.x, angle: (p.y - centreY) / top, hint: &hint).isFinite
+        }
+
+        func over(_ p: Vec2) -> Bool {
+            var hint: Int32 = -1
+            return over(p, hint: &hint)
         }
 
         /// The surface of the model `modelID` in `project`, or why there's none to follow.
@@ -207,15 +225,19 @@ enum FlutingGenerator {
                 model.forEachBlankTriangle { a, b, c in
                     triangles.append(contentsOf: [a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z])
                 }
-                guard let cutter = RotaryDropCutter(tool: tool, allowance: 0, triangles: triangles) else {
+                guard let cutter = RotaryDropCutter(tool: tool, allowance: 0, triangles: triangles),
+                      let probe = RotaryDropCutter(probe: triangles) else {
                     return .failure(Refusal(message: "The 3D model '\(model.name)' has no triangles to follow."))
                 }
-                return .success(Surface(name: model.name, flat: nil, rotary: cutter, top: blank.topRadius, centreY: stock.originPoint.y))
+                return .success(Surface(name: model.name, flat: nil, rotary: cutter, flatProbe: nil, rotaryProbe: probe,
+                                        top: blank.topRadius, centreY: stock.originPoint.y))
             }
-            guard let cutter = TriangleDropCutter(tool: tool, allowance: 0, triangles: Model3DGenerator.triangles(of: [model])) else {
+            let triangles = Model3DGenerator.triangles(of: [model])
+            guard let cutter = TriangleDropCutter(tool: tool, allowance: 0, triangles: triangles),
+                  let probe = TriangleDropCutter(probe: triangles) else {
                 return .failure(Refusal(message: "The 3D model '\(model.name)' has no triangles to follow."))
             }
-            return .success(Surface(name: model.name, flat: cutter, rotary: nil, top: 0, centreY: 0))
+            return .success(Surface(name: model.name, flat: cutter, rotary: nil, flatProbe: probe, rotaryProbe: nil, top: 0, centreY: 0))
         }
     }
 
@@ -237,7 +259,7 @@ enum FlutingGenerator {
     }
 
     /// A flute along `line` on `surface`: dropped at stations every `surfaceSpacing` (and at the vector's corners), cut
-    /// into the pieces where the bit reaches the model, and each piece ramped as a flute of its own length, its depth
+    /// into the pieces where the bit's centre is over the model's footprint and the bit reaches it, and each piece ramped as a flute of its own length, its depth
     /// below the surface (`FlutingParams.depth(at:fluteLength:)`) scaled to each pass. A move between stations is split
     /// until none dips more than `sagTolerance` below the depth asked for; then moves are merged only where the merged
     /// move stays between that depth and `tolerance` above it (`mergeAbove`). So no move goes deeper than the flute's
@@ -258,8 +280,11 @@ enum FlutingGenerator {
             let span = arc[hi] - arc[lo]
             return span > 1e-12 ? pts[lo].lerp(to: pts[hi], min(1, max(0, (s - arc[lo]) / span))) : pts[lo]
         }
-        var hint: Int32 = -1
+        var hint: Int32 = -1, probeHint: Int32 = -1
         func z(_ s: Double) -> Double { surface.z(at: point(s), hint: &hint) }
+        /// Whether the bit is on the model at `s`: its centre over the footprint, and touching the model there. Past the
+        /// footprint the drop-cutter still reaches the model's edge with the side of the ball, its tip below the edge.
+        func on(_ s: Double) -> Bool { surface.over(point(s), hint: &probeHint) && z(s).isFinite }
 
         // Stations: the corners, and every `surfaceSpacing` along each segment between them.
         var stations: [Double] = []
@@ -270,23 +295,24 @@ enum FlutingGenerator {
             for j in 0..<n { stations.append(arc[k] + span * Double(j) / Double(n)) }
         }
         stations.append(length)
-        let heights = stations.map(z)
+        let onModel = stations.map(on)
 
-        // The spans over the model, their ends found to within 0.005 mm of where the bit stops reaching it.
+        // The spans over the model, their ends found to within 0.005 mm of where the bit stops being on it (and on its
+        // side of that, so a flute never starts or ends with its centre past the model's footprint).
         func edge(inside: Double, outside: Double) -> Double {
             var a = inside, b = outside
             while abs(b - a) > 0.005 {
                 let m = (a + b) / 2
-                if z(m).isFinite { a = m } else { b = m }
+                if on(m) { a = m } else { b = m }
             }
             return a
         }
         var spans: [(start: Double, end: Double)] = []
         var i = 0
         while i < stations.count {
-            guard heights[i].isFinite else { i += 1; continue }
+            guard onModel[i] else { i += 1; continue }
             var j = i
-            while j + 1 < stations.count, heights[j + 1].isFinite { j += 1 }
+            while j + 1 < stations.count, onModel[j + 1] { j += 1 }
             let a = i > 0 ? edge(inside: stations[i], outside: stations[i - 1]) : stations[i]
             let b = j + 1 < stations.count ? edge(inside: stations[j], outside: stations[j + 1]) : stations[j]
             if b - a > 1e-3 { spans.append((a, b)) }

@@ -822,7 +822,7 @@ struct FlutingSection: View {
                 } else {
                     SectionNote(text: "Each flute keeps its depth below the model's surface, its ramps following it: cut it after the 3D finish. "
                         + (rotary == nil ? "" : "On the rotary, flutes along the blank follow the turning's profile. ")
-                        + "Where a flute runs off the model it's cut only where the bit reaches it.")
+                        + "Where a flute runs off the model it's cut only where the bit is over it.")
                 }
             }
             Picker("Ramp", selection: Binding(get: { p.ramp }, set: { var q = p; q.ramp = $0; set(q) })) {

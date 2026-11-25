@@ -429,7 +429,16 @@ public enum SetupSheet {
                     }
                     let length = p.ramp == .none ? ""
                         : p.rampPercent.map { " over \(Int(($0 * 100).rounded()))% of the length" } ?? " over \(len(p.rampLength))"
-                    h += "<li><b>\(esc(op.name))</b>: flutes \(len(p.depth)) deep\(from(p.startDepth)), \(ramps)\(length)"
+                    // Following a model, the depth is below its surface, not the stock's top (#139).
+                    let measured: String
+                    if let id = p.surfaceModelID {
+                        let model = project.shapes.first { $0.id == id && $0.modelSpec != nil && !$0.isKeepOut }
+                        measured = model.map { " below the surface of “\(esc($0.name))”" }
+                            ?? " below the surface of a 3D model that isn't in the job"
+                    } else {
+                        measured = " deep\(from(p.startDepth))"
+                    }
+                    h += "<li><b>\(esc(op.name))</b>: flutes \(len(p.depth))\(measured), \(ramps)\(length)"
                         + "\(p.ramp == .none ? "" : " (\(p.rampShape.rawValue))"), with \(bit)."
                         + (p.ramp == .start || p.ramp == .end ? " Each starts at its vector's start point." : "") + "</li>\n"
                 case let .prism(p):
