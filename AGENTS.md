@@ -18,16 +18,13 @@ A job lives in a `.nativecam` project file: JSON holding the material, the machi
 
 ## The safe way to drive it
 
-1. **Write or edit the `.nativecam` project as JSON.** Start from a file the CLI writes (`new`, `demo`, `demo3d`, `demonest`, `demosheets`) and change it. Don't write one from nothing. See [Project format](docs/agents/project-format.md).
+1. **Write or edit the `.nativecam` project as JSON.** Start from a file the CLI writes (`new`, `demo`, `demo3d`, `demonest`, `demosheets`) and change it. Don't write one from nothing. Bring in DXF, SVG, PDF and Illustrator drawings and STL, OBJ or 3MF models with `nativecam-cli import` rather than writing vectors or meshes by hand; it prints the unit it read each file in, so check that. After editing the JSON, `nativecam-cli rebind` re-runs the toolpaths' layer and kind rules (Recalculate All) and `nativecam-cli save` rewrites `formatVersion`. All three need `-o` (or `--in-place`). See [Project format](docs/agents/project-format.md) and [Command line](docs/agents/cli.md#import).
 2. **Generate and check it with `nativecam-cli post`.** It generates the toolpaths, reads the G-code back against the controller and the toolpaths, prints every issue, and refuses to write the file when there's an error. See [Command line](docs/agents/cli.md).
 3. **Look at the result.** Run `nativecam-cli sim` for removed volume, job time and rapids through material. Write `--png` for a heightmap and `--sheet` for the setup sheet. Use the app's snapshot mode for screenshots of the real UI. See [Verifying output](docs/agents/verification.md).
 4. **Hand the files to the human,** with every warning, what you checked and what you couldn't check.
 
 Things an agent can't do headlessly, so it must ask the human or work around them:
 
-- **Import DXF, SVG, PDF or Illustrator files.** The CLI has no import command. Snapshot mode can import one into its render, but it doesn't save the project. Write the vectors into the project as a `paths` shape yourself, or ask the human to import the file in the app and save. See [Workflows](docs/agents/workflows.md#1-import-vectors-and-cut-a-profile-pocket-and-drill-job).
-- **Import 3D models (STL, OBJ, 3MF, USDZ).** The same applies. A model can be written into the JSON as a base64 mesh (see [Project format](docs/agents/project-format.md#3d-models)), but it's easier to start from `demo3d` or to have the human import it.
-- **Recalculate All.** A toolpath's layer or kind rule (`vectorSelection`) is only re-run by the app, or by `template apply`. `post` cuts exactly the `shapeIDs` listed, so set them yourself.
 - **Use the app's sheets and dialogs:** the machine setup assistant, Inlay…, Nest Parts' live preview, the Tool Library window, Calibration Programs, Surface Spoilboard…. Each has a CLI or JSON counterpart, listed in the workflows.
 
 ## Quick start

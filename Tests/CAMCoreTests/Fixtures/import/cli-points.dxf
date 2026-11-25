@@ -1,0 +1,62 @@
+  0
+SECTION
+  2
+HEADER
+  9
+$ACADVER
+  1
+AC1009
+  9
+$INSUNITS
+ 70
+1
+  0
+ENDSEC
+  0
+SECTION
+  2
+ENTITIES
+  0
+POINT
+  8
+Holes
+ 10
+3.0
+ 20
+3.0
+ 30
+0.0
+  0
+POINT
+  8
+Holes
+ 10
+7.0
+ 20
+3.0
+ 30
+0.0
+  0
+POINT
+  8
+Holes
+ 10
+3.0
+ 20
+5.0
+ 30
+0.0
+  0
+POINT
+  8
+Holes
+ 10
+7.0
+ 20
+5.0
+ 30
+0.0
+  0
+ENDSEC
+  0
+EOF

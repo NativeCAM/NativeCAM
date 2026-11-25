@@ -1,0 +1,8 @@
+$ nativecam-cli save projects/cli-hand-edited-v1.nativecam -o <out>/saved.nativecam
+Format 1 → 28
+Wrote <out>/saved.nativecam (format 28)
+exit 0
+$ nativecam-cli save <out>/saved.nativecam --in-place
+Format 28, unchanged
+Wrote <out>/saved.nativecam (format 28)
+exit 0

@@ -100,10 +100,7 @@ final class Workspace {
 
     /// A new shape goes on the sheet shown.
     func placedOnSheet(_ shape: DesignShape, of project: Project) -> DesignShape {
-        var s = shape
-        let k = min(sheet, project.sheetCount - 1)
-        s.sheet = k > 0 ? k : nil
-        return s
+        project.placedOnSheet(shape, sheet: sheet)
     }
 
     /// Shows another sheet; a running simulation starts again on it.

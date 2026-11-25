@@ -325,19 +325,6 @@ enum ShapeFactory {
         DesignShape(kind: .text(TextSpec(string: "Text", capHeight: size(p, 0.15))), position: center(p))
     }
 
-    /// A placed 3D model: centred on the material, scaled down to fit if needed, carved no deeper than the material.
-    static func model(_ result: MeshImportResult, name: String, stock: Stock) -> DesignShape {
-        let spec = ModelSpec(mesh: result.mesh, upAxis: result.suggestedUpAxis, depth: 1)
-        let size = spec.naturalSize
-        var scale = 1.0
-        if size.x > 0, size.y > 0 {
-            scale = min(1, stock.width * 0.9 / size.x, stock.height * 0.9 / size.y)
-        }
-        var s = spec
-        s.depth = max(0.1, min(spec.proportionalDepth(scale: scale), stock.thickness - 0.02.inch))
-        return DesignShape(name: name, kind: .model(s), position: Vec2(stock.width / 2, stock.height / 2), scale: scale)
-    }
-
     static func operation(_ kind: AddOperationMenu.Kind, shapes: [UUID], project: Project, library: [Tool]) -> CAMOperation {
         func pick(_ match: (Tool) -> Bool, _ fallback: Int) -> Tool {
             library.first(where: match) ?? ToolLibrary.starter.tool(number: fallback)!

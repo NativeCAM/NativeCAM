@@ -57,14 +57,14 @@ The demo files show binary rounding (`19.049999999999997` for 0.75 in). That's n
 
 ## Format versions
 
-`Project.currentFormatVersion` (27 on `main`) is the newest format this build reads. Reading a file:
+`Project.currentFormatVersion` (29 on `main`) is the newest format this build reads. Reading a file:
 
 - a `formatVersion` above it is refused: `This project was saved by a newer version of NativeCAM (format 99).`
 - a `formatVersion` at or below it is read. **The number isn't otherwise used on reading.** A file marked `1` that holds an adaptive pocket loads and posts like one marked `13`.
 
 Writing a file, NativeCAM sets `formatVersion` to the *oldest* format that can hold the project: the highest `requiredFormatVersion` of its machine, stock, shapes, toolpaths and their vector rules, tiling and sheets. An older build then refuses a file it would misread (for example, a format-12 build reading an adaptive pocket) rather than cutting it wrong. A flat job on Avid's Mach4 profile with only the older features is still format 1, so old builds keep opening it.
 
-**When you write a file by hand, set `formatVersion` to what its features need** (see the table), or simply to `Project.currentFormatVersion`. A number that's too high is safe: older builds refuse the file. A number that's too low isn't: an older build would open it and drop what it doesn't know. Any CLI command that saves a project (`nest`, `template apply`, `machine --apply`, `calibrate fit --apply`) writes the right number. `post` and `sim` never save.
+**When you write a file by hand, set `formatVersion` to what its features need** (see the table), or simply to `Project.currentFormatVersion`. A number that's too high is safe: older builds refuse the file. A number that's too low isn't: an older build would open it and drop what it doesn't know. Any CLI command that saves a project (`import`, `rebind`, `save`, `nest`, `template apply`, `machine --apply`, `calibrate fit --apply`) writes the right number; after a hand edit, `nativecam-cli save edited.nativecam -o fixed.nativecam` rewrites it and prints the format before and after. `post` and `sim` never save.
 
 What raises it, from the code:
 
@@ -367,7 +367,7 @@ A profile vector swept along rail vectors into a 3D surface (format 22). `shapeI
 
 ## How a toolpath finds its shapes
 
-`vectorSelection` records a rule, so the app's **Recalculate All** and `nativecam-cli template apply` can find a toolpath's shapes again in another design:
+`vectorSelection` records a rule, so the app's **Recalculate All**, `nativecam-cli template apply`, `import`, `rebind` and `post --rebind` can find a toolpath's shapes again in another design:
 
 ```json
 "vectorSelection": {"layers": ["Cut Out"]}

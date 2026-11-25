@@ -1,0 +1,3 @@
+$ nativecam-cli import projects/cli-import-target.nativecam import/cli-no-units.dxf -o <out>/x.nativecam
+Not written: cli-no-units.dxf has no $INSUNITS in its header, so its unit is unknown. Pass --units in or --units mm to say what it was drawn in.
+exit 1

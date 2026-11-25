@@ -85,8 +85,30 @@ import Foundation
 //                                                      the cut-out bit plus 1/8 in or 3 mm); prints the utilization and
 //                                                      what didn't fit. Writes "<project> nested.nativecam" beside the
 //                                                      project unless -o or --in-place
+//   nativecam-cli import <project.nativecam> <file>… (-o out.nativecam | --in-place) [--units in|mm] [--layer name]
+//                     [--keep-coords | --center | --at x,y] [--sheet n] [--depth d] [--up z|y]
+//                                                      add vector files (DXF, SVG, PDF, AI) and 3D models (STL, OBJ,
+//                                                      3MF, PLY, USD) as File ▸ Import does (--layer: every vector
+//                                                      shape on that layer), then have toolpaths that
+//                                                      find vectors by layer or kind pick them up. Prints the unit
+//                                                      assumed for each file, each shape added and every toolpath whose
+//                                                      vectors changed. A DXF without $INSUNITS needs --units. Drawings
+//                                                      keep the file's coordinates and are refused when they don't fit
+//                                                      the material, unless --center or --at x,y (the drawing's
+//                                                      lower-left corner, project units) places them; models are always
+//                                                      centred and fitted. A refusal exits 1 and writes nothing
+//   nativecam-cli rebind <project.nativecam> (-o out.nativecam | --in-place)
+//                                                      Recalculate All's vector binding: toolpaths that find vectors by
+//                                                      layer or kind look again; prints every toolpath whose vectors
+//                                                      changed (and writes the file even when none did)
+//   nativecam-cli save <project.nativecam> (-o out.nativecam | --in-place) [--rebind]
+//                                                      read and write the project again, so formatVersion is what it
+//                                                      needs; prints the format before and after
+//   post and sim take --rebind: rebind in memory, print what changed, then post or simulate. The project isn't saved.
 
 func fail(_ message: String) -> Never {
+    // What was printed so far comes before the refusal, also when both go to one pipe.
+    fflush(stdout)
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
     exit(1)
 }
@@ -106,6 +128,84 @@ func option(_ name: String, in args: [String]) -> String? {
 
 /// "1 vector", "2 vectors".
 func counted(_ n: Int, _ noun: String) -> String { "\(n) \(noun)\(n == 1 ? "" : "s")" }
+
+/// The file `import`, `rebind` and `save` write: -o's, or the project with --in-place. One of them is required, and
+/// -o naming the project itself is refused (that's --in-place), so nothing is overwritten by surprise.
+func requiredOutput(project: String, usage: String) -> String {
+    let out = option("-o", in: args)
+    let inPlace = args.contains("--in-place")
+    if out != nil && inPlace { fail("Pass -o or --in-place, not both.\n" + usage) }
+    if inPlace { return project }
+    guard let out else { fail("Say where to write the project: -o out.nativecam, or --in-place to overwrite \(project).\n" + usage) }
+    let same = URL(fileURLWithPath: out).standardizedFileURL.resolvingSymlinksInPath().path
+        == URL(fileURLWithPath: project).standardizedFileURL.resolvingSymlinksInPath().path
+    if same { fail("-o names the project itself. Pass --in-place to overwrite it, or -o another file.\n" + usage) }
+    return out
+}
+
+/// The arguments that aren't options, from `from`, skipping the values of options that take one. An unknown option is
+/// refused.
+func positionals(from start: Int, valued: Set<String>, flags: Set<String>, usage: String) -> [String] {
+    var out: [String] = []
+    var i = start
+    while i < args.count {
+        let a = args[i]
+        if valued.contains(a) {
+            guard i + 1 < args.count else { fail("\(a) needs a value.\n" + usage) }
+            i += 2
+            continue
+        }
+        if flags.contains(a) { i += 1; continue }
+        if a.hasPrefix("-") && a.count > 1 { fail("Unknown option \(a).\n" + usage) }
+        out.append(a)
+        i += 1
+    }
+    return out
+}
+
+/// The toolpaths whose vectors a rebind changed, one line each, and those it left alone because their vectors were
+/// chosen by hand.
+func printBinding(_ changes: [VectorBindingChange], project: Project, prefix: String = "") {
+    let u = project.displayUnits
+    if changes.isEmpty {
+        print("\(prefix)No changes: every toolpath that finds its vectors by layer or kind already has them.")
+    } else {
+        print("\(prefix)Toolpaths whose vectors changed:")
+        for c in changes {
+            let added = Set(c.newShapeIDs).subtracting(c.oldShapeIDs).count, removed = Set(c.oldShapeIDs).subtracting(c.newShapeIDs).count
+            var how: [String] = []
+            if added > 0 { how.append("\(added) added") }
+            if removed > 0 { how.append("\(removed) removed") }
+            if added == 0 && removed == 0 { how.append("reordered") }
+            let none = c.newShapeIDs.isEmpty ? "; it now has no vectors" : ""
+            print("\(prefix)  \(c.name) (\(c.rule.label(u))): \(c.oldShapeIDs.count) → \(counted(c.newShapeIDs.count, "vector")) (\(how.joined(separator: ", ")))\(none)")
+        }
+    }
+    let byHand = project.operations.filter { $0.kind.needsShapes && ($0.vectorSelection == nil || $0.vectorSelection == .selection) }
+    if !byHand.isEmpty {
+        print("\(prefix)Kept as chosen by hand: " + byHand.map { "\($0.name) (\(counted($0.shapeIDs.count, "vector")))" }.joined(separator: ", "))
+    }
+}
+
+/// `post --rebind`, `sim --rebind`: the project with its toolpaths rebound, in memory only.
+func rebound(_ project: Project) -> Project {
+    var p = project
+    let changes = p.bindVectorChanges()
+    printBinding(changes, project: p, prefix: "Rebind: ")
+    return p
+}
+
+/// The format a project file says it's in, read from its JSON.
+func savedFormat(_ path: String) -> Int? {
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    return json["formatVersion"] as? Int
+}
+
+func write(_ project: Project, to out: String) {
+    do { try project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
+    print("Wrote \(out) (format \(project.formatVersion))")
+}
 
 /// Where `template apply` writes without -o: "<project> + <template>.nativecam" beside the project, or with " 2",
 /// " 3"… when that file is already there.
@@ -176,7 +276,8 @@ func postRestart(_ project: Project, job: JobResult, airCut: Double?) {
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
     print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] [--restart-*] | surface [project] [-o file] | sim <project|tap> [--png out.png] [--cell mm]"
-          + " | tools <library> [-o out.json]")
+          + " | tools <library> [-o out.json] | import <project> <file>… (-o out | --in-place) | rebind <project> (-o out | --in-place)"
+          + " | save <project> (-o out | --in-place)")
     exit(0)
 }
 
@@ -200,7 +301,8 @@ case "post":
     guard args.count >= 2 else { fail("usage: nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]\n"
                                          + "       nativecam-cli post <project.nativecam> --restart-toolpath n [--restart-pass p] | --restart-line N "
                                          + "[--restart-exact] [--restart-no-stop] [--restart-file n] [--restart-from running.tap]") }
-    let project = loadProject(args[1])
+    // --rebind: toolpaths that find vectors by layer or kind look again first, in memory only (the file isn't saved).
+    let project = args.contains("--rebind") ? rebound(loadProject(args[1])) : loadProject(args[1])
     let start = Date()
     let job = CAMEngine.generate(project)
     let elapsed = Date().timeIntervalSince(start)
@@ -614,6 +716,7 @@ case "sim":
     var estimate: CycleTimeEstimate?
     let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
     if ["tap", "nc", "gcode", "ngc", "cnc", "txt", "sbp"].contains(ext) {
+        if args.contains("--rebind") { fail("--rebind is for a project: a G-code file has no toolpaths to rebind") }
         project = Project()
         // Files from older CAM programs aren't always UTF-8; Latin-1 reads any bytes.
         guard let text = (try? String(contentsOfFile: path, encoding: .utf8))
@@ -631,6 +734,7 @@ case "sim":
         }
     } else {
         project = loadProject(path)
+        if args.contains("--rebind") { project = rebound(project) }
         if args.contains("--no-arcs") { project.machine.outputArcs = false }
         let job = CAMEngine.generate(project)
         toolpaths = job.toolpaths
@@ -787,6 +891,163 @@ case "nest":
         : url.deletingLastPathComponent().appendingPathComponent(url.deletingPathExtension().lastPathComponent + " nested.nativecam").path)
     do { try applied.project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
     print("Wrote \(out)")
+
+case "import":
+    let usage = "usage: nativecam-cli import <project.nativecam> <file>… (-o out.nativecam | --in-place) [--units in|mm] [--layer name]"
+        + " [--keep-coords | --center | --at x,y] [--sheet n] [--depth d] [--up z|y]"
+    let files = positionals(from: 1, valued: ["-o", "--units", "--layer", "--at", "--sheet", "--depth", "--up"],
+                            flags: ["--in-place", "--keep-coords", "--center"], usage: usage)
+    guard files.count >= 2 else { fail(usage) }
+    let projectPath = files[0]
+    // Bad flags are refused before anything is read or imported.
+    let out = requiredOutput(project: projectPath, usage: usage)
+    let placements = ["--keep-coords", "--center", "--at"].filter { args.contains($0) }
+    if placements.count > 1 { fail("Pass one of --keep-coords, --center and --at x,y.\n" + usage) }
+    var project = loadProject(projectPath)
+    let u = project.displayUnits
+    var options = ImportOptions(placement: .keep)
+    switch option("--units", in: args)?.lowercased() {
+    case nil: break
+    case "in", "inch", "inches": options.unit = .inch
+    case "mm", "millimetres", "millimeters": options.unit = .mm
+    case let other?: fail("--units takes in or mm, not \(other)")
+    }
+    if let layer = option("--layer", in: args) {
+        guard !layer.trimmingCharacters(in: .whitespaces).isEmpty else { fail("--layer needs a layer name") }
+        options.layer = layer
+    }
+    if args.contains("--center") { options.placement = .center }
+    if let text = option("--at", in: args) {
+        let parts = text.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard parts.count == 2, parts.allSatisfy(\.isFinite) else { fail("--at takes x,y in \(u.symbol), e.g. --at 1,1") }
+        options.placement = .at(Vec2(u.toMM(parts[0]), u.toMM(parts[1])))
+    }
+    if let text = option("--sheet", in: args) {
+        guard let n = Int(text), n >= 1, n <= project.sheetCount else {
+            fail("--sheet takes a sheet from 1 to \(project.sheetCount): the job has \(counted(project.sheetCount, "sheet"))")
+        }
+        options.sheet = n - 1
+    }
+    if let text = option("--depth", in: args) {
+        let limit = project.stock.thickness - 0.02.inch
+        guard let d = Double(text), d > 0 else { fail("--depth takes a depth above zero in \(u.symbol)") }
+        guard u.toMM(d) <= limit + 1e-9 else {
+            fail("--depth \(text) \(u.symbol) is too deep: a 3D model is carved no deeper than the material less 0.02 in"
+                 + " (\(u.format(limit)) \(u.symbol) here, the material being \(u.format(project.stock.thickness)) \(u.symbol)).")
+        }
+        options.modelDepth = u.toMM(d)
+    }
+    switch option("--up", in: args)?.lowercased() {
+    case nil: break
+    case "z": options.upAxis = .z
+    case "y": options.upAxis = .y
+    case let other?: fail("--up takes z or y, not \(other)")
+    }
+    func size(_ r: Rect2) -> String { "\(u.format(r.width)) × \(u.format(r.height)) \(u.symbol)" }
+    func point(_ p: Vec2) -> String { "(\(u.format(p.x)), \(u.format(p.y)))" }
+    func unitName(_ unit: LengthUnit) -> String { unit == .inch ? "inches" : "millimetres" }
+    for path in files.dropFirst() {
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent
+        let ext = url.pathExtension.lowercased()
+        guard VectorImporter.supportedExtensions.contains(ext) || ModelImporter.supportedExtensions.contains(ext) else {
+            fail("Not written: \(name) isn't a file NativeCAM imports (.dxf, .svg, .pdf, .ai; .stl, .obj, .3mf, .ply, .usdz, .usd).")
+        }
+        let file: ImportedFile
+        do { file = try project.importFile(at: url, options: options) } catch {
+            fail("Not written: can't import \(name): \(error.localizedDescription)")
+        }
+        let k = file.sheet
+        let sheet = project.stock(forSheet: k)
+        // The unit the file was read in, and why.
+        let read = file.unit.map(unitName) ?? (abs(file.unitScale - 25.4 / 96) < 1e-9 ? "pixels at 96 per inch"
+            : abs(file.unitScale - 25.4 / 72) < 1e-9 ? "points (72 per inch)" : "units of \(LengthUnit.mm.format(file.unitScale)) mm")
+        switch file.unitSource {
+        case .file:
+            print("\(name): \(read), as the file says")
+            if let given = options.unit, file.kind == .model || ext == "dxf", file.unit != given {
+                print("[warning] \(name): the file says it's in \(read), so --units \(given.symbol) doesn't apply to it")
+            }
+        case .given:
+            print("\(name): \(read), from --units (the file carries no unit)")
+        case .assumed:
+            if ext == "dxf" {
+                fail("Not written: \(name) has no $INSUNITS in its header, so its unit is unknown. Pass --units in or --units mm"
+                     + " to say what it was drawn in.")
+            }
+            print("\(name): \(read), assumed (the file carries no unit\(file.kind == .model ? "; pass --units to change it" : ""))")
+        }
+        for w in file.warnings { print("[warning] \(name): \(w)") }
+        guard !file.shapeIDs.isEmpty else { fail("Not written: \(name) has no usable vectors.") }
+        let added = project.shapes.filter { file.shapeIDs.contains($0.id) }
+        for shape in added {
+            if let spec = shape.modelSpec {
+                print("  Added 3D model “\(shape.name)” on layer “\(shape.layer)”: \(size(shape.bounds)) centred at \(point(shape.position)),"
+                      + " \(u.format(spec.depth)) \(u.symbol) deep, scale \(String(format: "%.4g", shape.scale))")
+            } else {
+                let polys = shape.polylines(tolerance: 0.1)
+                let open = polys.filter { !$0.isClosed }.count
+                let paths = open == 0 ? counted(polys.count, "closed path") : "\(counted(polys.count, "path")), \(open) open"
+                print("  Added “\(shape.name)” on layer “\(shape.layer)”: \(size(shape.bounds)) from \(point(shape.bounds.min))"
+                      + " to \(point(shape.bounds.max)), \(paths)")
+            }
+        }
+        if project.sheetCount > 1 { print("  On sheet \(k + 1) of \(project.sheetCount)") }
+        if file.kind == .vectors {
+            switch options.placement {
+            case .keep:
+                guard file.fitsMaterial else {
+                    let b = file.placedBounds
+                    fail("Not written: \(name) doesn't fit on the material in the file's coordinates. The drawing runs from \(point(b.min))"
+                         + " to \(point(b.max)) \(u.symbol); the material is \(u.format(sheet.width)) × \(u.format(sheet.height)) \(u.symbol)"
+                         + " from (0, 0). Pass --center to centre it on the material, or --at x,y to put its lower-left corner there.")
+                }
+                print("  Kept the file's coordinates")
+            case .center: print("  Centred on the material")
+            case .at: print("  Lower-left corner placed at \(point(file.placedBounds.min))")
+            case .auto: break
+            }
+            if !file.fitsMaterial {
+                print("[warning] \(name): the drawing (\(size(file.placedBounds))) runs off the material"
+                      + " (\(u.format(sheet.width)) × \(u.format(sheet.height)) \(u.symbol)); post will warn about cuts beyond its edges")
+            }
+        }
+        // A size that's implausible for the material is usually the wrong unit.
+        let b = file.placedBounds
+        let ratio = max(b.width / sheet.width, b.height / sheet.height)
+        let other: LengthUnit? = file.unitSource == .file ? nil : file.unit == .inch ? .mm : file.unit == .mm ? .inch : nil
+        let hint = other.map { " Check its unit: was it drawn in \(unitName($0)) (--units \($0.symbol))?" } ?? ""
+        if ratio < 0.01 {
+            print("[warning] \(name): the drawing is only \(size(b)), under 1% of the material (\(u.format(sheet.width)) × \(u.format(sheet.height))"
+                  + " \(u.symbol)).\(hint)")
+        } else if b.width > sheet.width + 1e-6 || b.height > sheet.height + 1e-6 {
+            print("[warning] \(name): the drawing is \(size(b)), larger than the material (\(u.format(sheet.width)) × \(u.format(sheet.height))"
+                  + " \(u.symbol)).\(hint)")
+        }
+    }
+    printBinding(project.bindVectorChanges(), project: project)
+    write(project, to: out)
+
+case "rebind":
+    let usage = "usage: nativecam-cli rebind <project.nativecam> (-o out.nativecam | --in-place)"
+    let files = positionals(from: 1, valued: ["-o"], flags: ["--in-place"], usage: usage)
+    guard files.count == 1 else { fail(usage) }
+    let out = requiredOutput(project: files[0], usage: usage)
+    var project = loadProject(files[0])
+    printBinding(project.bindVectorChanges(), project: project)
+    write(project, to: out)
+
+case "save":
+    let usage = "usage: nativecam-cli save <project.nativecam> (-o out.nativecam | --in-place) [--rebind]"
+    let files = positionals(from: 1, valued: ["-o"], flags: ["--in-place", "--rebind"], usage: usage)
+    guard files.count == 1 else { fail(usage) }
+    let out = requiredOutput(project: files[0], usage: usage)
+    var project = loadProject(files[0])
+    if args.contains("--rebind") { printBinding(project.bindVectorChanges(), project: project) }
+    let before = savedFormat(files[0]).map(String.init) ?? "?"
+    let after = project.formatVersion
+    print(before == String(after) ? "Format \(after), unchanged" : "Format \(before) → \(after)")
+    write(project, to: out)
 
 default:
     fail("unknown command \(command)")

@@ -17,6 +17,9 @@
 - [template save](#template-save)
 - [template apply](#template-apply)
 - [nest](#nest)
+- [import](#import)
+- [rebind](#rebind)
+- [save](#save)
 - [What the CLI can't do](#what-the-cli-cant-do)
 
 ## Building and running it
@@ -32,7 +35,7 @@ swift build -c release --product nativecam-cli   # about a minute from clean; re
 
 - **Exit status.** 0 on success. 1 when the command refuses or fails, with the reason on **stderr**: bad arguments, a file it can't read or write, a project from a newer format, `post` finding an error, a calibration program that can't be made. Issues and results go to **stdout**.
 - **No arguments** prints a short usage line and exits 0. It lists only some commands; this page lists them all. An unknown command prints `unknown command <name>` and exits 1.
-- **Options** are read by name from anywhere after the command (`-o out.tap` or `--air-cut 1`). An option given without its value is ignored, and so is an unknown option, so check spelling: `--airc-cut 1` cuts at full depth without a word.
+- **Options** are read by name from anywhere after the command (`-o out.tap` or `--air-cut 1`). An option given without its value is ignored, and so is an unknown option, so check spelling: `--airc-cut 1` cuts at full depth without a word. `import`, `rebind` and `save` are stricter: they refuse an unknown option or one missing its value.
 - **Lengths on the command line** are in the units the command names: the G-code's units (`post --air-cut`, `calibrate`) or the project's display units (`nest`). Lengths inside project files are always millimetres (see [Project format](project-format.md#units)).
 - **Issue lines** look like `[severity] <toolpath>: <message>` for the job's checks, and `[severity] G-code: <message>` for the export checks on the file. The severities are `info`, `warning` and `error`. See [Verifying output](verification.md#reading-posts-checks).
 - **Reading a project** fails with `Can't read project <path>: <reason>` and exit 1. The reason comes from Swift's JSON decoder and doesn't name the field ("The data couldn’t be read because it is missing."), so compare your file's keys with a file the CLI wrote. See [Project format](project-format.md#when-a-project-wont-load).
@@ -65,7 +68,7 @@ The rotary demos (the pawn and the table leg) aren't CLI commands. They're in [`
 ## post
 
 ```text
-nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]
+nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--rebind] [--force]
 ```
 
 With a `--restart-*` flag it writes a restart file instead: see [Restart files](#restart-files).
@@ -77,6 +80,7 @@ Generates the toolpaths, runs the job's checks, posts the file for the project's
 | `<project>` | required | The project to post |
 | `-o out` | the project's path | Where to write. Only the stem is used: the extension is always the controller's (`.tap` for Avid Mach4, `.nc`, `.ngc`, `.cnc` or `.sbp`), so `-o job.gcode` writes `job.tap` on Mach4 |
 | `--air-cut h` | off | Raises every Z, safe height and park height by `h`, in the G-code's units, with X and Y unchanged. The file is named `<stem> (air cut).<ext>`. `h` must be above zero, or it exits 1 |
+| `--rebind` | off | First has every toolpath that finds its vectors by layer or kind (`vectorSelection`) look again, as Recalculate All does, and prints what changed (lines starting `Rebind:`). Only in memory: the project file isn't saved. Without it, `post` cuts exactly the `shapeIDs` the file lists |
 | `--sheet out.html` | none | Also writes the printable setup sheet (see [Workflows](workflows.md#8-read-the-setup-sheet-and-run-time-estimate)). It's written before the error check, so it's written even when the G-code isn't |
 | `--force` | off | Writes the file in spite of errors. **An agent never passes it** (see [AGENTS.md](../../AGENTS.md#hard-safety-rules)) |
 
@@ -190,7 +194,7 @@ Estimated run time of the restart: H:MM:SS
 ## sim
 
 ```text
-nativecam-cli sim <project.nativecam | file.tap|.nc|.gcode|.ngc|.cnc|.txt|.sbp> [--png out.png] [--cell mm] [--heights out.bin] [--no-arcs]
+nativecam-cli sim <project.nativecam | file.tap|.nc|.gcode|.ngc|.cnc|.txt|.sbp> [--png out.png] [--cell mm] [--heights out.bin] [--no-arcs] [--rebind]
 ```
 
 Simulates material removal on a heightmap and prints what it found.
@@ -202,6 +206,7 @@ Simulates material removal on a heightmap and prints what it found.
 | `--cell mm` | automatic | The grid's cell size in millimetres. Smaller is finer and slower |
 | `--heights out.bin` | none | Writes the heightmap as little-endian binary: Int32 columns, Int32 rows, Float64 cell size, Float64 origin x, Float64 origin y, then columns × rows Float32 heights (mm, Z = 0 at the material top) |
 | `--no-arcs` | off | Projects only: posts without arc fitting (`outputArcs` off) before simulating |
+| `--rebind` | off | Projects only: rebinds in memory first, as `post --rebind` does, and prints what changed. A G-code file with it is refused |
 
 **A project** is generated as `post` would generate it, and played at its run-time estimate's pace. **A G-code file** is read with the default project's settings: the 24 × 18 × 0.75 in sheet, the Avid Mach4 dialect, and the starter library's tools by number (an unknown number gets T1). A job on other material is simulated on the wrong block. Its job time is the simulator's own timing of the moves, without the estimate's planner model. Tapping and boring cycles are read as Avid Mach4 runs them. Words it can't read come out as `[warning]` lines.
 
@@ -516,12 +521,103 @@ Wrote one.nativecam
 
 Parts that don't fit still exit 0, so read the `Nested x of y` line. Posting a job nested onto several sheets writes one file per sheet.
 
+## import
+
+```text
+nativecam-cli import <project.nativecam> <file>… (-o out.nativecam | --in-place) [--units in|mm] [--layer name]
+    [--keep-coords | --center | --at x,y] [--sheet n] [--depth d] [--up z|y]
+```
+
+Adds vector files (`.dxf`, `.svg`, `.pdf`, `.ai`) and 3D models (`.stl`, `.obj`, `.3mf`, `.ply`, `.usdz`, `.usd`, `.usda`, `.usdc`) to a project, as **File ▸ Import** does, through the same code: one shape per layer (named `<file> – <layer>` when the file has more than one), DXF points as a separate `… points` shape of 1 mm circles for a Drill toolpath, and each model centred, scaled down to 90% of the material if it's larger, and carved no deeper than the material less 0.02 in (on a rotary blank, laid along the axis). Then every toolpath that finds its vectors by layer or kind (`vectorSelection`) picks them up. Toolpaths whose vectors were chosen by hand are never touched. Several files are imported in the order given.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `<project>` | required | The project to add to |
+| `<file>…` | at least one | The files to import |
+| `-o out` / `--in-place` | **one is required** | Where to write: `-o` a new file, or `--in-place` to overwrite the project. Both together, neither, or `-o` naming the project itself are refused |
+| `--units in\|mm` | none | The unit of a file that carries none: a DXF without `$INSUNITS`, STL, OBJ or PLY. **A DXF without `$INSUNITS` is refused without it.** A mesh without it is read in millimetres. A file that states its unit keeps it, with a warning if `--units` says otherwise. SVG and PDF always use their own units (an SVG without physical units is read at 96 px per inch, with a warning) |
+| `--layer name` | the file's layers | Puts every imported vector shape (not 3D models) on this layer, for a toolpath or template that finds its vectors there |
+| `--keep-coords` | the default | Keep the file's coordinates. **A drawing that doesn't then lie on the material is refused**, with its extent and the material's |
+| `--center` | off | Centre each drawing on the material, as the app does with one that doesn't fit |
+| `--at x,y` | off | Put each drawing's bounding-box lower-left corner at x,y, in the project's display units |
+| `--sheet n` | 1 | On a job nested onto several sheets, the sheet the shapes go on and are placed against |
+| `--depth d` | in proportion to the model's size | A model's carved depth, in display units. Deeper than the material less 0.02 in is refused |
+| `--up z\|y` | the importer's guess (Z for STL and 3MF, Y for OBJ, PLY and USD) | A model's up axis |
+
+Only one of `--keep-coords`, `--center` and `--at` may be given. They place drawings; models are always centred. Nothing is written until every file has been imported, so a refusal (exit 1) leaves no file behind: an unreadable or unsupported file, a file with no usable vectors, a unitless DXF without `--units`, a drawing off the material, a `--depth` too deep, an unknown option.
+
+For each file it prints the unit it read the file in and why (`as the file says`, `from --units`, or `assumed`), the importer's notes as `[warning]` lines (units guessed, paths left open, duplicates removed, entities skipped), each shape added with its layer, size, extent and paths (`… open` when some paths aren't closed: a profile or pocket needs closed ones), and how it was placed. **A drawing under 1% of the material's size, or larger than the material, warns**: that's usually the wrong unit, and the warning names the other one. Then it prints every toolpath whose vectors changed, the toolpaths kept as chosen by hand, and the file written with its format.
+
+```text
+$ nativecam-cli import target.nativecam cli-two-layers-inch.dxf cli-points.dxf -o two.nativecam
+cli-two-layers-inch.dxf: inches, as the file says
+  Added “cli-two-layers-inch – Profile” on layer “Profile”: 6.0000 × 4.0000 in from (2.0000, 2.0000) to (8.0000, 6.0000), 1 closed path
+  Added “cli-two-layers-inch – Pocket” on layer “Pocket”: 2.0000 × 2.0000 in from (4.0000, 3.0000) to (6.0000, 5.0000), 1 closed path
+  Kept the file's coordinates
+cli-points.dxf: inches, as the file says
+  Added “cli-points points” on layer “Holes”: 4.0394 × 2.0394 in from (2.9803, 2.9803) to (7.0197, 5.0197), 4 closed paths
+  Kept the file's coordinates
+Toolpaths whose vectors changed:
+  Pocket (Layer “Pocket”): 0 → 1 vector (1 added)
+  Drill holes (Layer “Holes”): 0 → 1 vector (1 added)
+  Cut out part (Layer “Profile”): 0 → 1 vector (1 added)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote two.nativecam (format 1)
+$ nativecam-cli import target.nativecam cli-no-units.dxf -o x.nativecam
+Not written: cli-no-units.dxf has no $INSUNITS in its header, so its unit is unknown. Pass --units in or --units mm to say what it was drawn in.
+$ nativecam-cli import target.nativecam cli-off-material.dxf -o x.nativecam
+cli-off-material.dxf: inches, as the file says
+  Added “cli-off-material” on layer “Profile”: 4.0000 × 3.0000 in from (30.0000, 30.0000) to (34.0000, 33.0000), 1 closed path
+Not written: cli-off-material.dxf doesn't fit on the material in the file's coordinates. The drawing runs from (30.0000, 30.0000) to (34.0000, 33.0000) in; the material is 24.0000 × 18.0000 in from (0, 0). Pass --center to centre it on the material, or --at x,y to put its lower-left corner there.
+```
+
+These files are the test fixtures in `Tests/CAMCoreTests/Fixtures/import`, imported into `projects/cli-import-target.nativecam`; their full output is in `Fixtures/golden/cli-*.txt`. A toolpath whose rule finds nothing still has no vectors (`0 → 0` isn't printed: nothing changed), and `post` then warns about it, so check each toolpath you expected to pick up the import is in the list.
+
+## rebind
+
+```text
+nativecam-cli rebind <project.nativecam> (-o out.nativecam | --in-place)
+```
+
+Recalculate All's vector binding: every toolpath that finds its vectors by layer or kind looks again, and gets exactly what its rule finds now. Use it after editing the JSON (moving shapes to another layer, adding or removing shapes). It prints each toolpath whose vectors changed, with how many were added and removed, says when a toolpath is left with none, and names the toolpaths kept as chosen by hand (no `vectorSelection`, or `selection`), which it never changes. With nothing to change it says `No changes` and **still writes the output**, so a script can rely on the file being there. `-o` or `--in-place` is required, as for `import`.
+
+```text
+$ nativecam-cli rebind cli-unbound.nativecam -o bound.nativecam
+Toolpaths whose vectors changed:
+  Pocket (Layer “Pocket”): 0 → 1 vector (1 added)
+  Drill holes (Layer “Holes”): 0 → 1 vector (1 added)
+  Cut out part (Layer “Profile”): 1 → 1 vector (1 added, 1 removed)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote bound.nativecam (format 1)
+$ nativecam-cli rebind bound.nativecam -o again.nativecam
+No changes: every toolpath that finds its vectors by layer or kind already has them.
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote again.nativecam (format 1)
+```
+
+`post --rebind` and `sim --rebind` do the same in memory, without saving.
+
+## save
+
+```text
+nativecam-cli save <project.nativecam> (-o out.nativecam | --in-place) [--rebind]
+```
+
+Reads the project and writes it again, so `formatVersion` is the oldest format that can hold it (see [Project format](project-format.md#format-versions)), keys are sorted, and depths are fitted to the material as on any load. Use it after a hand edit. It prints the format the file said and the one written. `--rebind` rebinds first, as `rebind` does. `-o` or `--in-place` is required.
+
+```text
+$ nativecam-cli save cli-hand-edited-v1.nativecam -o saved.nativecam
+Format 1 → 28
+Wrote saved.nativecam (format 28)
+$ nativecam-cli save saved.nativecam --in-place
+Format 28, unchanged
+Wrote saved.nativecam (format 28)
+```
+
+None of `import`, `rebind` and `save` writes G-code, sends anything to a machine or takes `--force`.
+
 ## What the CLI can't do
 
-- **Import vectors or 3D models.** There's no `import` command. See [Workflows](workflows.md#1-import-vectors-and-cut-a-profile-pocket-and-drill-job).
-- **Re-run a toolpath's layer or kind rule** (Recalculate All), except through `template apply`. `post` cuts each toolpath's `shapeIDs` as listed.
-- **Edit a project.** There are no `set` or `add` commands. Edit the JSON (see [Project format](project-format.md)).
-- **Rewrite `formatVersion`.** Commands that save a project (`nest`, `template apply`, `machine --apply`, `calibrate fit --apply`) write the version the project needs; `post` and `sim` never write the project.
-- **Send a file to a machine.** Nothing in NativeCAM does, by design.
-
-[#152](https://github.com/NativeCAM/NativeCAM/issues/152) proposes `import`, rebind and re-save commands.
+- **Edit a project.** There are no `set` or `add` commands. Edit the JSON (see [Project format](project-format.md)), then `rebind` and `save` it. Toolpaths are added by JSON or `template apply`.
+- **Map several of a file's layers onto others.** `import --layer` puts every vector shape on one layer; to keep a file's layers apart, import it as it is and match the toolpaths' rules to its layer names.
+- **Send a file to a machine.** Nothing in NativeCAM does, by design. `post` and `sim` never write the project; `post` is the only command that writes a program for the job.

@@ -125,7 +125,7 @@ grep -E 'check (PASS|FAIL)' .build/snap.log
 |---|---|
 | `-NativeCAMSnapshotProject <path>` | The project (required) |
 | `-NativeCAMSnapshotOut <dir>` | Where the PNGs go (required; made if missing) |
-| `-NativeCAMSnapshotImport <file.dxf\|.svg\|.pdf>` | Imports vectors first, as **File ▸ Import** does, and logs each shape's layer. The project file isn't changed |
+| `-NativeCAMSnapshotImport <file.dxf\|.svg\|.pdf\|.stl\|…>` | Imports a file first, as **File ▸ Import** and `nativecam-cli import` do (the same code), and logs each shape's layer. The project file isn't changed: to keep the import, use `nativecam-cli import` |
 | `-NativeCAMSnapshotTemplate <template>` | Applies a template first, and draws the Apply Template sheet |
 | `-NativeCAMSnapshotTemplateSetup YES` | …with its job setup |
 | `-NativeCAMSnapshotTemplateMissing create\|skip` | …and what to do about missing layers |

@@ -5,15 +5,22 @@ extension ImportResult {
     /// more than one; otherwise one shape, on the file's layer if it has one. Points (DXF POINTs) become a separate
     /// shape of small circles beside their layer's, ready for a Drill toolpath. Shapes keep their file coordinates
     /// when the whole drawing fits on `stock`; otherwise they move together so the drawing is centred on it.
-    public func shapes(name: String, stock: Stock) -> [DesignShape] {
-        func marks(_ pts: [Vec2]) -> [Polyline] {
-            pts.map { Polyline(Curves.circle(center: $0, radius: 0.5, tolerance: 0.01), closed: true) }
-        }
+    /// `placement` says otherwise: always the file's coordinates, always centred, or the drawing's lower-left corner at
+    /// a point.
+    public func shapes(name: String, stock: Stock, placement: ImportPlacement = .auto) -> [DesignShape] {
+        let marks = Self.marks
         let all = polylines + marks(points)
         guard !all.isEmpty else { return [] }
         let b = all.bounds
         let fits = stock.bounds.insetBy(-0.001).contains(b.min) && stock.bounds.insetBy(-0.001).contains(b.max)
-        let shift = fits ? Vec2.zero : Vec2(stock.width / 2, stock.height / 2) - b.center
+        let centred = Vec2(stock.width / 2, stock.height / 2) - b.center
+        let shift: Vec2
+        switch placement {
+        case .auto: shift = fits ? .zero : centred
+        case .keep: shift = .zero
+        case .center: shift = centred
+        case let .at(corner): shift = corner - b.min
+        }
         func place(_ polys: [Polyline], _ name: String, _ layer: String) -> DesignShape? {
             guard !polys.isEmpty else { return nil }
             let c = polys.bounds.center

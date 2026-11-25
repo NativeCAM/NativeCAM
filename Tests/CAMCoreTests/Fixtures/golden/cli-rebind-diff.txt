@@ -1,0 +1,13 @@
+$ nativecam-cli rebind projects/cli-unbound.nativecam -o <out>/bound.nativecam
+Toolpaths whose vectors changed:
+  Pocket (Layer “Pocket”): 0 → 1 vector (1 added)
+  Drill holes (Layer “Holes”): 0 → 1 vector (1 added)
+  Cut out part (Layer “Profile”): 1 → 1 vector (1 added, 1 removed)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote <out>/bound.nativecam (format 1)
+exit 0
+$ nativecam-cli rebind <out>/bound.nativecam -o <out>/again.nativecam
+No changes: every toolpath that finds its vectors by layer or kind already has them.
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote <out>/again.nativecam (format 1)
+exit 0
