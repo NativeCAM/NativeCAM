@@ -95,6 +95,7 @@ What raises it, from the code:
 | 27 | A `cutDirection` other than the toolpath's default |
 | 28 | A profile's `finishPass` |
 | 29 | A profile's triangular tabs (`"shape": "triangular"`), tabs placed by hand (`placed`) or `startPoints`, on an inside or outside cut |
+| 30 | A flat 3D roughing or finishing that leaves strips under a tabbed cut-out's tabs (saved with `"holdsTabs": true`, below) |
 
 The code names no feature for formats 11, 23 or 24. Settings that change nothing for an older build don't raise the format (`fromBottom`, `restFromEarlier`, `flatRaster`, `adjustFeedsForLoad`, `spindleSpeed`, the `layers` list).
 
@@ -274,6 +275,7 @@ Shared parts:
 - **`direction`** (`CutDirection`): `climb` or `conventional`, assuming a clockwise (M3) spindle.
 - **`cutDirection`** (`PassDirection`, optional): `climb`, `conventional` or `both`, on the toolpaths whose passes run in rows or patterns. Leave it out for the toolpath's own default; a value other than the default is format 27.
 - **`boundary`** (3D): `model` (inside the model's outline), `vectors` (inside the other closed shapes in `shapeIDs`, plus `boundaryMargin`), or `material`.
+- **`holdsTabs`** (on a `rough3D` or `finish3D` operation, beside `kind`): written as `true` when the toolpath leaves strips under the tabs of the tabbed outside profile that cuts its model out (`boundary` `vectors`, the model as deep as the board), which makes the file format 30. It's worked out from the job each time the file is saved and ignored on reading: don't write it by hand, and setting it changes nothing. The tabs are the profile's `tabs`; evenly spaced ones on such a cut-out are spaced from each outline's first point. See [3D toolpaths and tabbed cut-outs](../using-nativecam.md#3d-toolpaths-and-tabbed-cut-outs).
 
 ### profile
 

@@ -31,6 +31,9 @@ public struct GenerationContext: Sendable {
     /// The lowest design Z a flat 3D roughing or finishing may cut to, to keep its part on the tabs of the cut-out that
     /// holds it (`PartHold`). nil = no limit.
     public var floorHold: Double?
+    /// The strips a flat 3D roughing or finishing leaves under the tabs of the cut-out that holds its part
+    /// (`HoldingTabs`), in place of a held floor. Empty = none.
+    public var holdingStrips: [HoldingTabs.Strip] = []
 
     public init(stock: Stock, machine: MachineProfile, flattenTolerance: Double = 0.01, arcTolerance: Double = 0.005,
                 units: LengthUnit = .mm) {
@@ -220,6 +223,8 @@ public enum CAMEngine {
         ctx.project = project
         var toolpaths: [Toolpath] = []
         var issues: [JobIssue] = []
+        // Which flat 3D toolpaths leave strips under a cut-out's tabs, and which hold their whole floor (#155, #173).
+        let holding = HoldingTabs.Job(project)
         // Coarse model of the material as each toolpath removes it (drives links and rest-aware depths). A rotary job
         // keeps one per face: each starts as the full block above the axis and other faces only ever remove material,
         // so a face's model never shows less than is really there, and links never stay down through uncut wood.
@@ -261,7 +266,9 @@ public enum CAMEngine {
         }
         // The stock as the last 3D rotary roughing left it, for the toolpaths after it (see `GenerationContext.rotaryMaterial`).
         var roughed: RadialGrid?
-        func generateAll(_ op: CAMOperation, stockRadius: (@Sendable (Double) -> Double)?) -> Generated? {
+        func generateAll(_ given: CAMOperation, stockRadius: (@Sendable (Double) -> Double)?) -> Generated? {
+            // A cut-out with strips under its evenly spaced tabs is cut with them at their fixed places.
+            let op = holding.anchoring(given)
             let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
             if shapes.isEmpty && op.kind.needsShapes {
                 issues.append(JobIssue(.warning, op.vectorSelection?.emptyMessage ?? "No shapes selected.", operation: op.name))
@@ -296,9 +303,17 @@ public enum CAMEngine {
                     opContext.rotaryMaterial = { x, a, r in grid.highest(x: x, angle: a, reach: r) + between }
                 }
                 opContext.protectedRegions = parts?.excluding(op.id, angle: angle)
-                // A 3D toolpath that would cut a part free before the tabs of its cut-out hold it stops above them (#155).
-                let hold = PartHold.hold(for: op, in: project)
-                if let hold, hold.possible { opContext.floorHold = hold.z }
+                // A 3D toolpath that would cut a part free before the tabs of its cut-out hold it leaves strips under
+                // them (#173), or where it can't, stops above them (#155).
+                let decision = holding.decisions[op.id] ?? .none
+                var hold: (hold: PartHold.Hold, why: String?)?
+                switch decision {
+                case let .strips(s): opContext.holdingStrips = s.strips
+                case let .hold(h, why):
+                    hold = (h, why)
+                    if h.possible { opContext.floorHold = h.z }
+                case .none, .belowFloor: break
+                }
                 if layout != nil, case let .profile(p) = op.kind {
                     breakLeads[op.id] = ProfileGenerator.breakLeads(op: op, params: p, shapes: shapes, context: opContext)
                 }
@@ -323,7 +338,31 @@ public enum CAMEngine {
                     }
                 }
                 generated = generated.map { withDirectionNote($0, operation: op) }
-                if let hold { generated = generated.map { withHoldCheck($0, hold: hold, project: project) } }
+                if let hold { generated = generated.map { withHoldCheck($0, hold: hold.hold, why: hold.why, project: project) } }
+                switch decision {
+                case let .strips(s):
+                    generated = generated.map { tp in
+                        var t = tp
+                        t.notes = (t.notes ?? []) + [HoldingTabs.stripsNote(s, units: project.displayUnits, thickness: stock.thickness)]
+                        t.warnings += s.warnings
+                        return t
+                    }
+                case let .belowFloor(name): generated = generated.map { tp in var t = tp; t.notes = (t.notes ?? []) + [HoldingTabs.belowNote(name)]; return t }
+                default: break
+                }
+                // A cut-out with strips under its tabs: cut with them at fixed places, which aren't placed by hand, and
+                // checked against the strips.
+                if let strips = holding.stripsByCutOut[op.id] {
+                    generated = generated.map { tp in
+                        var t = tp
+                        if given.kind != op.kind {
+                            t.tabMarks = t.tabMarks?.map { var m = $0; m.placed = false; return m }
+                            t.warnings = t.warnings.map { $0.replacingOccurrences(of: "tabs placed by hand are", with: "tabs are")
+                                .replacingOccurrences(of: "tab placed by hand is", with: "tab is") }
+                        }
+                        return tp.id == op.id ? withStripCheck(t, strips: strips, tool: op.tool) : t
+                    }
+                }
                 // Spindle ▸ Automatic: one speed per toolpath, set before anything reads it (feeds that follow the
                 // load hold their chip floor at it; tiles and sheets copy it).
                 if op.usesAutomaticSpindle {
@@ -382,6 +421,11 @@ public enum CAMEngine {
                         tp = LinkOptimizer.optimize(tp, model: &model, settings: settings)
                     } else {
                         tp.forEachMotion { s, m in model.apply(m, from: s, tool: tp.tool) }
+                    }
+                    // No motion of a 3D toolpath, its links included, may cut into the strips it leaves under a cut-out's
+                    // tabs (#173).
+                    if case let .strips(s)? = holding.decisions[op.id], HoldingTabs.intrusions(tp, strips: s.strips) > 0 {
+                        tp.errors = (tp.errors ?? []) + [HoldingTabs.intrusionError(s)]
                     }
                     if layout != nil {
                         // Checked and kept tile by tile instead.
@@ -736,7 +780,7 @@ public enum CAMEngine {
 
     /// A 3D toolpath held off the material's bottom for a cut-out's tabs (`PartHold`), with the note saying so, or the
     /// error when the floor couldn't be held or the toolpath still cuts below it.
-    static func withHoldCheck(_ tp: Toolpath, hold: PartHold.Hold, project: Project) -> Toolpath {
+    static func withHoldCheck(_ tp: Toolpath, hold: PartHold.Hold, why: String? = nil, project: Project) -> Toolpath {
         guard let ext = tp.cuttingExtents else { return tp }
         var t = tp
         let units = project.displayUnits
@@ -745,8 +789,17 @@ public enum CAMEngine {
         } else if ext.min.z < hold.z - 0.01 {
             t.errors = (t.errors ?? []) + [PartHold.stillCutsThrough(hold, deepest: -ext.min.z, units: units)]
         } else {
-            t.notes = (t.notes ?? []) + [PartHold.note(hold, stock: project.stock, units: units)]
+            t.notes = (t.notes ?? []) + [PartHold.note(hold, stock: project.stock, units: units, why: why)]
         }
+        return t
+    }
+
+    /// A cut-out with strips under its tabs (`HoldingTabs`), with the error when its tabs don't line up with them.
+    static func withStripCheck(_ tp: Toolpath, strips: HoldingTabs.Strips, tool: Tool) -> Toolpath {
+        let n = HoldingTabs.mismatches(tp, strips: strips, tool: tool)
+        guard n > 0 else { return tp }
+        var t = tp
+        t.errors = (t.errors ?? []) + [HoldingTabs.mismatchError(n, strips: strips)]
         return t
     }
 

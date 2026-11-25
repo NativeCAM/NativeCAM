@@ -169,13 +169,14 @@ extension Model3DGenerator {
         let cell = restCell(tool: tool, stepover: stepover)
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
                             reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold,
-                            warnings: &warnings) else {
+                            strips: context.holdingStrips, warnings: &warnings) else {
             return nil
         }
         var surface = targets(s, allowance: params.allowance)
         for i in surface.indices where surface[i] == .infinity { surface[i] = 0 }
         guard let exact = TriangleDropCutter(tool: tool, allowance: params.allowance, triangles: triangles(of: s.models)) else { return nil }
         for i in surface.indices where s.surface.covered[i] { surface[i] = -.infinity }
+        s.raiseStrips(&surface, allowance: params.allowance)
         let dropper = CombinedDrop(exact: exact, grid: DropCutter(grid: s.surface, surface: surface, tool: tool))
         let floor = s.baseZ + params.allowance
         let f = Finishing(setup: s, tool: tool, params: params, dropper: dropper, floor: floor, stepover: stepover, cell: cell,

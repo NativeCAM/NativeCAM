@@ -509,8 +509,10 @@ public enum SetupSheet {
         }
         if !tabbed.isEmpty {
             h += "<h2>Tabs</h2>\n<ul>\n"
+            let strips = HoldingTabs.setupSheetNotes(project, units: u)
             for (op, p, n) in tabbed {
-                h += "<li><b>\(esc(op.name))</b>: \(tabsClause(p, count: n, units: u))</li>\n"
+                let held = strips.first { $0.cutOut == op.name }.map { " \(esc($0.text))" } ?? ""
+                h += "<li><b>\(esc(op.name))</b>: \(tabsClause(p, count: n, units: u))\(held)</li>\n"
             }
             h += "</ul>\n"
         }

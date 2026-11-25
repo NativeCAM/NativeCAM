@@ -23,12 +23,26 @@ enum Model3DGenerator {
         /// The lowest design Z the toolpath may cut to anywhere, to keep a part on the tabs of its cut-out
         /// (`PartHold`); nil = no limit.
         var floorHold: Double? = nil
+        /// Per cell, the top (design Z) of the strip left under a cut-out's tab there (`HoldingTabs`); nil without strips,
+        /// -infinity on cells no strip covers.
+        var stripTop: [Float]? = nil
+
+        /// Raises `t` (a target or surface per cell, for `allowance`) to the strips' tops plus the allowance, so the strips
+        /// stand under the cut-out's tabs. Cells off the material (-infinity, uncovered) stay as they are; covered cells
+        /// finishing leaves to the exact cutter (-infinity) are raised too, so a strip over the model's edge keeps its top.
+        func raiseStrips(_ t: inout [Float], allowance: Double) {
+            guard let stripTop else { return }
+            let a = Float(allowance)
+            for i in t.indices where stripTop[i] > -.infinity && t[i] != .infinity && (t[i] > -.infinity || surface.covered[i]) {
+                t[i] = max(t[i], min(0, stripTop[i] + a))
+            }
+        }
     }
 
     /// `reach` widens the "cut down to the base" area beyond where the tool centre may go: finishing passes the tool
     /// radius, because the band its flank touches was cleared by roughing (whose automatic margin is wider).
     static func setup(shapes: [DesignShape], boundary: ModelBoundary, margin: Double, reach: Double = 0, tool: Tool, stock: Stock,
-                      preferredCell: Double, hold: Double? = nil, warnings: inout [String]) -> Setup? {
+                      preferredCell: Double, hold: Double? = nil, strips: [HoldingTabs.Strip] = [], warnings: inout [String]) -> Setup? {
         guard let (models, regions, mode) = boundaryRegions(shapes: shapes, boundary: boundary, margin: margin, stock: stock,
                                                             warnings: &warnings) else { return nil }
         let pad = tool.radius + preferredCell * 2
@@ -41,8 +55,17 @@ enum Model3DGenerator {
         if base < -stock.thickness - 1e-6 {
             warnings.append("The model is deeper than the material; the bottom of the model will be cut off.")
         }
+        var stripTop: [Float]?
+        if !strips.isEmpty, mode == .vectors {
+            var tops = [Float](repeating: -.infinity, count: surface.heights.count)
+            for st in strips {
+                let mask = regionMask([Region(outer: st.outline)], surface)
+                for i in mask.indices where mask[i] { tops[i] = max(tops[i], Float(st.top)) }
+            }
+            stripTop = tops
+        }
         return Setup(models: models, boundary: regions, mode: mode, surface: surface, inside: inside,
-                     baseZ: hold.map { max(base, $0) } ?? base, stock: stock, floorHold: hold)
+                     baseZ: hold.map { max(base, $0) } ?? base, stock: stock, floorHold: hold, stripTop: stripTop)
     }
 
     /// The models among `shapes` and where the tool centre may go over them (`Setup.boundary`), with the boundary
@@ -147,6 +170,7 @@ enum Model3DGenerator {
                 }
             }
         }
+        s.raiseStrips(&t, allowance: allowance)
         return t
     }
 
@@ -164,7 +188,7 @@ enum Model3DGenerator {
         }
         let cell = max(0.2, min(1.0, tool.diameter / 10))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Rough3DParams.autoMargin(tool: tool),
-                            tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, warnings: &warnings) else {
+                            tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, strips: context.holdingStrips, warnings: &warnings) else {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         if tool.shape == .taperedBallNose {
@@ -368,7 +392,7 @@ enum Model3DGenerator {
         let tool = op.tool
         let cell = max(0.2, min(1.0, tool.diameter / 10))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Rough3DParams.autoMargin(tool: tool),
-                            tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, warnings: &warnings) else { return [] }
+                            tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, strips: context.holdingStrips, warnings: &warnings) else { return [] }
         let target = targets(s, allowance: params.allowance)
         guard let deepest = target.filter({ $0.isFinite }).min().map(Double.init), deepest < -1e-3 else { return [] }
         let layers = roughLayers(s, target: target, deepest: deepest, params: params, tool: tool)
@@ -387,7 +411,7 @@ enum Model3DGenerator {
         let stepover = params.stepoverInUse(tool: tool)
         let cell = max(0.08, min(0.5, min(stepover / 2, tool.radius / 6)))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Finish3DParams.autoMargin(tool: tool),
-                            reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, warnings: &warnings) else {
+                            reach: tool.radius + cell, tool: tool, stock: context.stock, preferredCell: cell, hold: context.floorHold, strips: context.holdingStrips, warnings: &warnings) else {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         if tool.shape == .flatEndMill || tool.shape == .surfacing {
@@ -404,6 +428,8 @@ enum Model3DGenerator {
         let exact = TriangleDropCutter(tool: tool, allowance: params.allowance, triangles: triangles(of: s.models))
         if exact != nil {
             for i in surface.indices where s.surface.covered[i] { surface[i] = -.infinity }
+            // The strips under a cut-out's tabs stand over the model's edge too: the grid carries them there.
+            s.raiseStrips(&surface, allowance: params.allowance)
         }
         let grid = DropCutter(grid: s.surface, surface: surface, tool: tool)
         let dropper = CombinedDrop(exact: exact, grid: grid)

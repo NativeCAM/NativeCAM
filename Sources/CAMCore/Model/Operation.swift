@@ -1956,6 +1956,13 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         self.spindleSpeed = spindleSpeed
     }
 
+    /// The format that adds strips under a cut-out's tabs in flat 3D roughing and finishing (`HoldingTabs`): such a
+    /// toolpath is saved with `"holdsTabs": true`, which raises the file to it. A format-29 build would ignore the strips
+    /// and hold the whole floor (or, older still, cut the floor through), and the cut-out's evenly spaced tabs would land
+    /// elsewhere on the wall from the strips: it refuses the file instead. The marker is written only when strips are
+    /// left; it's worked out from the job each time, never read back (`Project.encode`).
+    public static let holdsTabsFormatVersion = 30
+
     /// The angles this operation cuts at on rotary stock.
     public var rotaryAngles: [Double] { indexAngles ?? [0] }
 
