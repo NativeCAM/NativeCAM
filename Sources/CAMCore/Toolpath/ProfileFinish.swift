@@ -14,9 +14,9 @@ enum ProfileFinish {
     }
 
     /// Checks a profile's finishing pass against its side, bit and job. `diameter` is the bit's cutting width at the
-    /// wall (twice the profile's effective radius). Warnings and refusals go into `warnings`.
+    /// wall (twice the profile's effective radius). Warnings go into `warnings`, refusals into `errors`.
     static func plan(_ params: ProfileParams, tool: Tool, diameter: Double, context: GenerationContext,
-                     warnings: inout [String]) -> Plan {
+                     warnings: inout [String], errors: inout [String]) -> Plan {
         guard let finish = params.finishPass else { return .none }
         let bitName = tool.name.isEmpty ? "T\(tool.number)" : "'\(tool.name)'"
         if params.side == .on {
@@ -39,13 +39,13 @@ enum ProfileFinish {
             return .none
         }
         if finish.allowance > diameter / 2 + 1e-9 {
-            warnings.append("Refused: the finish allowance (\(context.length(finish.allowance))) is more than half the width of "
+            errors.append("Refused: the finish allowance (\(context.length(finish.allowance))) is more than half the width of "
                 + "\(bitName) (\(context.length(diameter))), so the finishing pass would cut a full-depth slot. Nothing was cut. "
                 + "Use a smaller finish allowance.")
             return .refused
         }
         if finish.depth == .fullDepth, tool.fluteLength > 0, params.depth.cutDepth > tool.fluteLength + 1e-6 {
-            warnings.append("Refused: a full-depth finishing pass \(context.length(params.depth.cutDepth)) deep is deeper than "
+            errors.append("Refused: a full-depth finishing pass \(context.length(params.depth.cutDepth)) deep is deeper than "
                 + "the flutes of \(bitName) (\(context.length(tool.fluteLength))), so the shank would rub the wall. Nothing was cut. "
                 + "Set the finish depth to Each pass, or use a bit with longer flutes.")
             return .refused

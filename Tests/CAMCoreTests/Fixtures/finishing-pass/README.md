@@ -16,7 +16,7 @@ NativeCAM does with its project:
   plunge and every move stay between the finished wall's and the roughing's offsets, with no warning.
 - `finish-without-leads.nativecam`: no leads. The finish enters on an automatic arc in the kerf, not on the wall.
 - `allowance-too-large.nativecam`: a 3.3 mm finish allowance on a 1/4" bit (over half its width). Refused: nothing is
-  cut, with a warning starting "Refused:".
+  cut, and the job has an error starting "Refused:", so `post` won't write it.
 - `allowance-heavy.nativecam`: 2.5 mm (over a third of the bit's width). Cut, with a warning.
 - `full-depth-past-flutes.nativecam`: a full-depth finish 19.55 mm deep with 12.7 mm flutes. Refused, suggesting Each
   pass (which the test then cuts).
@@ -24,7 +24,7 @@ NativeCAM does with its project:
   without it.
 - `dovetail-finish-skipped.nativecam`: a dovetail bit with a finish. Skipped with a warning.
 - `inside-finish-only-refused.nativecam`: a 6.8 mm hole where the 1/4" bit's finishing offset fits but the roughing's
-  doesn't. That loop is refused with a warning, and nothing is cut.
+  doesn't. That loop is refused with an error, and nothing is cut.
 - `tiled-finish-skipped.nativecam`: a tiled job. The finish is skipped with a warning.
 - `spring-pass.nativecam`: a spring pass at 80% feed. The lap runs twice at the finish feed, written once as F.
 - `adjust-feeds-excludes-finish.nativecam`: Adjust Feeds for Load on. The finish laps keep their feed, and the usual

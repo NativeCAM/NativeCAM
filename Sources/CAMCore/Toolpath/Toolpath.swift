@@ -136,6 +136,10 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     public var start: Vec3
     public var motions: [Motion]
     public var warnings: [String]
+    /// Why the generator refused to cut something it was asked to (a profile's finishing pass that would cut a
+    /// full-depth slot, say): the job's checks make each one an error, so the job isn't exported without being forced.
+    /// nil for none. What it did cut, if anything, is still in `motions`.
+    public var errors: [String]?
     /// On rotary stock, the angle (degrees, right-hand rule about +X) the blank turns to before this toolpath cuts;
     /// its motions are in that face's frame. nil on a flat job.
     public var indexAngle: Double?

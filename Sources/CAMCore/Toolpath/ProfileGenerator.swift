@@ -73,13 +73,17 @@ enum ProfileGenerator {
 
         // A finishing pass: the roughing loops stand its allowance further off the wall, and a lap per loop at `offset`
         // cuts the wall to size (see `ProfileFinish`).
+        // Refusals: the job's checks make each an error.
+        var errors: [String] = []
         let finish: ProfileFinishPass?
-        switch ProfileFinish.plan(params, tool: tool, diameter: 2 * r, context: context, warnings: &warnings) {
+        switch ProfileFinish.plan(params, tool: tool, diameter: 2 * r, context: context, warnings: &warnings, errors: &errors) {
         case .none: finish = nil
         case let .active(f): finish = f
         case .refused:
-            return ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
+            var refused = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
                 .build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+            refused.errors = errors
+            return refused
         }
         let finishAllowance = finish?.allowance ?? 0
         // Where the roughing loops are: the final wall's offset, plus the finish allowance with a finishing pass.
@@ -202,7 +206,7 @@ enum ProfileGenerator {
                 refusedLoops += 1
             }
             if refusedLoops > 0, let finish {
-                warnings.append("Refused: the finishing pass on \(refusedLoops == 1 ? "1 loop" : "\(refusedLoops) loops") would cut material the "
+                errors.append("Refused: the finishing pass on \(refusedLoops == 1 ? "1 loop" : "\(refusedLoops) loops") would cut material the "
                     + "roughing passes couldn't reach (their offset, \(context.length(finish.allowance)) further off the wall, doesn't fit "
                     + "there), so \(refusedLoops == 1 ? "it was" : "they were") left off: that wall isn't cut to size. Use a smaller "
                     + "finish allowance or bit.")
@@ -278,8 +282,10 @@ enum ProfileGenerator {
         }
         guard !levels.isEmpty, !contours.isEmpty else {
             if levels.isEmpty { warnings.append("Cut depth must be greater than the start depth.") }
-            return ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
+            var empty = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
                 .build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+            if !errors.isEmpty { empty.errors = errors }
+            return empty
         }
 
         // Order: deepest nesting first (inside before outside), shortest travel within each nesting level. A closed
@@ -460,6 +466,7 @@ enum ProfileGenerator {
         }
         var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         toolpath.reliefCorners = reliefCorners
+        if !errors.isEmpty { toolpath.errors = errors }
         if let finish, !finishCut.isEmpty {
             toolpath.finishLaps = FinishLaps(loops: finishCut, tolerance: ProfileFinish.loopTolerance(allowance: finish.allowance))
         }

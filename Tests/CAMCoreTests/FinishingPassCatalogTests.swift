@@ -409,8 +409,23 @@ struct FinishingPassCatalogTests {
         let job = CAMEngine.generate(p)
         let tp = try #require(job.toolpaths.first)
         #expect(tp.isEmpty)
-        #expect(tp.warnings.contains { $0.hasPrefix("Refused: the finish allowance") }, "\(tp.warnings)")
-        #expect(job.issues.contains { $0.message.hasPrefix("Refused: the finish allowance") })
+        #expect(tp.errors?.contains { $0.hasPrefix("Refused: the finish allowance") } == true, "\(tp.errors ?? [])")
+        #expect(job.hasErrors)
+        #expect(job.issues.contains { $0.severity == .error && $0.message.hasPrefix("Refused: the finish allowance") })
+    }
+
+    /// A toolpath's errors are the job's: `post` refuses to write the file (exit 1) unless forced, and says why.
+    @Test func aToolpathErrorRefusesThePost() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("finishing-pass-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let project = dir.appendingPathComponent("refused.nativecam"), out = dir.appendingPathComponent("refused.tap")
+        try Self.allowanceProject(3.3, name: "Finish allowance over D/2").encoded().write(to: project)
+        let refused = try CommandLineTests.run(["post", project.path, "-o", out.path])
+        #expect(refused.status == 1, "\(refused.output)")
+        #expect(!FileManager.default.fileExists(atPath: out.path), "wrote the file anyway")
+        #expect(refused.output.contains("[error] Cut out: Refused: the finish allowance"), "\(refused.output)")
+        #expect(refused.output.contains("Not written: the job has 1 error."), "\(refused.output)")
     }
 
     /// Over a third of its width: cut, with a warning.
@@ -419,6 +434,7 @@ struct FinishingPassCatalogTests {
         let tp = try #require(CAMEngine.generate(p).toolpaths.first)
         #expect(!tp.isEmpty && tp.finishLaps != nil)
         #expect(tp.warnings.contains { $0.contains("more than a third of") }, "\(tp.warnings)")
+        #expect(tp.errors == nil)
     }
 
     static func pastFlutesProject(_ depth: ProfileFinishPass.Depth) -> Project {
@@ -436,7 +452,7 @@ struct FinishingPassCatalogTests {
         let p = try Self.edgeCase("full-depth-past-flutes") { Self.pastFlutesProject(.fullDepth) }
         let tp = try #require(CAMEngine.generate(p).toolpaths.first)
         #expect(tp.isEmpty)
-        #expect(tp.warnings.contains { $0.hasPrefix("Refused: a full-depth finishing pass") && $0.contains("Each pass") }, "\(tp.warnings)")
+        #expect(tp.errors?.contains { $0.hasPrefix("Refused: a full-depth finishing pass") && $0.contains("Each pass") } == true, "\(tp.errors ?? [])")
         let each = try #require(CAMEngine.generate(Self.pastFlutesProject(.eachPass)).toolpaths.first)
         #expect(!each.isEmpty && each.finishLaps != nil)
     }
@@ -488,7 +504,7 @@ struct FinishingPassCatalogTests {
         let tp = try #require(CAMEngine.generate(p).toolpaths.first)
         #expect(tp.isEmpty)
         #expect(tp.finishLaps == nil)
-        #expect(tp.warnings.contains { $0.hasPrefix("Refused: the finishing pass on 1 loop") }, "\(tp.warnings)")
+        #expect(tp.errors?.contains { $0.hasPrefix("Refused: the finishing pass on 1 loop") } == true, "\(tp.errors ?? [])")
     }
 
     static func tiledProject() -> Project {
