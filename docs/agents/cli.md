@@ -68,6 +68,8 @@ The rotary demos (the pawn and the table leg) aren't CLI commands. They're in [`
 nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]
 ```
 
+With a `--restart-*` flag it writes a restart file instead: see [Restart files](#restart-files).
+
 Generates the toolpaths, runs the job's checks, posts the file for the project's machine, reads the file back with the export checks (`GCodeCheck`: against the controller, the toolpaths and the machine), prints every issue and, unless there's an error, writes the file.
 
 | Argument | Default | Meaning |
@@ -140,6 +142,50 @@ $ echo $?
 The `Not written` line goes to stderr, so in a terminal it can show before the issues, which go to stdout.
 
 A project with no toolpaths posts a short, valid program with `Generated 0 toolpaths` and exits 0, so check the count.
+
+
+### Restart files
+
+```text
+nativecam-cli post <project.nativecam> --restart-toolpath n [--restart-pass p] [--restart-exact] [--restart-no-stop]
+                   [--restart-file n] [--restart-from running.tap] [--air-cut height] [-o out.tap] [--force]
+nativecam-cli post <project.nativecam> --restart-line N [same options]
+```
+
+Writes a restart: the rest of the job from part way through, for after a broken bit, a power cut or an E-stop. Any `--restart-*` flag switches `post` to this mode. See [Restarting a job partway through](../using-nativecam.md#restarting-a-job-partway-through) for what the file does.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `--restart-toolpath n` | required without `--restart-line` | The toolpath, from 1, in the file's run order: its toolpaths that cut anything, as the Avid header's `Toolpaths:` list numbers them |
+| `--restart-pass p` | the toolpath's start | Pass `p`, from 1. A pass begins where the tool lifts to the plunge height or above |
+| `--restart-line N` | none | The cutting move on line `N` of the full file, from 1 as a text editor counts, or the next one after it. Replaces `--restart-toolpath` |
+| `--restart-exact` | off | Restart at the move itself with a feed straight down at the plunge rate, rather than at the start of its pass. Refused when the feed down would cut material |
+| `--restart-no-stop` | off | Leave out the stop (`M00`) over the restart point |
+| `--restart-file n` | 1 | On a tiled, multi-sheet or split-per-tool job, which file was running, from 1 |
+| `--restart-from file` | none | The file that was running. Its `Created` stamp goes in the header, and it's an **error** if this project no longer writes the same program |
+| `--air-cut h` | off | An air cut of the restart |
+| `--sheet` | | Not allowed with a restart. Post the full job for its setup sheet |
+
+**File.** `<stem> (restart at toolpath n pass p)<the full file's suffix>.<ext>`, for example `sign (restart at toolpath 2 pass 2).tap`.
+
+**Stdout.** The restart's header lines, indented, then the checks, then:
+
+```text
+Restart: <n> toolpaths, <lines> lines -> <file>
+Estimated run time of the restart: H:MM:SS
+```
+
+**Exit status.** 1 with `Restart refused: …` for:
+
+- a point past the end;
+- a calibration program;
+- a rotary job on an imported Vectric post;
+- an exact plunge into material;
+- an approach the simulation shows rapiding through material.
+
+`--force` doesn't override a refusal. 1 with `Not written: …` when the restart's own checks or the export checks find an error, as for a normal `post`. A spin-up dwell of 0 s is a warning.
+
+**An agent may write a restart file. Running it is the human's,** as for every file (see [AGENTS.md](../../AGENTS.md#hard-safety-rules)). Hand it over with its header, every warning, and the line the human said the controller showed. Never guess the line or the pass: ask the human where the job stopped.
 
 ## sim
 

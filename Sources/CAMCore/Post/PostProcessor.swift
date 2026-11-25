@@ -54,6 +54,26 @@ public enum PostProcessors {
         return GenericGCodePost(project: project, dialect: dialect, date: date)
     }
 
+    /// The post for a restart file (`Restart`): as `post(for:date:)`, seeded with the full program's rotary state and the
+    /// stop above the restart point. An imported Vectric post can't take the seed: `Restart` refuses rotary jobs on one,
+    /// and it writes no stop.
+    public static func post(for project: Project, date: Date = Date(), restart: RestartSeed?) -> (any PostProcessor)? {
+        guard let restart else { return post(for: project, date: date) }
+        switch post(for: project, date: date) {
+        case var p as AvidMach4Post:
+            p.restart = restart
+            return p
+        case var p as GenericGCodePost:
+            p.restart = restart
+            return p
+        case var p as OpenSBPPost:
+            p.restart = restart
+            return p
+        case let other:
+            return other
+        }
+    }
+
     /// Why `post(for:)` has nothing for this machine; nil when it has a post.
     public static func unavailableReason(for machine: MachineProfile) -> String? {
         guard Dialect.for(machine) == nil else { return nil }

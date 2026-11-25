@@ -368,8 +368,10 @@ struct WrappedWriter {
 
     /// From safe Z: over the start along the blank with the tool on the axis centreline, then the turn that brings the
     /// start under it, the shorter way round from `last` (the A value last written) when it's more than a turn away.
-    /// True when the blank turns; `offset` (whole turns) goes to `motions`.
-    func approach<S: WrapModalState>(_ tp: Toolpath, state: inout S, after last: Double?) -> (lines: [String], turned: Bool, offset: Double) {
+    /// True when the blank turns; `offset` (whole turns) goes to `motions`. A restart part way through the toolpath
+    /// passes the full program's `offset` for it (`RestartSeed.wrapOffset`), so every A word matches the full file's.
+    func approach<S: WrapModalState>(_ tp: Toolpath, state: inout S, after last: Double?, offset forced: Double? = nil)
+        -> (lines: [String], turned: Bool, offset: Double) {
         guard let d = tp.wrapDiameter else { return ([], false, 0) }
         let w = frame.overAxis(tp.start)
         let x = round(w.x), y = round(w.y)
@@ -377,11 +379,16 @@ struct WrappedWriter {
         state.x = x
         state.y = y
         let start = aValue(tp.start.y, diameter: d)
-        let a = RotaryOutput.nearestTurn(start, after: last)
-        guard state.a != a else { return (lines, false, a - start) }
+        var a = RotaryOutput.nearestTurn(start, after: last)
+        if let forced {
+            a = forced == 0 ? start : ((start + forced) * 1000).rounded() / 1000
+            if a == 0 { a = 0 }
+        }
+        let offset = forced ?? (a - start)
+        guard state.a != a else { return (lines, false, offset) }
         lines.append("\(rapidWord) \(rotary.word(value: a))")
         state.a = a
-        return (lines, true, a - start)
+        return (lines, true, offset)
     }
 
     /// The toolpath's moves, after `approach`, each A moved by `offset` (whole turns). True when the blank turns;

@@ -26,8 +26,10 @@ public enum GCodeCheck {
         }
     }
 
-    /// All three checks.
-    public static func run(_ gcode: String, toolpaths: [Toolpath], project: Project, dialect: Dialect) -> [Issue] {
+    /// All three checks. A restart file (`Restart`) is read back with its seed: the full program's rotary state and the
+    /// stop above the restart point.
+    public static func run(_ gcode: String, toolpaths: [Toolpath], project: Project, dialect: Dialect,
+                           restart: RestartSeed? = nil) -> [Issue] {
         guard dialect.readsBack else {
             return [Issue(.warning, "\(dialect.name) doesn't write G-code NativeCAM can read back, so this file isn't checked. Air-cut it first.")]
         }
@@ -36,13 +38,13 @@ public enum GCodeCheck {
         if dialect.language == .openSBP {
             let program = OpenSBPParser.parse(gcode, units: project.machine.outputUnits)
             return lintOpenSBP(gcode, project: project, dialect: dialect)
-                + roundTrip(program, toolpaths: toolpaths, project: project, dialect: dialect)
+                + roundTrip(program, toolpaths: toolpaths, project: project, dialect: dialect, restart: restart)
                 + envelope(program, toolpaths: toolpaths, project: project)
         }
         var issues = lint(gcode, project: project, dialect: dialect)
         do {
             let program = try GCodeParser.parse(gcode, dwellUnit: dialect.dwell.parserUnit)
-            issues += roundTrip(program, toolpaths: toolpaths, project: project, dialect: dialect)
+            issues += roundTrip(program, toolpaths: toolpaths, project: project, dialect: dialect, restart: restart)
             issues += envelope(program, toolpaths: toolpaths, project: project)
         } catch {
             issues.append(Issue(.error, "The file can't be read back: \(error.localizedDescription)"))
@@ -441,12 +443,16 @@ public enum GCodeCheck {
         var a: Double?
         /// A wrapped move that turns the blank: fed in inverse time, or by the controller's rotary feed rule.
         var turnsA = false
+        /// Where the move comes from: the toolpath's index in the list given, and the motion's in that toolpath (nil
+        /// for a spin-up dwell the post adds).
+        var toolpathIndex = 0
+        var motionIndex: Int?
     }
 
     /// The moves the post writes, in order: the same rule as the post, which leaves out a move whose rounded end
     /// is where the tool already is, starts each toolpath from its approach at safe Z, and dwells for the spindle
     /// to spin up after each tool change or speed change.
-    static func expectedMoves(_ toolpaths: [Toolpath], project: Project, dialect: Dialect) -> [ExpectedMove] {
+    static func expectedMoves(_ toolpaths: [Toolpath], project: Project, dialect: Dialect, restart: RestartSeed? = nil) -> [ExpectedMove] {
         let machine = project.machine, stock = project.stock, units = machine.outputUnits
         let scale = pow(10, Double(dialect.coordinateDecimals(units)))
         func r(_ mm: Double) -> Double {
@@ -459,11 +465,14 @@ public enum GCodeCheck {
         var out: [ExpectedMove] = []
         var tool: Int?, speed: Double?
         // The A value last written: a toolpath more than a turn away from it starts the shorter way round, as the post
-        // does.
-        var lastA: Double?
+        // does. A restart starts from where the full program had left it.
+        var lastA: Double? = restart?.lastA
+        var firstToolpath = true
         // A blank turned by hand: the post stops the spindle for each turn, so it spins up again afterwards.
         var dial: Double?
-        for tp in toolpaths where !tp.isEmpty {
+        for (index, tp) in toolpaths.enumerated() where !tp.isEmpty {
+            let restarting = firstToolpath ? restart : nil
+            firstToolpath = false
             // A wrapped toolpath keeps the tool over the axis centreline and turns its sheet Y into A.
             let wrap = tp.wrapDiameter.flatMap { d in rotary.map { (d, $0) } }
             func work(_ p: Vec3) -> Vec3 { wrap == nil ? frame.toWork(p) : frame.overAxis(p) }
@@ -477,7 +486,8 @@ public enum GCodeCheck {
                 speed = nil
             }
             let first = written(tp.start)
-            let offset = first.map { RotaryOutput.nearestTurn($0, after: lastA) - $0 } ?? 0
+            var offset = first.map { RotaryOutput.nearestTurn($0, after: lastA) - $0 } ?? 0
+            if wrap != nil, let forced = restarting?.wrapOffset { offset = forced }
             func angle(_ p: Vec3) -> Double? {
                 written(p).map { offset == 0 ? $0 : (($0 + offset) * 1000).rounded() / 1000 }
             }
@@ -485,19 +495,25 @@ public enum GCodeCheck {
             let s = work(tp.start)
             if (tool != tp.tool.number || speed != rpm) && machine.spindleSpinUpDwell > 0 {
                 out.append(ExpectedMove(kind: .dwell, end: s, start: s, center: .zero, feed: machine.spindleSpinUpDwell,
-                                        tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: angle(tp.start)))
+                                        tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: angle(tp.start), toolpathIndex: index))
+            }
+            // A restart's stop above the restart point starts the spindle again, with its dwell.
+            if restarting?.pause != nil && machine.spindleSpinUpDwell > 0 {
+                out.append(ExpectedMove(kind: .dwell, end: s, start: s, center: .zero, feed: machine.spindleSpinUpDwell,
+                                        tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: angle(tp.start), toolpathIndex: index))
             }
             tool = tp.tool.number
             speed = rpm
             var sx = r(s.x), sy = r(s.y), sz = r(safe), sa = angle(tp.start)
             var position = tp.start
-            for m in tp.motions {
+            for (k, m) in tp.motions.enumerated() {
                 let e = work(m.end)
                 let ex = r(e.x), ey = r(e.y), ez = r(e.z), ea = angle(m.end)
                 let turns = wrap != nil && ea != sa
                 var move = ExpectedMove(kind: m.kind, end: e, start: work(position),
                                         center: m.kind.isArc ? frame.toWork(Vec3(m.center, 0)).xy : .zero,
-                                        feed: m.feed, tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: ea)
+                                        feed: m.feed, tool: tp.tool.number, rpm: rpm, toolpath: tp.name, a: ea,
+                                        toolpathIndex: index, motionIndex: k)
                 move.turnsA = turns
                 switch m.kind {
                 case .dwell: out.append(move)
@@ -513,13 +529,9 @@ public enum GCodeCheck {
         return out
     }
 
-    public static func roundTrip(_ program: GCodeProgram, toolpaths: [Toolpath], project: Project, dialect: Dialect) -> [Issue] {
-        let units = project.machine.outputUnits
-        let step = units.toMM(pow(10, -Double(dialect.coordinateDecimals(units))))
-        let tol = step / 2 + 1e-6
-        let feedTol = (dialect.feedPerSecond ? 60 : 1) * units.toMM(pow(10, -Double(dialect.feedDecimals(units)))) / 2 + 1e-6
-        let expected = expectedMoves(toolpaths, project: project, dialect: dialect).filter { dialect.comparesDwells || $0.kind != .dwell }
-        let frame = RotaryFrame(project)
+    /// The cutting moves and dwells read back from a program, in order, with the line each is on.
+    static func writtenMoves(_ program: GCodeProgram, dialect: Dialect)
+        -> [(motion: Motion, start: Vec3, startA: Double?, tool: Int, rpm: Double, line: Int)] {
         var written: [(motion: Motion, start: Vec3, startA: Double?, tool: Int, rpm: Double, line: Int)] = []
         var lastA: Double?
         for seg in program.segments {
@@ -532,6 +544,40 @@ public enum GCodeCheck {
                 lastA = m.a ?? lastA
             }
         }
+        return written
+    }
+
+    /// The program read back as the checks read it; nil when it can't be read.
+    static func program(_ gcode: String, project: Project, dialect: Dialect) -> GCodeProgram? {
+        if dialect.language == .openSBP { return OpenSBPParser.parse(gcode, units: project.machine.outputUnits) }
+        return try? GCodeParser.parse(gcode, dwellUnit: dialect.dwell.parserUnit)
+    }
+
+    /// The toolpath (its index in `toolpaths`) and motion that the cutting move on `line` of a file the post wrote for
+    /// them comes from: the first cutting move on that line or after it, so a line between moves (a comment, a rapid)
+    /// gives the next cut. nil when no cutting move is on or after the line, or the file doesn't read back.
+    public static func locate(line: Int, in gcode: String, toolpaths: [Toolpath], project: Project, dialect: Dialect)
+        -> (toolpath: Int, motion: Int)? {
+        guard dialect.readsBack, let program = program(gcode, project: project, dialect: dialect) else { return nil }
+        let written = writtenMoves(program, dialect: dialect)
+        let expected = expectedMoves(toolpaths, project: project, dialect: dialect).filter { dialect.comparesDwells || $0.kind != .dwell }
+        for (w, e) in zip(written, expected) where w.line >= line {
+            guard let k = e.motionIndex else { continue }
+            return (e.toolpathIndex, k)
+        }
+        return nil
+    }
+
+    public static func roundTrip(_ program: GCodeProgram, toolpaths: [Toolpath], project: Project, dialect: Dialect,
+                                 restart: RestartSeed? = nil) -> [Issue] {
+        let units = project.machine.outputUnits
+        let step = units.toMM(pow(10, -Double(dialect.coordinateDecimals(units))))
+        let tol = step / 2 + 1e-6
+        let feedTol = (dialect.feedPerSecond ? 60 : 1) * units.toMM(pow(10, -Double(dialect.feedDecimals(units)))) / 2 + 1e-6
+        let expected = expectedMoves(toolpaths, project: project, dialect: dialect, restart: restart)
+            .filter { dialect.comparesDwells || $0.kind != .dwell }
+        let frame = RotaryFrame(project)
+        let written = writtenMoves(program, dialect: dialect)
 
         // On a blank turned by hand there are no A words: each move is at the angle the last stop asked for.
         let byHand = RotaryOutput(project)?.manual ?? false

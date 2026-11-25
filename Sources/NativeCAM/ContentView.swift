@@ -99,6 +99,11 @@ struct ContentView: View {
         .sheet(isPresented: $calibrating) {
             CalibrationSheet(project: project, tools: library.tools) { fit, toLibrary in applyCalibration(fit, toLibrary: toLibrary) }
         }
+        .sheet(item: $workspace.restartPreset) { preset in
+            if let job = workspace.job {
+                ExportRestartSheet(project: project, job: job, preset: preset.request) { output in saveRestart(output) }
+            }
+        }
         .sheet(item: $nesting) { request in
             NestPartsSheet(session: request.session) { applied in finishNesting(applied) }
         }
@@ -171,6 +176,7 @@ struct ContentView: View {
             simulateGCodeFile: simulateGCodeFile,
             exportGCode: exportGCode,
             exportAirCut: exportAirCut,
+            exportRestart: { if workspace.job?.toolpaths.isEmpty == false { workspace.restartPreset = RestartPreset(request: Restart.Request()) } },
             exportSetupSheet: exportSetupSheet,
             calibrate: { calibrating = true },
             regenerate: recalculateAll,
@@ -576,6 +582,41 @@ struct ContentView: View {
             }
         } catch {
             alert = AlertInfo(title: "Couldn't save G-code", message: error.localizedDescription)
+        }
+    }
+
+    /// Saves a restart file from the restart sheet, after showing what its checks found (errors ask first, as Export does).
+    private func saveRestart(_ output: Restart.Output) {
+        let shown = output.issues.filter { $0.severity != .info }
+        if !shown.isEmpty {
+            let errors = shown.contains { $0.severity == .error }
+            var lines = shown.map { "• \($0.text)" }
+            if lines.count > 10 { lines = Array(lines.prefix(10)) + ["• …and \(lines.count - 10) more"] }
+            let confirm = NSAlert()
+            confirm.messageText = errors ? "This restart has errors" : "Check before running this restart"
+            confirm.informativeText = lines.joined(separator: "\n") + (errors ? "\n\nExport anyway?" : "")
+            if errors {
+                confirm.addButton(withTitle: "Cancel")
+                confirm.addButton(withTitle: "Export Anyway")
+                confirm.alertStyle = .critical
+                guard confirm.runModal() == .alertSecondButtonReturn else { return }
+            } else {
+                confirm.addButton(withTitle: "Export")
+                confirm.addButton(withTitle: "Cancel")
+                confirm.alertStyle = .warning
+                guard confirm.runModal() == .alertFirstButtonReturn else { return }
+            }
+        }
+        let ext = output.post.fileExtension
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: ext, conformingTo: .plainText) ?? .plainText]
+        panel.nameFieldStringValue = (project.name.isEmpty ? "Untitled" : project.name) + (output.file.suffix ?? "") + "." + ext
+        panel.message = output.fileCount > 1 ? "Save a restart that replaces only the file that was running" : "Save a restart for \(output.post.name)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try output.file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
+        } catch {
+            alert = AlertInfo(title: "Couldn't save the restart", message: error.localizedDescription)
         }
     }
 

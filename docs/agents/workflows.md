@@ -14,6 +14,7 @@ Step-by-step recipes for the common jobs, each with the commands to run and what
 - [7. Apply a template](#7-apply-a-template)
 - [8. Read the setup sheet and run-time estimate](#8-read-the-setup-sheet-and-run-time-estimate)
 - [9. Calibration programs and fitting times](#9-calibration-programs-and-fitting-times)
+- [10. A restart after a broken bit or an E-stop](#10-a-restart-after-a-broken-bit-or-an-e-stop)
 - [Every recipe: the hand-over](#every-recipe-the-hand-over)
 
 ## Setup: a scratch folder and a small helper
@@ -422,6 +423,22 @@ Calibration is the **human's** job at the machine. The agent's part is to write 
 4. Report the before-and-after values, the sections still more than 10% off, and the F-change and `G93` verdicts.
 
 **Never fill in `measured_s` yourself**, not even "to test", in a file that might be applied: `--apply` marks every fitted value `measured` in the machine's `provenance`. A times file with nothing measured is refused (`Not fitted: No times have been entered yet.`).
+
+## 10. A restart after a broken bit or an E-stop
+
+The human says a job stopped partway. A restart file is the rest of the job from a point you name (see [Restarting a job partway through](../using-nativecam.md#restarting-a-job-partway-through)).
+
+1. **Ask the human where it stopped:** the line the controller showed, or the toolpath and pass, and which file on a tiled, multi-sheet or split job. Ask for the file that was running too. Never guess a line or pass.
+2. Post the restart from the same project, comparing it with the file that was running:
+
+   ```bash
+   $CLI post job.nativecam -o job.tap --restart-line 812 --restart-from "job.tap"
+   ```
+
+   It snaps back to the start of that line's pass and stops over the restart point. Use `--restart-exact` only when the human asks to restart at the move itself.
+3. Read every line. `Restart refused: …` (exit 1) can't be forced: tell the human why. An `[error]` that the running file differs means the project changed since that file was written, so the restart would cut something else: report it and stop. A warning that the spin-up dwell is 0 s goes to the human with the file.
+4. Check the header the file starts with: the toolpath and pass, the line's text (the human compares it with the controller's screen), the tool to load and, on a rotary job, the A reading expected.
+5. Hand over the restart file with the header's advice: re-home and check the XY zero after a power cut or E-stop, re-zero Z at the tool change, and jog Z clear before Cycle Start. Offer an air cut of the restart (`--air-cut`) for its first run. **The human runs it.** Restarts haven't been run on a real machine yet.
 
 ## Every recipe: the hand-over
 

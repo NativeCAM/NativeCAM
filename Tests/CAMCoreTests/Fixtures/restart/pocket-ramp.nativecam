@@ -1,0 +1,169 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 1,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 2,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Ramped pocket",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "E4622B24-2F62-45B1-B2B2-A4944297A8F3",
+      "kind" : {
+        "pocket" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 9.524999999999999,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "ramp",
+              "rampLength" : 25.4
+            },
+            "rasterAngle" : 0,
+            "strategy" : "offset"
+          }
+        }
+      },
+      "name" : "Ramped pocket",
+      "shapeIDs" : [
+        "C30E259E-621A-4D5D-9C26-0B592C871049"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "34AE7C6F-FDAE-4867-A084-DE1478DBF991",
+      "kind" : {
+        "drill" : {
+          "_0" : {
+            "depth" : 7.619999999999999,
+            "dwell" : 0,
+            "fullRetract" : true,
+            "peckDepth" : 0
+          }
+        }
+      },
+      "name" : "Drill",
+      "shapeIDs" : [
+        "A11ECD9E-1519-4A5A-A52E-297EDF88B8A2"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 3048,
+          "plungeRate" : 635,
+          "spindleRPM" : 18000,
+          "stepdown" : 1.5875,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 3.175,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 12.7,
+        "id" : "4E415449-5645-4341-4D00-000000000002",
+        "includedAngle" : 90,
+        "name" : "1\/8\" Upcut End Mill",
+        "notes" : "",
+        "number" : 2,
+        "shankDiameter" : 3.175,
+        "shape" : "flatEndMill",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "C30E259E-621A-4D5D-9C26-0B592C871049",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 6.35,
+          "height" : 63.5,
+          "width" : 101.6
+        }
+      },
+      "layer" : "Default",
+      "name" : "Pocket",
+      "position" : {
+        "x" : 101.6,
+        "y" : 76.19999999999999
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "A11ECD9E-1519-4A5A-A52E-297EDF88B8A2",
+      "kind" : {
+        "circle" : {
+          "radius" : 1.5875
+        }
+      },
+      "layer" : "Default",
+      "name" : "Hole",
+      "position" : {
+        "x" : 177.79999999999998,
+        "y" : 127
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 152.39999999999998,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "MDF",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 203.2,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

@@ -1,0 +1,157 @@
+[
+  {
+    "id" : "52455354-4152-5400-0000-000000000000",
+    "motions" : [
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 20,
+          "y" : 20,
+          "z" : 2.54
+        },
+        "feed" : 0,
+        "kind" : "rapid"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 20,
+          "y" : 20,
+          "z" : -3
+        },
+        "feed" : 762,
+        "kind" : "feed"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 40,
+          "y" : 20,
+          "z" : -3
+        },
+        "feed" : 2540,
+        "kind" : "feed"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 40,
+          "y" : 20,
+          "z" : 12.7
+        },
+        "feed" : 0,
+        "kind" : "rapid"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 20,
+          "y" : 60,
+          "z" : 12.7
+        },
+        "feed" : 0,
+        "kind" : "rapid"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 20,
+          "y" : 60,
+          "z" : -2
+        },
+        "feed" : 0,
+        "kind" : "rapid"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 20,
+          "y" : 60,
+          "z" : -3
+        },
+        "feed" : 762,
+        "kind" : "feed"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 40,
+          "y" : 60,
+          "z" : -3
+        },
+        "feed" : 2540,
+        "kind" : "feed"
+      },
+      {
+        "center" : {
+          "x" : 0,
+          "y" : 0
+        },
+        "end" : {
+          "x" : 40,
+          "y" : 60,
+          "z" : 12.7
+        },
+        "feed" : 0,
+        "kind" : "rapid"
+      }
+    ],
+    "name" : "Two slots, the second rapid in",
+    "spindleRPM" : 16000,
+    "start" : {
+      "x" : 20,
+      "y" : 20,
+      "z" : 12.7
+    },
+    "tool" : {
+      "cornerRadius" : 0,
+      "cutting" : {
+        "feedRate" : 5588,
+        "plungeRate" : 1270,
+        "spindleRPM" : 13000,
+        "stepdown" : 4.762499999999999,
+        "stepoverFraction" : 0.4
+      },
+      "diameter" : 6.35,
+      "fluteCount" : 2,
+      "fluteDirection" : "upcut",
+      "fluteLength" : 25.4,
+      "id" : "4E415449-5645-4341-4D00-000000000001",
+      "includedAngle" : 90,
+      "name" : "1\/4\" Upcut End Mill",
+      "notes" : "",
+      "number" : 1,
+      "shankDiameter" : 6.35,
+      "shape" : "flatEndMill",
+      "stickout" : 38.099999999999994,
+      "tipDiameter" : 0
+    },
+    "warnings" : [
+
+    ]
+  }
+]

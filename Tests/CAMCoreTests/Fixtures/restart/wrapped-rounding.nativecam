@@ -1,0 +1,162 @@
+{
+  "displayUnits" : "mm",
+  "formatVersion" : 5,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "mm",
+    "rapidRateForEstimates" : 20320,
+    "rotary" : {
+      "alignment" : "x",
+      "centerHeight" : 100,
+      "letter" : "A",
+      "reversed" : false
+    },
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 2,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Rounding",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "186D8010-6395-4538-9BB5-1E88732EF6E1",
+      "kind" : {
+        "rounding" : {
+          "_0" : {
+            "method" : "radial",
+            "passDepth" : 3
+          }
+        }
+      },
+      "name" : "Round",
+      "shapeIDs" : [
+
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "E8E13D8F-C4FE-43E7-A1FA-0937993F0A4E",
+      "kind" : {
+        "pocket" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 3,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "rasterAngle" : 0,
+            "strategy" : "offset"
+          }
+        }
+      },
+      "name" : "Slot",
+      "shapeIDs" : [
+        "282E449E-9399-46F1-80F2-F995E0F2B363"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 3048,
+          "plungeRate" : 635,
+          "spindleRPM" : 18000,
+          "stepdown" : 1.5875,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 3.175,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 12.7,
+        "id" : "4E415449-5645-4341-4D00-000000000002",
+        "includedAngle" : 90,
+        "name" : "1\/8\" Upcut End Mill",
+        "notes" : "",
+        "number" : 2,
+        "shankDiameter" : 3.175,
+        "shape" : "flatEndMill",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "282E449E-9399-46F1-80F2-F995E0F2B363",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 10,
+          "width" : 30
+        }
+      },
+      "layer" : "Default",
+      "name" : "Rectangle",
+      "position" : {
+        "x" : 150,
+        "y" : 25
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 15.435339059327378,
+    "height" : 50,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Maple",
+    "plungeHeight" : 2.54,
+    "rotary" : {
+      "diameter" : 50,
+      "length" : 300,
+      "shape" : "squareBar"
+    },
+    "thickness" : 25,
+    "width" : 300,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}
