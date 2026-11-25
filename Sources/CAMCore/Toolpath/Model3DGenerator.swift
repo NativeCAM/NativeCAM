@@ -151,6 +151,12 @@ enum Model3DGenerator {
         let tool = op.tool
         var warnings: [String] = []
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
+        let clearing = params.clearingInUse
+        if clearing == .adaptive, context.stock.rotary != nil {
+            return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: [
+                "Adaptive 3D roughing isn't available on rotary jobs yet (its layers are worked out flat, not round the blank), "
+                    + "so this toolpath isn't cut. Choose Offset or Raster clearing."])
+        }
         let cell = max(0.2, min(1.0, tool.diameter / 10))
         guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Rough3DParams.autoMargin(tool: tool),
                             tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else {
@@ -167,6 +173,54 @@ enum Model3DGenerator {
             warnings.append("Nothing to rough: the model sits at the material surface.")
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
+        var clipped = Set<String>()
+        let layers = roughLayers(s, target: target, deepest: deepest, params: params, tool: tool)
+        if clearing == .adaptive {
+            for a in adaptiveSchedule(layers, setup: s, target: target, params: params, tool: tool, context: context) {
+                let safe = a.boundary.flatMap { $0.offset(by: 0.01, arcTolerance: context.arcTolerance) }
+                for m in AdaptiveClearing.cut(boundary: a.boundary, tool: tool, params: a.params, levels: [a.z], context: context,
+                                              reliefs: [], safe: safe, cleared: a.seed, builder: &b) {
+                    clipped.insert(m)
+                }
+            }
+        }
+        for layer in layers where clearing != .adaptive && !layer.regions.isEmpty {
+            let z = layer.z, previous = layer.above
+            // The pocket engine keeps the tool radius inside each region, plus a margin covering grid sampling
+            // (interpolated contours sit within three quarters of a cell of a steep wall, closer on slopes),
+            // outline simplification (a quarter cell) and a quarter cell spare, so walls can't be nicked.
+            let pp = PocketParams(strategy: clearing == .raster ? .raster : .offset, direction: .climb,
+                                  depth: DepthSettings(startDepth: -previous, cutDepth: -z, passDepth: abs(z - previous) + 1),
+                                  allowance: g.cellSize * 1.25, rasterAngle: params.rasterAngle ?? 0,
+                                  stepoverFraction: params.stepoverFraction)
+            // Roughing leaves an allowance, so its outermost rings may be rounded too (never outward).
+            let w = PocketGenerator.generate(regions: layer.regions, tool: tool, params: pp, context: context,
+                                             smoothBoundary: true, builder: &b)
+            for m in w where !m.contains("too large") { clipped.insert(m) }
+            b.retract()
+        }
+        warnings.append(contentsOf: clipped.sorted())
+        var tp = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+        if clearing == .adaptive { tp.radialLoad = params.adaptiveSettings.load }
+        return tp
+    }
+
+    /// One layer of 3D roughing.
+    struct RoughLayer {
+        /// The layer's depth, and the one above it (0 for the first).
+        var z: Double
+        var above: Double
+        /// The level the cells are compared at (a hair below `z`).
+        var level: Float
+        /// Cells whose target is at or below the layer: the tool may clear them to it.
+        var mask: [Bool]
+        /// Those cells' outline inside the boundary: where the layer is cleared, its walls the model at that depth.
+        var regions: [Region]
+    }
+
+    /// The layers from the material top down to `deepest`, evenly spaced no more than the layer depth apart.
+    static func roughLayers(_ s: Setup, target: [Float], deepest: Double, params: Rough3DParams, tool: Tool) -> [RoughLayer] {
+        let g = s.surface
         let step = max(0.05, params.passDepth ?? tool.cutting.stepdown)
         let n = max(1, Int((abs(deepest) / step - 1e-9).rounded(.up)))
         let levels = (1...n).map { deepest * Double($0) / Double(n) }
@@ -174,7 +228,7 @@ enum Model3DGenerator {
         // Only the model's own surface is worth interpolating; steps from boundaries and the base floor are not.
         let field = zip(target, g.covered).map { $1 ? $0 : Float.nan }
         var previous = 0.0
-        var clipped = Set<String>()
+        var layers: [RoughLayer] = []
         for z in levels {
             // Cells where the target is at or below this level can be cleared to it.
             let zf = Float(z) + 1e-4
@@ -184,24 +238,125 @@ enum Model3DGenerator {
                                            field: field, level: zf, steepSlope: 2, interpolationLimit: 0.25)
                 .map { $0.simplified(tolerance: g.cellSize * 0.25) }
             let clearable = Clipper.intersection(loops, boundaryLoops, fill: .nonZero)
-            let regions = Region.nest(clearable)
-            if !regions.isEmpty {
-                // The pocket engine keeps the tool radius inside each region, plus a margin covering grid sampling
-                // (interpolated contours sit within three quarters of a cell of a steep wall, closer on slopes),
-                // outline simplification (a quarter cell) and a quarter cell spare, so walls can't be nicked.
-                let pp = PocketParams(strategy: .offset, direction: .climb,
-                                      depth: DepthSettings(startDepth: -previous, cutDepth: -z, passDepth: abs(z - previous) + 1),
-                                      allowance: g.cellSize * 1.25, stepoverFraction: params.stepoverFraction)
-                // Roughing leaves an allowance, so its outermost rings may be rounded too (never outward).
-                let w = PocketGenerator.generate(regions: regions, tool: tool, params: pp, context: context,
-                                                 smoothBoundary: true, builder: &b)
-                for m in w where !m.contains("too large") { clipped.insert(m) }
-                b.retract()
-            }
+            layers.append(RoughLayer(z: z, above: previous, level: zf, mask: mask, regions: Region.nest(clearable)))
             previous = z
         }
-        warnings.append(contentsOf: clipped.sorted())
-        return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+        return layers
+    }
+
+    /// What adaptive clearing walks at one level: the tool-centre boundary, the pocket settings and what's cleared already.
+    struct AdaptiveLayer {
+        var z: Double
+        var boundary: [Region]
+        var params: PocketParams
+        var seed: [Polyline]
+        /// A step-up: a layer between two clearing depths, where only the terraces the deeper clearing left are cut.
+        var stepUp: Bool
+    }
+
+    /// Adaptive 3D roughing's levels, in cutting order. The layers are grouped by the clearing depth
+    /// (`Rough3DParams.clearingDepthInUse`): each group's deepest layer is cleared first, from the group's top, its
+    /// walk holding the load through the full depth; then each layer above it in the group, top down, clears only the
+    /// terrace left between the model and the deeper clearing (a step-up), so the finish meets steps no taller than
+    /// the layer depth. With the clearing depth no deeper than the layer depth, every layer is cleared in full.
+    static func adaptiveSchedule(_ layers: [RoughLayer], setup s: Setup, target: [Float], params: Rough3DParams, tool: Tool,
+                                 context: GenerationContext) -> [AdaptiveLayer] {
+        guard let first = layers.first else { return [] }
+        let tol = context.arcTolerance
+        let g = s.surface
+        // Adaptive clearing counts what earlier toolpaths cut at each layer as cleared already.
+        let tops = materialTops(target, grid: g, context: context)
+        func earlier(_ layer: RoughLayer) -> [Polyline] {
+            tops.map { alreadyCleared(mask: layer.mask, tops: $0, level: layer.level, grid: g, arcTolerance: tol) } ?? []
+        }
+        let spacing = abs(first.z - first.above)
+        let k = max(1, Int((params.clearingDepthInUse(tool) / max(spacing, 1e-9) + 1e-6).rounded(.down)))
+        var out: [AdaptiveLayer] = []
+        var start = 0
+        while start < layers.count {
+            let end = min(layers.count, start + k) - 1
+            let top = layers[start].above
+            if let bulk = adaptiveLayer(layers[end], above: top, seed: earlier(layers[end]), params: params, tool: tool,
+                                        cell: g.cellSize, arcTolerance: tol) {
+                out.append(bulk)
+                // What the bulk clearing reached: its tool-centre area grown by the bit's radius, less a hair.
+                let reach = bulk.boundary.flatMap { $0.offset(by: tool.radius - 0.02, arcTolerance: tol) }.flatMap(\.loops)
+                for j in start..<end {
+                    let seed = Clipper.union(reach + earlier(layers[j]), fill: .nonZero)
+                    if var up = adaptiveLayer(layers[j], above: layers[j].above, seed: seed, params: params, tool: tool,
+                                              cell: g.cellSize, arcTolerance: tol) {
+                        up.stepUp = true
+                        out.append(up)
+                    }
+                }
+            } else {
+                // The bit fits nowhere at the group's bottom: clear each layer above it in full.
+                for j in start..<end {
+                    if let a = adaptiveLayer(layers[j], above: layers[j].above, seed: earlier(layers[j]), params: params, tool: tool,
+                                             cell: g.cellSize, arcTolerance: tol) {
+                        out.append(a)
+                    }
+                }
+            }
+            start = end + 1
+        }
+        return out
+    }
+
+    /// One level of adaptive 3D roughing: the layer's regions cleared from `above` down to it by `AdaptiveClearing`,
+    /// holding its load, then a pass round the walls. `seed` is what's already cleared at the layer. nil when the bit
+    /// doesn't fit anywhere in the layer, or it's already clear.
+    static func adaptiveLayer(_ layer: RoughLayer, above: Double, seed: [Polyline], params: Rough3DParams, tool: Tool, cell: Double,
+                              arcTolerance tol: Double) -> AdaptiveLayer? {
+        guard !layer.regions.isEmpty else { return nil }
+        // The same margin offset roughing keeps for the grid's sampling (see `rough`).
+        let allowance = cell * 1.25
+        let boundary = layer.regions.flatMap { $0.offset(by: -(tool.radius + allowance), arcTolerance: tol) }
+        guard !boundary.isEmpty else { return nil }
+        if !seed.isEmpty {
+            let reach = boundary.flatMap { $0.offset(by: tool.radius, arcTolerance: tol) }.flatMap(\.loops)
+            let left = Region.nest(Clipper.difference(reach, minus: seed)).reduce(0) { $0 + $1.area }
+            if left < 0.25 * tool.diameter * tool.diameter { return nil }
+        }
+        let pp = PocketParams(strategy: .adaptive, direction: .climb,
+                              depth: DepthSettings(startDepth: -above, cutDepth: -layer.z, passDepth: abs(layer.z - above) + 1),
+                              allowance: allowance, stepoverFraction: params.stepoverFraction, adaptive: params.adaptive)
+        return AdaptiveLayer(z: layer.z, boundary: boundary, params: pp, seed: seed, stepUp: false)
+    }
+
+    /// The highest material earlier toolpaths left at each cell this toolpath could cut (+∞ elsewhere); nil when
+    /// nothing is known about them.
+    static func materialTops(_ target: [Float], grid g: SurfaceGrid, context: GenerationContext) -> [Float]? {
+        guard let top = context.materialTop else { return nil }
+        return (0..<target.count).map { i in
+            guard target[i].isFinite, target[i] < 0 else { return .infinity }
+            return Float(top(g.center(i % g.columns, i / g.columns), 0))
+        }
+    }
+
+    /// The area earlier toolpaths cleared down to `level` inside the layer's `mask` (from `tops`, the highest material
+    /// left at each cell), as Clipper polygons, shrunk by a cell so that nothing is counted as cleared that isn't.
+    static func alreadyCleared(mask: [Bool], tops: [Float], level: Float, grid g: SurfaceGrid, arcTolerance: Double) -> [Polyline] {
+        let gone = mask.indices.map { mask[$0] && tops[$0] <= level }
+        guard gone.contains(true) else { return [] }
+        let loops = GridContours.loops(mask: gone, columns: g.columns, rows: g.rows, origin: g.origin, cellSize: g.cellSize)
+        return Region.build(from: loops, fill: .evenOdd).flatMap { $0.offset(by: -g.cellSize, arcTolerance: arcTolerance) }.flatMap(\.loops)
+    }
+
+    /// Adaptive 3D roughing's walk at each level it cuts, in order (for tests that measure its load).
+    static func adaptivePlans(op: CAMOperation, params: Rough3DParams, shapes: [DesignShape],
+                              context: GenerationContext) -> [(layer: AdaptiveLayer, plan: AdaptiveClearing.Plan)] {
+        var warnings: [String] = []
+        let tool = op.tool
+        let cell = max(0.2, min(1.0, tool.diameter / 10))
+        guard let s = setup(shapes: shapes, boundary: params.boundary, margin: params.boundaryMargin ?? Rough3DParams.autoMargin(tool: tool),
+                            tool: tool, stock: context.stock, preferredCell: cell, warnings: &warnings) else { return [] }
+        let target = targets(s, allowance: params.allowance)
+        guard let deepest = target.filter({ $0.isFinite }).min().map(Double.init), deepest < -1e-3 else { return [] }
+        let layers = roughLayers(s, target: target, deepest: deepest, params: params, tool: tool)
+        return adaptiveSchedule(layers, setup: s, target: target, params: params, tool: tool, context: context).map { a in
+            (a, AdaptiveClearing.plan(boundary: a.boundary, tool: tool, params: a.params, levels: [a.z], context: context, cleared: a.seed))
+        }
     }
 
     // MARK: 3D finishing

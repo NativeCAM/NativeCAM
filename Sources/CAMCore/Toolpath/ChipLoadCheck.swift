@@ -29,7 +29,8 @@ extension CAMEngine {
                 .largestLap
         }
         let own = operation.map { $0.tool == tool } ?? false
-        let passDepth = own && tp.radialLoad == nil ? operation?.kind.deepestPass(tool) : nil
+        // (An adaptive pocket has no pass depth to derate; adaptive 3D roughing's layers do, as well as its thinning.)
+        let passDepth = own ? operation?.kind.deepestPass(tool) : nil
         let thin = tp.radialLoad.map { ChipLoad.radialThinning(load: $0) } ?? 1
         return (depth, passArea, passDepth, thin)
     }
@@ -73,8 +74,8 @@ extension CAMEngine {
         let range = "the \(inch(r.lowerBound))–\(inch(r.upperBound)) range for this bit in \(material.label.lowercased()) "
             + "(\(reading.source(units)))"
         var loops: Double?
-        if tp.radialLoad != nil, case let .pocket(p)? = operation?.kind, p.strategy == .adaptive {
-            loops = p.adaptiveSettings.loopFeedLimit(tool: tool, machine: project.machine)
+        if tp.radialLoad != nil, let a = operation?.kind.adaptiveClearing {
+            loops = a.loopFeedLimit(tool: tool, machine: project.machine)
         }
         let rec = ChipLoad.recommendation(for: tool, material: material, machine: project.machine, thinning: thin, feedLimit: loops,
                                           depth: depth, crossSection: passArea, passDepth: passDepth)
@@ -233,5 +234,17 @@ extension CAMEngine {
             }
         }
         return best
+    }
+}
+
+public extension OperationKind {
+    /// The adaptive clearing settings of an adaptive pocket or adaptive 3D roughing, whose light cut thins the chip and
+    /// whose loops limit the feed; nil for anything else.
+    var adaptiveClearing: AdaptiveSettings? {
+        switch self {
+        case let .pocket(p): p.strategy == .adaptive ? p.adaptiveSettings : nil
+        case let .rough3D(p): p.clearingInUse == .adaptive ? p.adaptiveSettings : nil
+        default: nil
+        }
     }
 }

@@ -64,20 +64,18 @@ struct OperationInspector: View {
         .formStyle(.grouped)
     }
 
-    /// An adaptive pocket's optimal load, which thins its chip. (With a clearance tool, the pocket's own bit cuts offset
-    /// rings, so its chip isn't thinned.)
-    private var adaptiveLoad: Double? {
-        if case let .pocket(p) = op.kind, p.strategy == .adaptive, p.clearanceTool == nil { return p.adaptiveSettings.load }
-        return nil
+    /// An adaptive pocket's or adaptive 3D roughing's settings, when the operation's own bit clears adaptively. (With a
+    /// clearance tool, a pocket's own bit cuts offset rings, so its chip isn't thinned.)
+    private var adaptiveSettings: AdaptiveSettings? {
+        if case let .pocket(p) = op.kind, p.clearanceTool != nil { return nil }
+        return op.kind.adaptiveClearing
     }
 
-    /// The fastest an adaptive pocket's loops can run on this machine, which the recommended feed keeps to.
-    private var adaptiveLoopLimit: Double? {
-        if case let .pocket(p) = op.kind, p.strategy == .adaptive, p.clearanceTool == nil {
-            return p.adaptiveSettings.loopFeedLimit(tool: op.tool, machine: project.machine)
-        }
-        return nil
-    }
+    /// The adaptive optimal load, which thins the chip.
+    private var adaptiveLoad: Double? { adaptiveSettings?.load }
+
+    /// The fastest adaptive clearing's loops can run on this machine, which the recommended feed keeps to.
+    private var adaptiveLoopLimit: Double? { adaptiveSettings?.loopFeedLimit(tool: op.tool, machine: project.machine) }
 
     @ViewBuilder
     private var parameters: some View {
@@ -124,7 +122,11 @@ struct OperationInspector: View {
                 }
                 .pickerStyle(.segmented)
                 if p.strategy == .adaptive {
-                    AdaptiveRows(params: p, tool: op.tool, machine: project.machine, units: units, set: set)
+                    AdaptiveRows(settings: p.adaptiveSettings, tool: op.tool, machine: project.machine, units: units) { a in
+                        var q = p
+                        q.adaptive = a
+                        set(q)
+                    }
                 } else {
                     PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction ?? op.tool.cutting.stepoverFraction },
                                                                      set: { var q = p; q.stepoverFraction = $0; set(q) }))
@@ -173,11 +175,49 @@ struct OperationInspector: View {
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units,
                             help: "Material left on the model for the finishing pass")
                 LengthField(title: "Layer depth", mm: Binding(get: { p.passDepth ?? op.tool.cutting.stepdown }, set: { var q = p; q.passDepth = max(0.05, $0); set(q) }),
-                            units: units)
-                PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction ?? op.tool.cutting.stepoverFraction },
-                                                                 set: { var q = p; q.stepoverFraction = $0; set(q) }))
-                Text("Clears the model in layers with a flat end mill, leaving the allowance for finishing.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            units: units, help: "The height of the steps left on the model for the finish")
+                Picker("Clearing", selection: Binding(get: { p.clearingInUse }, set: { c in
+                    var q = p
+                    q.clearing = c == .offset ? nil : c
+                    set(q)
+                })) {
+                    ForEach(Rough3DClearing.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                switch p.clearingInUse {
+                case .offset, .raster:
+                    if p.clearingInUse == .raster {
+                        NumberField(title: "Raster angle", value: Binding(get: { p.rasterAngle ?? 0 }, set: { var q = p; q.rasterAngle = $0; set(q) }),
+                                    suffix: "°", decimals: 1)
+                    }
+                    PercentField(title: "Stepover", fraction: Binding(get: { p.stepoverFraction ?? op.tool.cutting.stepoverFraction },
+                                                                     set: { var q = p; q.stepoverFraction = $0; set(q) }))
+                    Text("Clears the model in layers with a flat end mill, leaving the allowance for finishing.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                case .adaptive:
+                    LengthField(title: "Clearing depth", mm: Binding(get: { p.clearingDepthInUse(op.tool) },
+                                                                    set: { var q = p; q.clearingDepth = max(0.05, $0); set(q) }),
+                                units: units,
+                                help: "How deep each adaptive pass cuts, in whole layers. Automatic: twice the bit's diameter, within its flutes")
+                    if p.clearingDepth != nil {
+                        Button("Automatic clearing depth") { var q = p; q.clearingDepth = nil; set(q) }
+                            .controlSize(.small)
+                    }
+                    AdaptiveRows(settings: p.adaptiveSettings, tool: op.tool, machine: project.machine, units: units) { a in
+                        var q = p
+                        q.adaptive = a
+                        set(q)
+                    }
+                    if project.stock.rotary != nil {
+                        Label("Adaptive 3D roughing isn't available on rotary jobs yet, so this toolpath isn't cut. Choose Offset or Raster.",
+                              systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange).font(.caption).fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Clears each clearing depth at a steady load from a 2° helix, then steps up through the layers above it, "
+                            + "clearing only the terraces it left, so the finish meets steps no taller than a layer.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
         case let .finish3D(p):
             Finish3DSection(params: p, op: op, project: project, workspace: workspace, units: units) { op.kind = .finish3D($0) }
@@ -1440,14 +1480,14 @@ struct CornersSection: View {
 /// The Pocket section's rows for adaptive clearing: the optimal load and the minimum loop radius, with what the
 /// machine's acceleration lets loops that tight run at.
 struct AdaptiveRows: View {
-    let params: PocketParams
+    let settings: AdaptiveSettings
     let tool: Tool
     let machine: MachineProfile
     let units: LengthUnit
-    let set: (PocketParams) -> Void
+    let set: (AdaptiveSettings) -> Void
 
     var body: some View {
-        let s = params.adaptiveSettings
+        let s = settings
         let radius = s.loopRadius(tool: tool, feed: tool.cutting.feedRate, machine: machine)
         let cap = AdaptiveSettings.loopFeedCap(radius: radius, machine: machine)
         let feed = { (mm: Double) in
@@ -1456,27 +1496,21 @@ struct AdaptiveRows: View {
         NumberField(title: "Optimal load", value: Binding(get: { s.load * 100 }, set: { v in
             var a = s
             a.optimalLoad = min(max(v / 100, AdaptiveSettings.loadRange.lowerBound), AdaptiveSettings.loadRange.upperBound)
-            var q = params
-            q.adaptive = a
-            set(q)
+            set(a)
         }), suffix: "%", decimals: 0)
         .help("The share of the bit's width it cuts, held all the way. 10–15% suits a full-depth cut in hardwood or MDF")
         LabeledContent("Cut width", value: "\(units.format(s.load * tool.diameter, decimals: units == .inch ? 4 : 2)) \(units.symbol)")
         LengthField(title: "Min loop radius", mm: Binding(get: { radius }, set: { v in
             var a = s
             a.minimumLoopRadius = max(0.05, v)
-            var q = params
-            q.adaptive = a
-            set(q)
+            set(a)
         }), units: units, help: "The tightest the loops and links between cuts turn. Automatic: what lets the feed run at full speed "
             + "with this machine's acceleration, between a quarter of the bit's diameter and twice it")
         if s.minimumLoopRadius != nil {
             Button("Automatic loop radius") {
                 var a = s
                 a.minimumLoopRadius = nil
-                var q = params
-                q.adaptive = a
-                set(q)
+                set(a)
             }
             .controlSize(.small)
         }
@@ -1720,7 +1754,7 @@ struct ToolSection: View {
             if ChipLoad.applies(to: tool) {
                 ChipLoadRow(tool: $tool, material: material, machine: machine, units: units, radialLoad: radialLoad,
                             loopFeedLimit: loopFeedLimit, depth: kind?.requestedDepth, crossSection: passCrossSection,
-                            passDepth: radialLoad == nil ? kind?.deepestPass(tool) : nil,
+                            passDepth: kind?.deepestPass(tool),
                             automaticRPM: isAutomatic ? automatic?.rpm : nil)
             }
         }
