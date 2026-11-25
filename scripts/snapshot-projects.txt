@@ -15,3 +15,4 @@ Tests/CAMCoreTests/Fixtures/projects/moulding-v22.nativecam
 Tests/CAMCoreTests/Fixtures/projects/tiled-grid-v9.nativecam
 Tests/CAMCoreTests/Fixtures/projects/flutes-on-model-v25.nativecam
 Tests/CAMCoreTests/Fixtures/projects/rough3d-adaptive-v26.nativecam
+Tests/CAMCoreTests/Fixtures/projects/cut-direction-v27.nativecam
