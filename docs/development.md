@@ -2,6 +2,8 @@
 
 [← Back to the README](../README.md)
 
+AI agents working in this repository start at [AGENTS.md](../AGENTS.md), which links the [agent docs](agents/).
+
 - [Project layout](#project-layout)
 - [Tests](#tests)
 - [Golden G-code](#golden-g-code)

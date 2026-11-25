@@ -83,6 +83,7 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 | [Controllers and G-code](docs/controllers.md) | What NativeCAM writes for each controller, using your own Vectric post, export checks, air cuts, setup sheets and the acceptance test |
 | [Command line](docs/command-line.md) | `nativecam-cli` for scripting and checking files |
 | [Development](docs/development.md) | Project layout, tests, golden G-code and developer tools |
+| [AGENTS.md](AGENTS.md) | For AI agents: driving NativeCAM headlessly with the CLI and project files, and the safety rules |
 | [Known limits and roadmap](docs/known-limits.md) | What doesn't work yet |
 
 ## How NativeCAM was built
