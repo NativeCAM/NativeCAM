@@ -114,6 +114,24 @@ struct Rough3DAdaptiveTests {
         return out
     }
 
+    /// The demo relief's bottom layer is a narrow band round its foot, with no room for adaptive's loops, so it's cleared
+    /// at the stepdown (#146). That's expected, so Checks notes it with the layer's depth and gives no load warning.
+    @Test func theDemoReliefsNarrowBandIsNotedNotWarned() throws {
+        let p = Self.relief(.adaptive)
+        let job = CAMEngine.generate(p)
+        #expect(!job.hasErrors, "\(job.issues.map(\.message))")
+        let warned = job.issues.contains { $0.message.contains("couldn't hold its load") }
+        #expect(!warned, "\(job.issues.map(\.message))")
+        let notes = job.issues.filter { $0.message.contains("too narrow for adaptive clearing's loops") }
+        #expect(notes.count == 1, "\(job.issues.map(\.message))")
+        let note = try #require(notes.first)
+        #expect(note.severity == .info)
+        #expect(note.operation == p.operations[0].name)
+        let deepest = Self.context(p).length(0.38.inch)
+        #expect(note.message.hasPrefix("The layer \(deepest) deep is a band"), "\(note.message)")
+        #expect(note.message.contains("cleared normally"))
+    }
+
     /// Measured on a raster of its own, every level's walk on the demo relief holds the optimal load: most of its
     /// length within 15% of it, and nothing past 1.4×, once in. (A level whose area is too narrow for the walk's loops,
     /// such as the band round the relief's foot, is cleared at the stepdown instead, and has no walk to measure.)

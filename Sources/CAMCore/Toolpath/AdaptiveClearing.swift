@@ -116,6 +116,18 @@ enum AdaptiveClearing {
     static func cut(boundary: [Region], tool: Tool, params: PocketParams, levels: [Double], context: GenerationContext,
                     reliefs: [CornerRelief.Relief], safe: [Region], cleared seed: [Polyline] = [],
                     builder b: inout ToolpathBuilder) -> [String] {
+        var narrow: [Double]?
+        return cut(boundary: boundary, tool: tool, params: params, levels: levels, context: context, reliefs: reliefs, safe: safe,
+                   cleared: seed, narrow: &narrow, builder: &b)
+    }
+
+    /// As above. With `narrow` set (3D roughing), a level whose area has no room anywhere for a loop of the minimum
+    /// radius (a band narrower than the loops need) isn't warned about when it falls back to the stepdown: there that's
+    /// expected, so its depth is added to `narrow` instead, for the caller to note. Where the loops had room and still
+    /// couldn't hold the load, it warns as ever.
+    static func cut(boundary: [Region], tool: Tool, params: PocketParams, levels: [Double], context: GenerationContext,
+                    reliefs: [CornerRelief.Relief], safe: [Region], cleared seed: [Polyline] = [], narrow: inout [Double]?,
+                    builder b: inout ToolpathBuilder) -> [String] {
         let s = Settings(tool: tool, params: params, machine: context.machine, arcTolerance: context.arcTolerance)
         var warnings = loopWarnings(tool: tool, settings: s, context: context)
         let plan = plan(boundary: boundary, tool: tool, params: params, levels: levels, context: context, cleared: seed)
@@ -130,6 +142,9 @@ enum AdaptiveClearing {
         // Everything the bit can reach at the allowance.
         let reach = boundary.flatMap { $0.offset(by: r, arcTolerance: tol) }.flatMap(\.loops)
         var heavyAnywhere = false
+        // No loop of the minimum radius fits anywhere in the walk's area, so the walk can only nibble at it.
+        let noRoomForLoops = narrow != nil
+            && boundary.flatMap { $0.offset(by: -(s.finish + s.loopRadius), arcTolerance: tol) }.isEmpty
         var zAbove = -params.depth.startDepth
         for level in plan.levels {
             let z = level.z
@@ -146,7 +161,11 @@ enum AdaptiveClearing {
             // Reliefs plunge the bit sideways into each corner: too heavy a cut at the full length of its flutes.
             let stepped = heavy || !reliefs.isEmpty
             if stepped {
-                heavyAnywhere = heavyAnywhere || heavy
+                if heavy, noRoomForLoops {
+                    narrow?.append(z)
+                } else {
+                    heavyAnywhere = heavyAnywhere || heavy
+                }
                 // The rest at the bit's own stepdown, and the walls (with their reliefs) at each of those depths.
                 let tree = heavy || !pieces.isEmpty
                     ? PocketGenerator.restTree(boundary, reached: cleared, stepover: stepover, toolRadius: r, arcTolerance: tol)

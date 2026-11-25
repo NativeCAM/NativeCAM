@@ -4,7 +4,8 @@ import Testing
 
 /// The CAM test catalog for adaptive 3D roughing (#89): goldens for adaptive and raster 3D roughing on Avid's Mach4
 /// default, a saved format-26 project with its decoded golden, the format itself, and saved projects for the edge
-/// cases (`Fixtures/rough3d-adaptive`): an island narrower than the bit, layers the bit fits nowhere in, and rotary jobs
+/// cases (`Fixtures/rough3d-adaptive`): an island narrower than the bit, layers the bit fits nowhere in, a slot too tight
+/// for the loops off a floor they have room on, and rotary jobs
 /// (refused). Each test asserts what NativeCAM does. The models are height fields made in code, so the tests read no
 /// model file.
 struct Rough3DAdaptiveCatalogTests {
@@ -240,6 +241,36 @@ struct Rough3DAdaptiveCatalogTests {
         #expect(abs(deepest - offsetDeepest) < 1e-6, "adaptive to \(deepest), offset to \(offsetDeepest)")
         // Nothing reaches into the trench: the cut stops above the floor less the allowance.
         #expect(deepest > -(6 - 0.5) - 1e-6)
+        #expect(Rough3DAdaptiveTests.clearance(tp, project: p) >= 0.5 - 0.03)
+    }
+
+    /// A 50 × 24 mm floor 6 mm down with a 10 mm wide slot 15 mm long off one side (#146): the loops have room on the
+    /// floor, but the slot is too tight for them.
+    static func slotted() -> Project {
+        let mesh = heightField(id(51), width: 70, height: 50, n: 70, m: 50) { u, v in
+            let x = 70 * u - 35, y = 50 * v - 25
+            let floor = abs(x) <= 25 && y >= -20 && y <= 4
+            let slot = abs(x) <= 5 && y > 4 && y <= 19
+            return floor || slot ? 6 : 12
+        }
+        let shape = DesignShape(id: id(52), name: "Slotted floor", kind: .model(ModelSpec(mesh: mesh, depth: 12)), position: Vec2(40, 30))
+        return project("Load not held", shape: shape,
+                       ops: [rough(53, "Rough the slotted floor", Rough3DParams(allowance: 0.5, clearing: .adaptive), shape: shape)],
+                       units: .mm)
+    }
+
+    /// Where the loops have room and still can't hold the load (the slot off the floor), the toolpath warns, as an
+    /// adaptive pocket does; a layer that's only a narrow band (the demo relief's foot, `Rough3DAdaptiveTests`) is noted.
+    @Test func aSlotTooTightForTheLoopsStillWarns() throws {
+        let p = try Self.edgeCase("load-not-held", make: Self.slotted)
+        let job = CAMEngine.generate(p)
+        #expect(!job.hasErrors, "\(job.issues.map(\.message))")
+        let tp = try #require(job.toolpaths.first)
+        #expect(!tp.isEmpty)
+        let warned = tp.warnings.contains { $0.hasPrefix("Adaptive clearing couldn't hold its load everywhere") }
+        #expect(warned, "\(tp.warnings)")
+        let issue = job.issues.first { $0.message.hasPrefix("Adaptive clearing couldn't hold its load") }
+        #expect(issue?.severity == .warning)
         #expect(Rough3DAdaptiveTests.clearance(tp, project: p) >= 0.5 - 0.03)
     }
 

@@ -174,14 +174,22 @@ enum Model3DGenerator {
             return b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         }
         var clipped = Set<String>()
+        var notes: [String] = []
         let layers = roughLayers(s, target: target, deepest: deepest, params: params, tool: tool)
         if clearing == .adaptive {
+            var narrow: [Double]? = []
             for a in adaptiveSchedule(layers, setup: s, target: target, params: params, tool: tool, context: context) {
                 let safe = a.boundary.flatMap { $0.offset(by: 0.01, arcTolerance: context.arcTolerance) }
                 for m in AdaptiveClearing.cut(boundary: a.boundary, tool: tool, params: a.params, levels: [a.z], context: context,
-                                              reliefs: [], safe: safe, cleared: a.seed, builder: &b) {
+                                              reliefs: [], safe: safe, cleared: a.seed, narrow: &narrow, builder: &b) {
                     clipped.insert(m)
                 }
+            }
+            // A layer that's only a narrow band (round a relief's foot, say) has no room for the loops, so falling back
+            // to the stepdown there is expected: noted, not warned about.
+            for z in (narrow ?? []).sorted(by: >) {
+                notes.append("The layer \(context.length(-z)) deep is a band too narrow for adaptive clearing's loops, so it was "
+                    + "cleared normally, in passes of the tool's stepdown (\(context.length(tool.cutting.stepdown))).")
             }
         }
         for layer in layers where clearing != .adaptive && !layer.regions.isEmpty {
@@ -203,6 +211,7 @@ enum Model3DGenerator {
         warnings.append(contentsOf: clipped.sorted())
         var tp = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         if clearing == .adaptive { tp.radialLoad = params.adaptiveSettings.load }
+        if !notes.isEmpty { tp.notes = notes }
         return tp
     }
 
