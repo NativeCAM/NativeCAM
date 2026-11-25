@@ -64,8 +64,8 @@ PLUNGE = {"kind": "plunge", "rampLength": 25.4}
 
 **The CLI can't import DXF, SVG, PDF or Illustrator files**, and snapshot mode's `-NativeCAMSnapshotImport` imports only into its render; it doesn't save the project. There are two honest routes:
 
-- **Ask the human** to open the project in the app, choose **File ▸ Import**, and save. The import puts each shape on its file's layer. Then continue from step 3 below.
-- **Write the vectors yourself** as a `paths` shape: flatten every curve to polylines (0.01–0.05 mm tolerance), convert to millimetres, and keep each closed loop as one polyline with `"isClosed": true`. Loops inside loops are holes. Check the result against the drawing's size before cutting anything. This is fine for simple outlines; for anything with splines, text or many layers, prefer the app's importer.
+- **Ask the human** to open the project in the app, choose **File ▸ Import**, and save. The import puts each shape on its file's layer. Read the new shapes' `id`s from the saved file, then continue from step 3 below.
+- **Write the vectors yourself** as a `paths` shape: flatten every curve to polylines (0.01–0.05 mm tolerance), convert to millimetres, and keep each closed loop as one polyline with `"isClosed": true`. Loops inside loops are holes. Check its size against the drawing's before you add toolpaths. This is fine for simple outlines; for anything with splines, text or many layers, prefer the app's importer.
 
 To preview how the app would import a file (its layers and shapes), a snapshot run does show it:
 
