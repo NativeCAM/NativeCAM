@@ -39,12 +39,17 @@ What each severity means, and what to do:
 | `warning` | Writes the file | Read it, fix it when the fix is clear (a feed the chip-load check suggests, a design too big for the board), and report any you leave |
 | `info` | Writes the file | Pass on the ones that ask the human to do something (measure the rotary's centre height, jog the rotary to check its direction, change the bit between files) |
 
+**Errors about the machine and the bit** ([#151](https://github.com/NativeCAM/NativeCAM/issues/151)). `post` refuses these and exits 1; in the app, Export lists them and asks "Export Anyway?":
+
+- `The program moves … in X, retracts and park included, … more than the machine's … of X travel.` (or Y). The program can't fit on the machine, wherever the work is zeroed. Make it smaller, nest or tile it, or check the machine's travel.
+- `The program spans … in Z; with … of tool sticking out that's … more than the machine's … of Z travel.` The lowest move is out of reach of the highest with that bit. Check the Z travel, the park and safe heights, and the stickout.
+- `Depth … is more than … sticks out of the collet (…), so the collet nut would hit the stock.` On a 2.5D toolpath. Cut shallower, or ask the human to let the bit out further and set its stickout.
+
 **Warnings that should stop a hand-over until the human has seen them**, because the file is written anyway:
 
-- `The program moves … in X, retracts and park included, more than the machine's … of travel.` The program can't fit on the machine, wherever the work is zeroed ([#151](https://github.com/NativeCAM/NativeCAM/issues/151) proposes making it an error).
 - `Toolpath extends beyond the material edges.` Often a part off the material: nest it, or move it.
 - `Cuts … into the spoilboard (material is … thick).` A depth or thickness is wrong.
-- `Depth … exceeds the cutting length of …`. The bit can't cut that deep without its shank rubbing.
+- `Depth … exceeds the cutting length of …, so the shank rubs below the flutes.` The bit can't cut that deep without its shank rubbing.
 - `No vectors on layer …` / `No shapes selected.` A toolpath that cuts nothing.
 - On a rotary job, the direction note (`jog the rotary axis positive…`). Wrapped work comes out mirrored if the direction is wrong.
 

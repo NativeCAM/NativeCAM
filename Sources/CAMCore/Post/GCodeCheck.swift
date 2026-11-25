@@ -673,14 +673,19 @@ public enum GCodeCheck {
         let travel = project.machine.travel, u = project.displayUnits
         func length(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
         var issues: [Issue] = []
+        // Past the travel the program can't run wherever the work is zeroed: it hits a limit, or with soft limits
+        // off the end of an axis (#151). These are errors, as the per-toolpath travel check is. A span that fits but
+        // sits oddly on the bed isn't checked, since where the work origin is on the bed isn't known.
         for (axis, span, limit) in [("X", hi.x - lo.x, travel.x), ("Y", hi.y - lo.y, travel.y)] where span > limit + 1e-3 {
-            issues.append(Issue(.warning, "The program moves \(length(span)) in \(axis), retracts and park included, "
-                + "more than the machine's \(length(limit)) of travel."))
+            issues.append(Issue(.error, "The program moves \(length(span)) in \(axis), retracts and park included, "
+                + "\(length(span - limit)) more than the machine's \(length(limit)) of \(axis) travel."))
         }
+        // Z: the lowest move has to be within reach of the highest, the tool's stickout below the spindle's lowest.
         let stickout = toolpaths.map(\.tool.stickout).max() ?? 0
         if hi.z - lo.z + stickout > travel.z + 1e-3 {
-            issues.append(Issue(.warning, "The program spans \(length(hi.z - lo.z)) in Z; with \(length(stickout)) of tool "
-                + "sticking out that's more than the machine's \(length(travel.z)) of Z travel."))
+            issues.append(Issue(.error, "The program spans \(length(hi.z - lo.z)) in Z; with \(length(stickout)) of tool "
+                + "sticking out that's \(length(hi.z - lo.z + stickout - travel.z)) more than the machine's "
+                + "\(length(travel.z)) of Z travel."))
         }
         return issues
     }

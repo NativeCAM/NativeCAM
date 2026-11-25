@@ -215,7 +215,7 @@ $ "$CLI" post nested.nativecam -o nested.tap
 Generated 4 toolpaths in 0.02s, 2209 lines -> nested - sheet 1 of 2.tap, nested - sheet 2 of 2.tap
 ```
 
-**Check:** every part placed (`19 of 19`); no `Didn't fit` lines; no `extends beyond the material edges` or travel warnings from `post`; the SVG looks right. Options: `--sheets n` caps the sheets, `--sheet-size 48x96` (display units) sizes the sheets after the first, `--no-holes` keeps parts out of other parts' holes, `--turns none` or `--grain` for grain direction, and `--spacing` and `--margin` for gaps. A rotary job can't be nested. Write to a new file (`-o`), never `--in-place` on the human's project.
+**Check:** every part placed (`19 of 19`); no `Didn't fit` lines; no `extends beyond the material edges` warnings or travel errors from `post`; the SVG looks right. Options: `--sheets n` caps the sheets, `--sheet-size 48x96` (display units) sizes the sheets after the first, `--no-holes` keeps parts out of other parts' holes, `--turns none` or `--grain` for grain direction, and `--spacing` and `--margin` for gaps. A rotary job can't be nested. Write to a new file (`-o`), never `--in-place` on the human's project.
 
 ## 5. A 3D relief: adaptive roughing, finishing and rest finishing
 
