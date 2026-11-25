@@ -9,7 +9,8 @@ tabs. Each test asserts what NativeCAM does with its file:
 - `medallion-through.nativecam`: the model as deep as the board, four evenly spaced 3/8" × 1/8" tabs. Roughing and
   finishing leave a strip under each tab and cut to full depth elsewhere; no motion enters a strip below its top; the
   cut-out's tabs line up with the strips; the simulated part stays joined to the board after every toolpath and its
-  tabs are 1/8" thick to within a cell. Goldens `rough3d-tabs-offset-inch` and `profile-3d-cutout-tabs-inch`; also
+  tabs are 1/8" thick to within a cell, over their whole length (the strips reach a ball radius and a millimetre past
+  the tabs' ends, so the ball doesn't round them). Goldens `rough3d-tabs-offset-inch` and `profile-3d-cutout-tabs-inch`; also
   used for rest finishing, the inspector line and the setup sheet's note.
 - `medallion-adaptive.nativecam`: the same with adaptive roughing (golden `rough3d-tabs-adaptive-inch`).
 - `medallion-raster-mm.nativecam`, `medallion-waterline-mm.nativecam`: raster and waterline finishing in mm (goldens

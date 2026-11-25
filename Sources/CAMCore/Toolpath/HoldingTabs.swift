@@ -30,6 +30,10 @@ public enum HoldingTabs {
         public var normal: Vec2
         /// The tab's base length along the wall, mm.
         public var width: Double
+        /// How much further the strip reaches along the wall at each end, mm: the largest radius of the 3D bits that leave
+        /// it, plus a millimetre (more than a grid cell), so a ball rolling down its ends leaves the tab its full thickness
+        /// over the whole length the cut-out leaves.
+        public var flank: Double = 0
         /// How far the strip reaches in from the wall (to just inside the model's silhouette), and out from it (past
         /// where the 3D toolpath reaches), mm.
         public var inner: Double
@@ -41,12 +45,12 @@ public enum HoldingTabs {
         public func contains(_ p: Vec2, shrink: Double = 0) -> Bool {
             let d = p - centre
             let u = d.dot(tangent), v = d.dot(normal)
-            return abs(u) <= width / 2 - shrink && v >= -inner + shrink && v <= outer - shrink
+            return abs(u) <= width / 2 + flank - shrink && v >= -inner + shrink && v <= outer - shrink
         }
 
         /// Its outline, counter-clockwise.
         public var outline: Polyline {
-            let a = tangent * (width / 2)
+            let a = tangent * (width / 2 + flank)
             let pts = [centre - a - normal * inner, centre + a - normal * inner, centre + a + normal * outer, centre - a + normal * outer]
             return Polyline(pts, closed: true).oriented(counterClockwise: true)
         }
@@ -132,6 +136,12 @@ public enum HoldingTabs {
         let thickness = project.stock.thickness
         let tabWood = top + thickness
         let w = p.tabs.width
+        // Every 3D toolpath on this cut-out leaves the same strips, widened for the largest of their bits.
+        let widest = project.operations.filter { other in
+            other.enabled && PartHold.boundary(of: other)?.boundary == .vectors
+                && PartHold.cutOutsReached(by: other, in: project).contains { $0.id == cutOut.id }
+        }.map(\.tool.radius).max() ?? op.tool.radius
+        let flank = max(widest, op.tool.radius) + 1
         let step = 0.25
         let reachBounds = regions.map(\.bounds).reduce(Rect2.empty) { $0.union($1) }
         func inSilhouette(_ q: Vec2) -> Bool { silhouette.contains { $0.contains(q) } }
@@ -176,7 +186,10 @@ public enum HoldingTabs {
                 }
                 depths.append(d)
             }
-            let reachIn = (depths.max() ?? 0) + 1
+            // The strip's ends, past the tab, reach in as far as the model is there.
+            let ends = [-(w / 2 + flank), -(w / 2 + flank / 2), w / 2 + flank / 2, w / 2 + flank].compactMap { inward(from: drawn + tangent * $0) }
+                .filter { $0 <= (depths.max() ?? 0) + w } // not the model's far side
+            let reachIn = ((depths + ends).max() ?? 0) + 1
             // The silhouette's width along the wall just inside the joint: a narrow spike snaps off whatever holds it.
             let probe = drawn - normal * ((depths.min() ?? 0) + w / 2)
             func along(_ dir: Vec2) -> Double {
@@ -209,7 +222,8 @@ public enum HoldingTabs {
             var d = 0.0
             while d < span + 1000, inReach(drawn + normal * d) { d += step }
             let reachOut = d + op.tool.diameter + 1
-            strips.append(Strip(centre: drawn, tangent: tangent, normal: normal, width: w, inner: reachIn, outer: reachOut, top: top))
+            strips.append(Strip(centre: drawn, tangent: tangent, normal: normal, width: w, flank: flank, inner: reachIn, outer: reachOut,
+                                top: top))
         }
         guard !strips.isEmpty else { return .fallback("\(name) has no tabs on its outline round the model.") }
         if let most = proud.map(\.by).max() {

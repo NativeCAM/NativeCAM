@@ -76,6 +76,21 @@ struct PartHoldTests {
         }
         let finish = try #require(job.toolpaths.first { $0.name == "Finish relief" })
         #expect(abs(Self.deepest(finish) + p.stock.thickness) < 0.01)
+        // After every toolpath, the material over each of the cut-out's tabs (their length, across the kerf) stands at
+        // their top, to within a cell: the finishing ball doesn't round their ends.
+        let s = try #require(HoldingTabs.decide(Self.op(p, "Finish relief"), in: p).strips)
+        var sim = MaterialSimulator(stock: p.stock, cellSize: 0.25)
+        for tp in job.toolpaths { tp.forEachMotion { a, m in sim.apply(m, from: a, tool: tp.tool) } }
+        let r = Self.op(p, "Cut out medallion").tool.radius
+        var short = 0.0
+        for st in s.strips {
+            for u in stride(from: -(st.width / 2 - 0.25), through: st.width / 2 - 0.25 + 1e-9, by: 0.25) {
+                for v in stride(from: 0.25, through: 2 * r - 0.25 + 1e-9, by: 0.25) {
+                    short = max(short, s.top - Double(sim.grid.height(at: st.centre + st.tangent * u + st.normal * v) ?? -.infinity))
+                }
+            }
+        }
+        #expect(short <= 0.26, "a tab falls \(short) mm short of its top")
     }
 
     @Test func floorIsHeldAboveTheTabsWithANote() throws {

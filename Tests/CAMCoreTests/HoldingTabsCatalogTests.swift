@@ -142,7 +142,13 @@ struct HoldingTabsCatalogTests {
 
     /// The job simulated toolpath by toolpath: after each, whether the model's still joined to the rim; and at the end,
     /// the material left at each strip's middle, half way across the cut-out's kerf (above the board's bottom).
-    static func simulate(_ p: Project, job: JobResult, strips: HoldingTabs.Strips) -> (joined: [Bool], tabs: [Double], cell: Double) {
+    ///
+    /// `footprint`: over each tab's footprint (its length less a cell, across the cut-out's kerf less a cell each side;
+    /// `onlyMiddle` just its centre line, for triangular tabs: their sides ramp, so the cut-out itself leaves them full height
+    /// only there), the most the material falls short
+    /// of the tabs' top. A ball rolling down a strip's ends mustn't round the tab the cut-out leaves.
+    static func simulate(_ p: Project, job: JobResult, strips: HoldingTabs.Strips, onlyMiddle: Bool = false)
+        -> (joined: [Bool], tabs: [Double], cell: Double, footprint: Double) {
         var sim = MaterialSimulator(stock: p.stock, cellSize: 0.25)
         var joined: [Bool] = []
         for tp in job.toolpaths {
@@ -153,7 +159,18 @@ struct HoldingTabsCatalogTests {
         let tabs = strips.strips.map { st -> Double in
             Double(sim.grid.height(at: st.centre + st.normal * r) ?? -.infinity) - Double(sim.grid.floorZ)
         }
-        return (joined, tabs, sim.grid.cellSize)
+        let cell = sim.grid.cellSize
+        var short = 0.0
+        for st in strips.strips {
+            let half = onlyMiddle ? 0 : st.width / 2 - cell
+            for u in stride(from: -half, through: half + 1e-9, by: cell) {
+                for v in stride(from: cell, through: 2 * r - cell + 1e-9, by: cell) {
+                    let h = Double(sim.grid.height(at: st.centre + st.tangent * u + st.normal * v) ?? -.infinity)
+                    short = max(short, strips.top - h)
+                }
+            }
+        }
+        return (joined, tabs, cell, short)
     }
 
     static func checkGolden(_ p: Project, _ name: String, only: [String]? = nil, sourceLocation: SourceLocation = #_sourceLocation) throws {
@@ -176,6 +193,8 @@ struct HoldingTabsCatalogTests {
         let s = try #require(Self.strips(p))
         #expect(s.strips.count == 4)
         #expect(s.warnings.isEmpty, "\(s.warnings)")
+        // Each strip reaches past the tab's ends by the ball's radius and a millimetre.
+        #expect(s.strips.allSatisfy { abs($0.flank - (Self.ball.radius + 1)) < 1e-9 })
         #expect(abs(s.top - (-Self.thickness + 0.125.inch)) < 1e-9)
         let job = CAMEngine.generate(p)
         #expect(!job.hasErrors, "\(job.issues.filter { $0.severity == .error }.map(\.message))")
@@ -207,6 +226,8 @@ struct HoldingTabsCatalogTests {
         let sim = Self.simulate(p, job: job, strips: s)
         #expect(sim.joined == [true, true, true], "\(sim.joined)")
         for t in sim.tabs { #expect(abs(t - 0.125.inch) <= sim.cell + 0.01, "tab \(t) mm thick") }
+        // The whole tab, not only its middle: the finishing ball doesn't round its ends.
+        #expect(sim.footprint <= sim.cell + 0.01, "a tab falls \(sim.footprint) mm short of its top")
         // Without the strips (the cut-out run first, its tabs alone hold the part) it's held too; with no cut-out the
         // finish frees it.
         var free = p
@@ -303,6 +324,7 @@ struct HoldingTabsCatalogTests {
         #expect(cut.tabMarks?.allSatisfy(\.placed) == true)
         let sim = Self.simulate(p, job: job, strips: s)
         #expect(sim.joined.allSatisfy { $0 })
+        #expect(sim.footprint <= sim.cell + 0.01, "a tab falls \(sim.footprint) mm short of its top")
         try Self.checkGolden(p, "3d-tabs-placed-inch")
     }
 
@@ -321,8 +343,9 @@ struct HoldingTabsCatalogTests {
         #expect(job.issues.contains { $0.operation == "Rough medallion" && $0.message.contains("triangular tabs get flat strips") })
         let cut = try #require(job.toolpaths.first { $0.name == "Cut out medallion" })
         #expect(HoldingTabs.mismatches(cut, strips: s, tool: Self.endMill) == 0)
-        let sim = Self.simulate(p, job: job, strips: s)
+        let sim = Self.simulate(p, job: job, strips: s, onlyMiddle: true)
         #expect(sim.joined.allSatisfy { $0 })
+        #expect(sim.footprint <= sim.cell + 0.01, "a tab falls \(sim.footprint) mm short of its top")
         try Self.checkGolden(p, "3d-tabs-triangular-inch")
     }
 
