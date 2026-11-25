@@ -116,6 +116,17 @@ public struct DirectionTime: Hashable, Codable, Sendable {
 }
 
 /// The ordered motions for one operation, cut with one tool.
+/// The loops a profile's finishing laps run round (tool centre), and how near a move must be to count as on one.
+public struct FinishLaps: Hashable, Codable, Sendable {
+    public var loops: [Polyline]
+    public var tolerance: Double
+
+    public init(loops: [Polyline], tolerance: Double) {
+        self.loops = loops
+        self.tolerance = tolerance
+    }
+}
+
 public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     public var id: UUID
     public var name: String
@@ -154,6 +165,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// goes; what a pocket resting from earlier toolpaths has left to clear). Empty when nothing is left; nil for every
     /// other toolpath. Posts and checks don't read it.
     public var restAreas: [Polyline]?
+    /// A profile's finishing pass: the loops its finishing laps run round, for "Adjust feeds for load" to leave alone.
+    /// nil for every other toolpath. Posts and checks don't read it.
+    public var finishLaps: FinishLaps?
     /// Calibration programs (`Calibration`): the program stops (M0) once the tool is over this toolpath's start at
     /// safe Z, showing this message, and goes back to safe Z when the operator resumes. The spindle keeps turning: the
     /// operator only times the run, nowhere near the tool. nil everywhere else. The G-code and OpenSBP posts write it

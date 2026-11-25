@@ -1,0 +1,134 @@
+{
+  "displayUnits" : "mm",
+  "formatVersion" : 28,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "mm",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Dovetail finish skipped",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "157F1000-0000-4000-8000-000000000054",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 10,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "finishPass" : {
+              "allowance" : 0.5,
+              "depth" : "fullDepth",
+              "direction" : "conventional",
+              "feedPercent" : 1,
+              "springPass" : false
+            },
+            "leads" : {
+              "angle" : 45,
+              "kind" : "line",
+              "leadOut" : true,
+              "length" : 12,
+              "overlap" : 0,
+              "radius" : 6.35,
+              "sweep" : 90
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Dovetail",
+      "shapeIDs" : [
+        "157F1000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2000,
+          "plungeRate" : 500,
+          "spindleRPM" : 18000,
+          "stepdown" : 3,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 12.7,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 12.7,
+        "id" : "B728192A-8B9B-48AF-9C9B-E196A8DAD98A",
+        "includedAngle" : 28,
+        "name" : "Dovetail",
+        "notes" : "",
+        "number" : 62,
+        "shankDiameter" : 6.35,
+        "shape" : "dovetail",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "157F1000-0000-4000-8000-000000000001",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 6,
+          "height" : 80,
+          "width" : 120
+        }
+      },
+      "layer" : "Default",
+      "name" : "Part",
+      "position" : {
+        "x" : 100,
+        "y" : 75
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 10,
+    "height" : 220,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialKind" : "plywood",
+    "materialName" : "Plywood",
+    "plungeHeight" : 2,
+    "thickness" : 19.049999999999997,
+    "width" : 260,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

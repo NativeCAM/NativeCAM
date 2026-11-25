@@ -96,13 +96,17 @@ struct OperationInspector: View {
                 }
                 .pickerStyle(.segmented)
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = $0; set(q) }), units: units,
-                            help: "Material left on the wall for a finishing pass")
+                            help: "Material left on the wall after this toolpath, finishing pass and all")
             }
             DepthSection(depth: Binding(get: { p.depth }, set: { var q = p; q.depth = $0; set(q) }), tool: op.tool, stock: project.stock, units: units)
             EntrySection(entry: Binding(get: { p.entry }, set: { var q = p; q.entry = $0; set(q) }), units: units)
             LeadsSection(leads: Binding(get: { p.leads }, set: { var q = p; q.leads = $0; set(q) }), side: p.side, tool: op.tool, units: units)
             CornersSection(relief: Binding(get: { p.cornerRelief }, set: { var q = p; q.cornerRelief = $0; set(q) }),
                            available: p.side != .on)
+            if p.side != .on {
+                FinishPassSection(finish: Binding(get: { p.finishPass }, set: { var q = p; q.finishPass = $0; set(q) }), tool: op.tool,
+                                  cutDepth: p.depth.cutDepth, units: units)
+            }
             Section("Tabs") {
                 Toggle("Add tabs", isOn: Binding(get: { p.tabs.enabled }, set: { var q = p; q.tabs.enabled = $0; set(q) }))
                 if p.tabs.enabled {
@@ -2015,5 +2019,54 @@ struct LoadFeedsRow: View {
         let low = Int((feeds.lowest / feeds.programmed * 100).rounded())
         LabeledContent(indent ? "      Feed" : "Feed",
                        value: "\(units.format(feeds.lowest, decimals: 0))–\(units.format(feeds.programmed, decimals: 0)) \(units.feedSymbol) (\(low)–100%)")
+    }
+}
+
+/// A profile's separate finishing pass (`ProfileFinishPass`): the roughing stops the finish allowance off the wall,
+/// then a light lap cuts it to size.
+struct FinishPassSection: View {
+    @Binding var finish: ProfileFinishPass?
+    let tool: Tool
+    let cutDepth: Double
+    let units: LengthUnit
+
+    var body: some View {
+        Section("Finishing pass") {
+            Toggle("Add finishing pass", isOn: Binding(get: { finish != nil }, set: { on in
+                finish = on ? ProfileFinishPass(allowance: ProfileFinishPass.defaultAllowance(for: units)) : nil
+            }))
+            .help("Cut the wall to size with a separate light lap after the roughing passes, for a cleaner, truer edge")
+            if let f = finish {
+                LengthField(title: "Finish allowance", mm: Binding(get: { f.allowance }, set: { var g = f; g.allowance = max(0, $0); finish = g }),
+                            units: units, help: "Roughing passes stop this far off the wall; the finish cuts it", minimum: 0)
+                Picker("Finish depth", selection: Binding(get: { f.depth }, set: { var g = f; g.depth = $0; finish = g })) {
+                    ForEach(ProfileFinishPass.Depth.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("Full depth: one lap at the cut depth. Each pass: a lap at each roughing depth, for cuts deeper than the flutes")
+                Picker("Finish direction", selection: Binding(get: { f.direction }, set: { var g = f; g.direction = $0; finish = g })) {
+                    ForEach(CutDirection.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .help("Conventional usually leaves the cleanest edge on plywood and hardwood")
+                NumberField(title: "Finish feed", value: Binding(get: { f.feedPercent * 100 }, set: {
+                    var g = f
+                    g.feedPercent = min(ProfileFinishPass.feedRange.upperBound, max(ProfileFinishPass.feedRange.lowerBound, $0 / 100))
+                    finish = g
+                }), suffix: "%", decimals: 0)
+                Text("\(units.format(tool.cutting.feedRate * f.feedPercent, decimals: 0)) \(units.feedSymbol) of the bit's \(units.format(tool.cutting.feedRate, decimals: 0))")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Spring pass", isOn: Binding(get: { f.springPass }, set: { var g = f; g.springPass = $0; finish = g }))
+                    .help("A second finishing lap at the same size, for what the bit sprang back from on the first")
+                if f.allowance > tool.diameter / 2 {
+                    SectionNote(text: "More than half the bit's width: the toolpath is refused.", warning: true)
+                } else if f.allowance > tool.diameter / 3 {
+                    SectionNote(text: "More than a third of the bit's width: a heavy cut for a finish.", warning: true)
+                }
+                if f.depth == .fullDepth, tool.fluteLength > 0, cutDepth > tool.fluteLength + 1e-6 {
+                    SectionNote(text: "Deeper than the bit's flutes (\(units.format(tool.fluteLength)) \(units.symbol)): a full-depth finish is refused. Use Each pass.", warning: true)
+                }
+            }
+        }
     }
 }

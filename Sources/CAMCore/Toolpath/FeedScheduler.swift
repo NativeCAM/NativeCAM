@@ -364,8 +364,11 @@ public enum FeedScheduler {
         var cuts: [Int: Cut] = [:]
         var neutral = Set<Int>()
         var position = tp.start
+        // A profile's finishing laps keep their feed, and their light cut isn't taken for the usual one.
+        let finishLaps = tp.finishLaps
         for (i, m) in tp.motions.enumerated() {
-            switch role(m, from: position, programmed: programmed) {
+            let onFinish = finishLaps.map { ProfileFinish.isOnFinishLoop(m, from: position, loops: $0.loops, tolerance: $0.tolerance) } ?? false
+            switch onFinish ? nil : role(m, from: position, programmed: programmed) {
             case .measured:
                 let points = samplePoints(m, from: position, spacing: spacing)
                 let e = points.map { engagement(at: $0.p, z: $0.z, direction: $0.t, region: region, material: material, floorZ: floorZ) }

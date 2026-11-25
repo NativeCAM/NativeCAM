@@ -71,11 +71,32 @@ enum ProfileGenerator {
         let r = effectiveRadius(tool, cutDepth: params.depth.cutDepth)
         let offset = r + params.allowance
 
-        struct Contour { var loop: Polyline; var closed: Bool; var nesting: Int; var reliefs: [CornerRelief.Relief] = [] }
+        // A finishing pass: the roughing loops stand its allowance further off the wall, and a lap per loop at `offset`
+        // cuts the wall to size (see `ProfileFinish`).
+        let finish: ProfileFinishPass?
+        switch ProfileFinish.plan(params, tool: tool, diameter: 2 * r, context: context, warnings: &warnings) {
+        case .none: finish = nil
+        case let .active(f): finish = f
+        case .refused:
+            return ToolpathBuilder(stock: context.stock, tool: tool, startXY: nil)
+                .build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
+        }
+        let finishAllowance = finish?.allowance ?? 0
+        // Where the roughing loops are: the final wall's offset, plus the finish allowance with a finishing pass.
+        let roughOffset = offset + finishAllowance
+
+        struct Contour {
+            var loop: Polyline; var closed: Bool; var nesting: Int; var reliefs: [CornerRelief.Relief] = []
+            /// With a finishing pass: the finishing loop (in `finishes`) this roughing loop is finished by.
+            var group = -1
+        }
         var contours: [Contour] = []
-        // The drawn regions and the tool-centre regions offset from them (inside and outside cuts).
+        // The drawn regions and the tool-centre regions offset from them (inside and outside cuts): the roughing's.
         var regions: [Region] = []
         var offsetRegions: [Region] = []
+        // With a finishing pass, the finishing loops' tool-centre regions and loops (run in the finish's direction).
+        var finishRegions: [Region] = []
+        var finishLoops: [Polyline] = []
 
         switch params.side {
         case .on:
@@ -90,9 +111,15 @@ enum ProfileGenerator {
                 warnings.append("\(open.count) open vector(s) can only be cut 'On'; they were skipped. Join them into closed shapes to cut inside/outside.")
             }
             regions = Region.build(from: closed, fill: .evenOdd)
-            let delta = params.side == .outside ? offset : -offset
+            let delta = params.side == .outside ? roughOffset : -roughOffset
             offsetRegions = regions.flatMap { $0.offset(by: delta, arcTolerance: context.arcTolerance) }
-            if params.side == .inside && offsetRegions.isEmpty && !regions.isEmpty {
+            if let finish {
+                let finishDelta = params.side == .outside ? offset : -offset
+                finishRegions = regions.flatMap { $0.offset(by: finishDelta, arcTolerance: context.arcTolerance) }
+                let reverse = (params.side == .outside) == (finish.direction == .climb)
+                finishLoops = finishRegions.flatMap(\.loops).map { reverse ? $0.reversed : $0 }
+            }
+            if params.side == .inside && offsetRegions.isEmpty && finishRegions.isEmpty && !regions.isEmpty {
                 warnings.append("The tool (\(context.length(tool.diameter))) is too large to fit inside the selected shape(s).")
             }
             // Region loops have the region interior on their left (outer CCW, holes CW).
@@ -113,7 +140,7 @@ enum ProfileGenerator {
         var others: [ProtectedRegions.Zone] = []
         if let parts = context.protectedRegions, params.side != .on, params.leads != nil || params.cornerRelief != nil, !regions.isEmpty {
             let lead = params.leads.map { 2 * $0.size } ?? 0
-            let reach = regions.reduce(Rect2.empty) { $0.union($1.bounds) }.insetBy(-(abs(params.allowance) + 2 * r + lead + 1))
+            let reach = regions.reduce(Rect2.empty) { $0.union($1.bounds) }.insetBy(-(abs(params.allowance) + finishAllowance + 2 * r + lead + 1))
             let cut = ProtectedRegions.profileCut(regions, side: params.side, allowance: params.allowance, toolRadius: r,
                                                   arcTolerance: context.arcTolerance)
             others = parts.zones(toolRadius: r, cut: cut, walls: regions.flatMap(\.loops), near: reach, arcTolerance: context.arcTolerance)
@@ -129,7 +156,7 @@ enum ProfileGenerator {
                 var tally = CornerRelief.Tally()
                 var marks: [ReliefCorner] = []
                 for i in contours.indices where contours[i].closed {
-                    let found = CornerRelief.corners(contours[i].loop, wasteOnLeft: wasteOnLeft, design: design, offset: offset,
+                    let found = CornerRelief.corners(contours[i].loop, wasteOnLeft: wasteOnLeft, design: design, offset: roughOffset,
                                                      maxCornerAngle: relief.maxCornerAngle, others: others)
                     let chosen = CornerRelief.choose(found, settings: relief, shapes: index, matched: &matched)
                     contours[i].reliefs = chosen.reliefs
@@ -138,6 +165,57 @@ enum ProfileGenerator {
                 }
                 reliefCorners = marks
                 warnings += CornerRelief.warnings(tally, unmatched: (relief.overrides?.count ?? 0) - matched.count)
+            }
+        }
+
+        // The finishing loops, each with the roughing loops round the same wall. A finishing loop farther than half the
+        // bit's width from every roughing loop would cut material the roughing never reached (an inside loop the
+        // roughing's offset doesn't fit, or a narrow neck it can't get through): it's refused.
+        struct FinishLoop {
+            var loop: Polyline
+            var reliefs: [CornerRelief.Relief] = []
+            var refused = false
+            /// Roughing loops still to cut before this one.
+            var remaining = 0
+            /// The loop as planned (started between tabs, reliefs in) and its tabs: set from the first roughing loop's
+            /// entry, and carried onto every loop round the wall.
+            var reference: (loop: Polyline, tabs: TabPlan)?
+        }
+        var finishes: [FinishLoop] = []
+        var refusedLoops = 0
+        let finishWasteOnLeft = finish?.direction == .climb
+        if finish != nil {
+            finishes = finishLoops.map { FinishLoop(loop: $0) }
+            if let relief = params.cornerRelief {
+                let design = CornerRelief.Design(regions.flatMap(\.loops))
+                let index = CornerRelief.ShapeIndex(shapes, tolerance: context.flattenTolerance)
+                var matched = Set<Int>()
+                for i in finishes.indices {
+                    let found = CornerRelief.corners(finishes[i].loop, wasteOnLeft: finishWasteOnLeft, design: design, offset: offset,
+                                                     maxCornerAngle: relief.maxCornerAngle, others: others)
+                    finishes[i].reliefs = CornerRelief.choose(found, settings: relief, shapes: index, matched: &matched).reliefs
+                }
+            }
+            let rough = contours.map(\.loop)
+            for i in finishes.indices where ProfileFinish.farthestFromRoughing(finishes[i].loop, rough: rough) > r + 0.01 {
+                finishes[i].refused = true
+                refusedLoops += 1
+            }
+            if refusedLoops > 0, let finish {
+                warnings.append("Refused: the finishing pass on \(refusedLoops == 1 ? "1 loop" : "\(refusedLoops) loops") would cut material the "
+                    + "roughing passes couldn't reach (their offset, \(context.length(finish.allowance)) further off the wall, doesn't fit "
+                    + "there), so \(refusedLoops == 1 ? "it was" : "they were") left off: that wall isn't cut to size. Use a smaller "
+                    + "finish allowance or bit.")
+            }
+            for i in contours.indices {
+                let p = contours[i].loop.points[0]
+                var best = -1, bestD = Double.infinity
+                for (j, f) in finishes.enumerated() {
+                    let d = f.loop.closestPoint(to: p).distance
+                    if d < bestD { bestD = d; best = j }
+                }
+                contours[i].group = best
+                if best >= 0 { finishes[best].remaining += 1 }
             }
         }
 
@@ -171,6 +249,8 @@ enum ProfileGenerator {
         var paramsAtDepth = params
         paramsAtDepth.depth = depth
         var levels = depth.passLevels(toolStepdown: tool.cutting.stepdown, firstPassMinimum: tool.firstPassMinimum)
+        // The finish: one lap at the cut depth, or one at each of the roughing's depths.
+        let finishLevels = finish?.depth == .eachPass ? levels : Array(levels.suffix(1))
         // How far an undercut bit must be off the wall before it can lift out (a little spare for the arc fitting).
         let clearance = undercut ? tool.undercut(toDepth: depth.cutDepth) + 0.5 : 0
         if undercut, let last = levels.last {
@@ -263,15 +343,64 @@ enum ProfileGenerator {
             guard tool.shape.cutsEdgesOnly, let top = context.materialTop else { return false }
             return top(p, plungeProbe) > z + 0.05
         }
+        // The finishing pass: the loop as planned for finishing loop `g`, started nearest `p` (between tabs).
+        func finishReference(_ g: Int, startingNear p: Vec2) -> (loop: Polyline, tabs: TabPlan) {
+            let loop = CornerRelief.insert(finishes[g].reliefs, into: finishes[g].loop.startingNearest(p))
+            return (loop, TabPlan(length: loop.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]))
+        }
+        /// A roughing loop's tabs with a finishing pass: the finishing loop's, carried onto it. nil without one.
+        func roughTabs(_ contour: Contour, _ cut: Polyline) -> TabPlan? {
+            guard finish != nil, contour.group >= 0 else { return nil }
+            let reference = finishes[contour.group].reference ?? finishReference(contour.group, startingNear: cut.points[0])
+            return TabPlan.mapped(reference.tabs, from: reference.loop, onto: cut)
+        }
+        var finishEnteredOnWall = 0
+        var finishCut: [Polyline] = []
+        /// Cuts finishing loop `g`'s lap(s), entered in the kerf its roughing loops cut.
+        func cutFinish(_ g: Int, _ finish: ProfileFinishPass) {
+            let reference = finishes[g].reference ?? finishReference(g, startingNear: b.position.xy)
+            // Its own tabs aren't a contour too short for them again: the roughing said so.
+            let tabs = TabPlan(intervals: reference.tabs.intervals, length: reference.tabs.length, z: reference.tabs.z)
+            let kerf = ProfileFinish.Kerf(finish: finishRegions, rough: offsetRegions, inside: params.side == .inside,
+                                          reference: reference.loop, tabs: tabs, toolRadius: tool.radius)
+            var finishParams = paramsAtDepth
+            finishParams.entry.kind = .plunge
+            let laps = finish.springPass ? 2 : 1
+            let feed = b.feedRate
+            b.feedRate = feed * min(ProfileFinishPass.feedRange.upperBound, max(ProfileFinishPass.feedRange.lowerBound, finish.feedPercent))
+            defer { b.feedRate = feed }
+            if let lead = ProfileFinish.lead(reference.loop, tabs: tabs, settings: params.leads ?? ProfileFinish.automaticLead(toolRadius: tool.radius),
+                                             kerf: kerf, band: 0.9 * finish.allowance, wasteOnLeft: finishWasteOnLeft,
+                                             toolRadius: tool.radius, linkLimit: max(3 * tool.diameter, 10),
+                                             chordTolerance: context.arcTolerance) {
+                let mapped = TabPlan.mapped(tabs, from: reference.loop, onto: lead.loop)
+                cutClosedWithLeads(lead, levels: finishLevels, params: finishParams, tool: tool,
+                                   tabs: TabPlan(intervals: mapped.intervals, length: mapped.length, z: mapped.z), laps: laps,
+                                   builder: &b, warnings: &warnings)
+            } else {
+                finishEnteredOnWall += 1
+                cutClosed(reference.loop, levels: finishLevels, params: finishParams, tool: tool, tabs: tabs, laps: laps,
+                          builder: &b, warnings: &warnings)
+            }
+            b.retract()
+            finishCut.append(reference.loop)
+        }
         for contour in ordered {
             let near = probe ?? b.position.xy
             probe = nil
+            // A finishing lap follows the last roughing loop round its wall.
+            defer {
+                if let finish, contour.group >= 0 {
+                    finishes[contour.group].remaining -= 1
+                    if finishes[contour.group].remaining == 0, !finishes[contour.group].refused { cutFinish(contour.group, finish) }
+                }
+            }
             if contour.closed {
                 if let leads {
                     let relieved = CornerRelief.insert(contour.reliefs, into: contour.loop)
                     if let lead = LeadPlanner.fit(contour.loop, relieved: relieved, near: near, settings: leads, wasteOnLeft: wasteOnLeft,
                                                   clearance: centreClearance, rampLength: rampLength,
-                                                  tabs: { TabPlan(length: $0.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]) },
+                                                  tabs: { roughTabs(contour, $0) ?? TabPlan(length: $0.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]) },
                                                   linkLimit: max(3 * tool.diameter, 10), chordTolerance: context.arcTolerance) {
                         // The lead planner shortens a lead that doesn't fit; an undercut bit needs the whole length.
                         if undercut, !(clearOfWalls(lead.start) && clearOfWalls(lead.leadOut[lead.leadOut.count - 1])) {
@@ -279,7 +408,11 @@ enum ProfileGenerator {
                             continue
                         }
                         if intoMaterial(lead.start, z: levels[0]) { plungesIntoMaterial += 1 }
-                        cutClosedWithLeads(lead, levels: levels, params: paramsAtDepth, tool: tool, builder: &b, warnings: &warnings)
+                        let tabs = roughTabs(contour, lead.loop)
+                        if contour.group >= 0, finishes[contour.group].reference == nil {
+                            finishes[contour.group].reference = finishReference(contour.group, startingNear: lead.loop.points[0])
+                        }
+                        cutClosedWithLeads(lead, levels: levels, params: paramsAtDepth, tool: tool, tabs: tabs, builder: &b, warnings: &warnings)
                         b.retract()
                         continue
                     }
@@ -292,7 +425,11 @@ enum ProfileGenerator {
                 // Reliefs go in after the start is chosen, so the entry never lands on a relief tip.
                 let loop = CornerRelief.insert(contour.reliefs, into: contour.loop.startingNearest(near))
                 if intoMaterial(loop.points[0], z: levels[0]) { plungesIntoMaterial += 1 }
-                cutClosed(loop, levels: levels, params: paramsAtDepth, tool: tool, builder: &b, warnings: &warnings)
+                let tabs = roughTabs(contour, loop)
+                if finish != nil, contour.group >= 0, finishes[contour.group].reference == nil {
+                    finishes[contour.group].reference = finishReference(contour.group, startingNear: loop.points[0])
+                }
+                cutClosed(loop, levels: levels, params: paramsAtDepth, tool: tool, tabs: tabs, builder: &b, warnings: &warnings)
             } else {
                 cutOpen(contour.loop, levels: levels, builder: &b)
             }
@@ -315,19 +452,31 @@ enum ProfileGenerator {
         if params.tabs.enabled && params.side == .on {
             warnings.append("Tabs are only applied to inside/outside profiles.")
         }
+        if let finish {
+            if finishEnteredOnWall > 0 {
+                warnings.append("The finishing pass's lead didn't fit in the roughing's kerf on \(finishEnteredOnWall == 1 ? "1 loop" : "\(finishEnteredOnWall) loops"), "
+                    + "so the finish entered on the wall there, which may leave a mark. A larger finish allowance gives the lead room.")
+            }
+        }
         var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         toolpath.reliefCorners = reliefCorners
+        if let finish, !finishCut.isEmpty {
+            toolpath.finishLaps = FinishLaps(loops: finishCut, tolerance: ProfileFinish.loopTolerance(allowance: finish.allowance))
+        }
         return toolpath
     }
 
     /// A closed loop without leads: entered at its first point (plunging, or ramping along the wall), cut at each level.
-    static func cutClosed(_ loop: Polyline, levels: [Double], params: ProfileParams, tool: Tool,
-                          builder b: inout ToolpathBuilder, warnings: inout [String]) {
+    /// `tabs` is the loop's tab plan when it isn't its own (a finishing pass's, carried onto it); `laps` the laps
+    /// at each level (a spring pass is a second one).
+    static func cutClosed(_ loop: Polyline, levels: [Double], params: ProfileParams, tool: Tool, tabs given: TabPlan? = nil,
+                          laps: Int = 1, builder b: inout ToolpathBuilder, warnings: inout [String]) {
         let walker = LoopWalker(loop)
         let L = walker.length
         guard L > 1e-6 else { return }
 
-        let tabs = TabPlan(length: L, params: params, tool: tool, lastLevel: levels[levels.count - 1])
+        let tabs = given ?? TabPlan(length: L, params: params, tool: tool, lastLevel: levels[levels.count - 1])
+        let lap = L * Double(max(1, laps))
         if tabs.tooShort {
             warnings.append("A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it.")
         }
@@ -345,19 +494,19 @@ enum ProfileGenerator {
             if useRamp {
                 let s0 = s, zp = zPrev
                 // The ramp end must be its own vertex, or a long edge would stretch the descent across its full length.
-                let breaks = tabBreaks(s0, s0 + rampLen + L) + [s0 + rampLen]
-                let pts = walker.walk(from: s0, to: s0 + rampLen + L, breaks: breaks) { t in
+                let breaks = tabBreaks(s0, s0 + rampLen + lap) + [s0 + rampLen]
+                let pts = walker.walk(from: s0, to: s0 + rampLen + lap, breaks: breaks) { t in
                     let base = t < s0 + rampLen ? zp + (z - zp) * (t - s0) / rampLen : z
                     return clampTab(t, base)
                 }
                 b.follow(pts)
-                s = s0 + rampLen + L
+                s = s0 + rampLen + lap
             } else {
                 b.feed(Vec3(walker.point(at: s), clampTab(s, z)))
                 let s0 = s
-                let pts = walker.walk(from: s0, to: s0 + L, breaks: tabBreaks(s0, s0 + L)) { t in clampTab(t, z) }
+                let pts = walker.walk(from: s0, to: s0 + lap, breaks: tabBreaks(s0, s0 + lap)) { t in clampTab(t, z) }
                 b.follow(pts)
-                s = s0 + L
+                s = s0 + lap
             }
             zPrev = z
         }
@@ -372,12 +521,13 @@ enum ProfileGenerator {
     /// When the link back isn't clear, the tool lifts and drops in at A instead (the link optimiser lowers the lift):
     /// with a plunge entry it plunges one pass in the waste; with a ramp it drops to the floor already cut at A and the
     /// next ramp starts from there (steeper, but each point still cuts at most one pass deeper).
-    static func cutClosedWithLeads(_ lead: FittedLead, levels: [Double], params: ProfileParams, tool: Tool,
-                                   builder b: inout ToolpathBuilder, warnings: inout [String]) {
+    /// `tabs` and `laps` as for `cutClosed`.
+    static func cutClosedWithLeads(_ lead: FittedLead, levels: [Double], params: ProfileParams, tool: Tool, tabs given: TabPlan? = nil,
+                                   laps: Int = 1, builder b: inout ToolpathBuilder, warnings: inout [String]) {
         let walker = LoopWalker(lead.loop)
         let L = walker.length
         guard L > 1e-6, let deepest = levels.last else { return }
-        let tabs = TabPlan(length: L, params: params, tool: tool, lastLevel: deepest)
+        let tabs = given ?? TabPlan(length: L, params: params, tool: tool, lastLevel: deepest)
         if tabs.tooShort {
             warnings.append("A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it.")
         }
@@ -389,7 +539,7 @@ enum ProfileGenerator {
         let leadInLength = cumulative[cumulative.count - 1]
         let rampWall = lead.rampWall
         let rampTotal = leadInLength + rampWall
-        let lapEnd = L + lead.exit
+        let lapEnd = L * Double(max(1, laps)) + lead.exit
         // Ramp: where this pass's ramp starts at A (the floor there).
         var zPrev = -params.depth.startDepth
         b.enter(at: Vec3(a, useRamp ? zPrev : levels[0]))

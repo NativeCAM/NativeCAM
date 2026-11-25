@@ -28,8 +28,10 @@ public struct Project: Hashable, Sendable {
     /// follow a 3D model's surface, which an older build would cut from the start depth instead. Format 26 adds adaptive
     /// clearing for 3D roughing's layers, which an older build would ignore and cut each layer in offset rings. Format 27 adds a
     /// cut direction on the toolpaths whose passes run in rows or a pattern (`PassDirection`), which an older build would
-    /// ignore and cut its own way. The default direction, each toolpath's old one, doesn't raise it.
-    public static let currentFormatVersion = 27
+    /// ignore and cut its own way. The default direction, each toolpath's old one, doesn't raise it. Format 28 adds a
+    /// profile's separate finishing pass (`ProfileFinishPass`), which an older build would ignore and cut the part to the
+    /// roughing's size.
+    public static let currentFormatVersion = 28
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
