@@ -325,6 +325,50 @@ struct TabPlan {
         z = tabZ
     }
 
+    /// A plan with these tabs: arc-length intervals along a loop `length` long, none wrapping past its end.
+    init(intervals: [(Double, Double)], length: Double, z: Double, tooShort: Bool = false) {
+        self.intervals = intervals.sorted { $0.0 < $1.0 }
+        self.length = length
+        self.z = z
+        self.tooShort = tooShort
+    }
+
+    /// The tabs `plan` puts on `reference`, carried onto `loop`: another loop round the same wall (one offset from it,
+    /// the same loop started somewhere else, run the other way or with corner reliefs added). Each tab's ends and
+    /// middle are carried across to the nearest point on `loop`, so every loop round the wall lifts over the same
+    /// stretch of it. A profile's finishing pass plans its tabs once on the finished wall and carries them onto each
+    /// roughing loop with this.
+    static func mapped(_ plan: TabPlan, from reference: Polyline, onto loop: Polyline) -> TabPlan {
+        let target = LoopWalker(loop)
+        let L = target.length
+        guard !plan.intervals.isEmpty, L > 1e-9 else {
+            return TabPlan(intervals: [], length: L, z: plan.z, tooShort: plan.tooShort)
+        }
+        let source = LoopWalker(reference)
+        func along(_ p: Vec2) -> Double {
+            let c = loop.closestPoint(to: p)
+            var s = target.cumulative[c.segment] + loop.points[c.segment].distance(to: c.point)
+            s = s.truncatingRemainder(dividingBy: L)
+            return s < 0 ? s + L : s
+        }
+        /// Forward distance from `a` to `b` round the loop.
+        func ahead(_ a: Double, _ b: Double) -> Double { let d = b - a; return d < 0 ? d + L : d }
+        var out: [(Double, Double)] = []
+        for (a, b) in plan.intervals {
+            let p = along(source.point(at: a)), q = along(source.point(at: b)), m = along(source.point(at: (a + b) / 2))
+            // The stretch from one end to the other that passes through the middle (either way round, as `loop` may run
+            // the other way from `reference`).
+            let (lo, hi) = ahead(p, m) <= ahead(p, q) ? (p, q) : (q, p)
+            if lo <= hi {
+                out.append((lo, hi))
+            } else {
+                out.append((lo, L))
+                out.append((0, hi))
+            }
+        }
+        return TabPlan(intervals: out, length: L, z: plan.z, tooShort: plan.tooShort)
+    }
+
     /// Arc length where the first tab begins, nil without tabs.
     var firstStart: Double? { intervals.first?.0 }
 

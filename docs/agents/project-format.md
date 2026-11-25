@@ -93,6 +93,7 @@ What raises it, from the code:
 | 25 | Flutes that follow a 3D model (`surfaceModelID`) |
 | 26 | Adaptive 3D roughing (`"clearing": "adaptive"`) |
 | 27 | A `cutDirection` other than the toolpath's default |
+| 28 | A profile's `finishPass` |
 
 The code names no feature for formats 11, 23 or 24. Settings that change nothing for an older build don't raise the format (`fromBottom`, `restFromEarlier`, `flatRaster`, `adjustFeedsForLoad`, `spindleSpeed`, the `layers` list).
 
@@ -274,7 +275,9 @@ Shared parts:
 
 ### profile
 
-Cuts along closed or open vectors. `side` (`outside`, `inside`, `on`), `direction`, `depth`, `allowance` (material left on the wall), `tabs` and `entry` are required. `leads` and `cornerRelief` are optional.
+Cuts along closed or open vectors. `side` (`outside`, `inside`, `on`), `direction`, `depth`, `allowance` (material left on the wall), `tabs` and `entry` are required. `leads`, `cornerRelief` and `finishPass` are optional.
+
+`finishPass` (format 28) adds a separate finishing lap per loop: the roughing stops `allowance` (mm) further off the wall, then the finish cuts it, at `depth` `fullDepth` (one lap at the cut depth) or `eachPass` (one at each roughing depth), in its own `direction` (the app's default is `conventional`), at `feedPercent` of the bit's feed (1 = 100%, 0.25–1.5), with an optional `springPass`. All five keys are required inside it: `{"allowance": 0.508, "depth": "fullDepth", "direction": "conventional", "feedPercent": 1, "springPass": false}`. Leave it out for none. `post` refuses the job (an `[error]` starting "Refused:", exit 1, nothing written) when the finish allowance is over half the bit's width, a full-depth finish is deeper than the flutes, or a loop's roughing offset doesn't fit where its finish does; fix the project rather than forcing it. It only applies to `inside` and `outside` profiles, and is skipped on tiled jobs. See `Fixtures/projects/finishing-pass-v28.nativecam` and `Fixtures/finishing-pass/`.
 
 ### pocket
 

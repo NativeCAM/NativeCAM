@@ -251,7 +251,7 @@ public struct ProfileParams: Hashable, Codable, Sendable {
     public var side: CutSide
     public var direction: CutDirection
     public var depth: DepthSettings
-    /// Material left on the wall for a later finishing pass, mm (positive = leave material).
+    /// Material left on the wall after this toolpath, finishing pass and all, mm (positive = leave material).
     public var allowance: Double
     public var tabs: TabSettings
     public var entry: EntrySettings
@@ -259,10 +259,12 @@ public struct ProfileParams: Hashable, Codable, Sendable {
     public var leads: LeadSettings?
     /// Dogbone or T-bone relief in inside corners; nil = corners stay as the bit cuts them.
     public var cornerRelief: CornerReliefSettings?
+    /// A separate finishing lap that cuts the wall to size after the roughing passes; nil = none (the default). Format 28.
+    public var finishPass: ProfileFinishPass?
 
     public init(side: CutSide = .outside, direction: CutDirection = .climb, depth: DepthSettings,
                 allowance: Double = 0, tabs: TabSettings = TabSettings(), entry: EntrySettings = EntrySettings(),
-                leads: LeadSettings? = nil, cornerRelief: CornerReliefSettings? = nil) {
+                leads: LeadSettings? = nil, cornerRelief: CornerReliefSettings? = nil, finishPass: ProfileFinishPass? = nil) {
         self.side = side
         self.direction = direction
         self.depth = depth
@@ -271,6 +273,51 @@ public struct ProfileParams: Hashable, Codable, Sendable {
         self.entry = entry
         self.leads = leads
         self.cornerRelief = cornerRelief
+        self.finishPass = finishPass
+    }
+
+    /// The project file format these settings need: a finishing pass is format 28, since an older build would ignore it
+    /// and cut the part to the roughing's size, the finish allowance fat.
+    public var requiredFormatVersion: Int { finishPass == nil ? 1 : ProfileFinishPass.formatVersion }
+}
+
+/// A profile's separate finishing pass (`ProfileParams.finishPass`): the roughing passes stop `allowance` off the
+/// wall (on top of the profile's own allowance), then a light lap per loop cuts the wall to size, entered in the kerf
+/// the roughing cut, over the same tabs.
+public struct ProfileFinishPass: Hashable, Codable, Sendable {
+    public enum Depth: String, Codable, Sendable, CaseIterable, Identifiable {
+        /// One lap at the cut depth.
+        case fullDepth
+        /// One lap at each of the roughing's pass depths (for a cut deeper than the bit's flutes).
+        case eachPass
+        public var id: String { rawValue }
+        public var label: String { self == .fullDepth ? "Full depth" : "Each pass" }
+    }
+
+    /// Material the roughing leaves on the wall for the finish to cut, mm, radial.
+    public var allowance: Double
+    public var depth: Depth
+    /// The finish's own cut direction; conventional cuts plywood and hardwood edges cleanest.
+    public var direction: CutDirection
+    /// The finish's feed as a share of the bit's feed (1 = 100%).
+    public var feedPercent: Double
+    /// A second lap at the same offset, which takes off what the bit sprang back from on the first.
+    public var springPass: Bool
+
+    public static let formatVersion = 28
+    /// The feed shares the inspector allows.
+    public static let feedRange: ClosedRange<Double> = 0.25...1.5
+
+    /// The default finish allowance: 0.02 in, or 0.5 mm in a metric project.
+    public static func defaultAllowance(for units: LengthUnit) -> Double { units == .inch ? 0.02.inch : 0.5 }
+
+    public init(allowance: Double = 0.02.inch, depth: Depth = .fullDepth, direction: CutDirection = .conventional,
+                feedPercent: Double = 1, springPass: Bool = false) {
+        self.allowance = allowance
+        self.depth = depth
+        self.direction = direction
+        self.feedPercent = feedPercent
+        self.springPass = springPass
     }
 }
 
@@ -1845,7 +1892,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`). 3D rest finishing
     /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`). Edge
     /// profiles are format 18. A chamfer with an overcut or a form bit is format 19. Constant scallop, spiral and radial
-    /// 3D finishing are format 21. Mouldings are format 22. Flutes that follow a 3D model are format 25.
+    /// 3D finishing are format 21. Mouldings are format 22. Flutes that follow a 3D model are format 25. A profile's
+    /// separate finishing pass is format 28 (`ProfileParams.requiredFormatVersion`).
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {
@@ -1862,6 +1910,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case let .rotaryRough(p): own = p.directionInUse == p.defaultDirection ? 12 : PassDirection.formatVersion
         case let .chamfer(p): own = p.needsFormat19(with: tool) ? 19 : 8
         case let .fluting(p): own = p.surfaceModelID == nil ? 8 : FlutingParams.followsModelFormat
+        case let .profile(p): own = p.requiredFormatVersion
         case .prism: own = 8
         case .edgeProfile: own = 18
         case let .vcarve(p): own = p.requiredFormatVersion

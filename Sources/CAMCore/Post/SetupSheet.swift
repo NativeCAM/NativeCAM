@@ -476,6 +476,26 @@ public enum SetupSheet {
             h += "</ul>\n"
         }
 
+        // Profiles with a finishing pass: how far the roughing stays off the wall and how the finish cuts it, so the
+        // operator knows the last lap is the one that sizes the part, and which way it runs.
+        let finishing = project.operations.compactMap { op -> (CAMOperation, ProfileFinishPass)? in
+            guard case let .profile(p) = op.kind, let f = p.finishPass, p.side != .on,
+                  job.toolpaths.contains(where: { $0.sourceOperationID == op.id && $0.finishLaps != nil }) else { return nil }
+            return (op, f)
+        }
+        if !finishing.isEmpty {
+            h += "<h2>Finishing passes</h2>\n<ul>\n"
+            for (op, f) in finishing {
+                let depth = f.depth == .fullDepth ? "at full depth" : "at each pass depth"
+                let rate = op.tool.cutting.feedRate * f.feedPercent
+                let spring = f.springPass ? ", then a spring pass round it again" : ""
+                h += "<li><b>\(esc(op.name))</b>: the roughing passes stop \(len(f.allowance)) off the wall, then a "
+                    + "<b>\(f.direction.rawValue)</b> finishing pass \(depth) cuts it to size at \(Int((f.feedPercent * 100).rounded()))% feed "
+                    + "(\(feed(rate)))\(spring). It lifts over the same tabs as the roughing.</li>\n"
+            }
+            h += "</ul>\n"
+        }
+
         // V-carve inlays: which side each toolpath cuts and the depths that make the two fit.
         let inlays = project.operations.compactMap { op -> (CAMOperation, VCarveParams, VCarveInlay)? in
             guard case let .vcarve(p) = op.kind, let inlay = p.inlay, cut.contains(op.id) else { return nil }

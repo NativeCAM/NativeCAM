@@ -8,6 +8,7 @@
 - [Toolpaths and features](#toolpaths-and-features)
 - [Edge profiles](#edge-profiles)
 - [Leads and corners](#leads-and-corners)
+- [Finishing pass](#finishing-pass)
 - [Cut direction](#cut-direction)
 - [Adaptive clearing](#adaptive-clearing)
   - [Adaptive 3D roughing](#adaptive-3d-roughing)
@@ -77,7 +78,7 @@ Load the file on your controller, zero X/Y, touch off Z and air-cut it before cu
 |---|---|
 | Stock | Material size and thickness, XY zero at any corner or the centre, Z zero on the material top or the spoilboard, safe and plunge heights, park position. Inches or millimetres. Or a round or square [rotary blank](#rotary-jobs). |
 | Depths | A profile's or pocket's cut depth and a drill's hole depth are **From top** (a plain depth below the material top), **Through** (the material's thickness plus a set amount into the spoilboard) or **Thickness −** (leaving a set amount above the material's bottom). The last two follow the thickness when you change it in Job Setup, and in a [template](#templates) applied to other material; the inspector shows which a depth is and what it cuts on this material. New profiles and drills cut **Through**, 0.02 in into the spoilboard. Projects with them open in older builds, which cut the depth for the thickness the project was saved with. |
-| Profile | Inside, outside or on the line; climb or conventional; multi-pass; ramp entry; arc or line leads in and out; dogbone or T-bone corners; tabs; allowance; holes cut before outside profiles; [feeds that follow the load](#feeds-that-follow-the-load). See [Leads and corners](#leads-and-corners). |
+| Profile | Inside, outside or on the line; climb or conventional; multi-pass; ramp entry; arc or line leads in and out; dogbone or T-bone corners; tabs; allowance; a separate [finishing pass](#finishing-pass) that cuts the wall to size; holes cut before outside profiles; [feeds that follow the load](#feeds-that-follow-the-load). See [Leads and corners](#leads-and-corners). |
 | Edge profile | A form bit's profile cut into the top edge of parts, round their outside, their holes or both, as on a router table: the pilot rides the edge, horizontal passes step in from the waste a band at a time (or vertical passes step down), then a light finishing pass. Profile depth (a step above a deeper cut), offset, rounded outside corners, leads in the waste, and each pass's feed from its own cross-section. Runs before the part's cut-out. See [Edge profiles](#edge-profiles). |
 | Pocket | Offset, raster or [adaptive](#adaptive-clearing) clearing, islands, safe feed links between regions, dogbone or T-bone corners. Inner clearing rings get rounded corners (within a set tolerance, 0.25 mm by default); the wall pass stays exact. [Rest machining](#rest-machining): a larger end mill clears the pocket first, and the pocket's own bit cuts only the corners and narrow parts it can't reach, then the walls; or it [rests from earlier toolpaths](#rest-from-earlier-toolpaths), cutting only what a larger bit's pocket before it left. With [feeds that follow the load](#feeds-that-follow-the-load) on, the first pass and the corners slow down. |
 | Drill | Peck, chip-break and dwell. Canned cycles are expanded into plain moves. |
@@ -164,6 +165,22 @@ The setup sheet lists each edge profile's edges, depth, bit and passes. Projects
 - Allowance is left in the corner too. Very sharp corners get long reliefs that reach well into both walls, so check the preview.
 - **Leave off reliefs that cut into other parts** (on by default): a relief whose bit would cut into a part another toolpath cuts, such as through a thin wall between two mortises in separate toolpaths, is left off, and **Checks** says how many and which toolpath. Turned off, the relief is cut anyway and Checks still warns. A relief that would cut into the toolpath's own nearby geometry is always left off.
 - **Corner by corner:** with the toolpath selected, each relieved corner is circled on the canvas, at the bit's position at the end of the relief. Click a circle to step that corner through dogbone, T-bone into one side, T-bone into the other, and no relief. Right-click it to pick one, or **Use Toolpath Setting** to go back. Corners you've changed are drawn in the accent colour. A relief left off because it would cut into nearby geometry or another toolpath's part gets an orange cross, and one cut into another toolpath's part anyway an orange circle; right-click either to see why. The choice belongs to the corner of its shape, so it follows the shape when you move, turn or scale it. **Corners ▸ Reset** clears them all.
+
+
+## Finishing pass
+
+**Profile ▸ Finishing pass ▸ Add finishing pass** cuts the wall to size with one light lap after the roughing, for a cleaner, truer edge on plywood and hardwood cut-outs: the roughing passes leave fuzz, tool marks and a slight taper where the bit deflects, and the finish takes them off. It's for inside and outside profiles, and it's off unless you turn it on.
+
+- **Finish allowance** (0.02 in, or 0.5 mm) is how far off the wall the roughing passes stop; the finish cuts it. The profile's own **Allowance** still means what's left after the whole toolpath, finish and all, so leave it at 0 to cut the part to size.
+- **Finish depth.** **Full depth** cuts one lap at the cut depth. **Each pass** cuts one at each of the roughing's depths, for a cut deeper than the bit's flutes.
+- **Finish direction** is the finish's own, **Conventional** by default, which usually leaves the cleanest edge on wood. The roughing keeps the profile's **Direction**. The setup sheet says which way the finish runs.
+- **Finish feed** is a share of the bit's feed (100% by default, 25–150%); the inspector shows the feed it comes to. The chip-load check reads it, so a slow finish that would rub is warned about. **Adjust feeds for load** leaves the finishing laps at their feed.
+- **Spring pass** runs the finishing lap a second time at the same size, for what the bit sprang back from on the first.
+- **Order.** Each loop is finished right after its roughing passes, so holes are still finished before the outside, while the part is held.
+- **Tabs** are placed once, on the finished wall, and every lap, roughing and finish, lifts over the same stretch of it, so the finish never cuts through a tab the roughing left.
+- **Entry.** The finish plunges in the kerf the roughing cut, off the tabs, and never ramps. Its leads are the profile's, cut down to fit the kerf (it's only the finish allowance wide); without leads it comes in on a short automatic arc. When no lead fits, it plunges on the wall and **Checks** says so.
+- **Refused or skipped.** A finish allowance over a third of the bit's width is warned about, and over half of it the toolpath is refused (the finish would be a full-depth slot). A full-depth finish deeper than the bit's flutes is refused: use **Each pass**. A loop where the roughing's offset doesn't fit (a hole only just bigger than the bit) is refused, since the finish would cut a full-width slot there. A refusal is an error in **Checks**, so the job isn't exported until it's fixed. **On** profiles, dovetail and other undercut bits, and tiled jobs skip the finish with a warning.
+- A profile with a finishing pass is saved as format 28, which older builds refuse to open (they'd cut the part a finish allowance oversize).
 
 ## Cut direction
 

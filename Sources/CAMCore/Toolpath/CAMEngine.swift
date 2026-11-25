@@ -378,6 +378,7 @@ public enum CAMEngine {
                     }
                     if layout != nil {
                         // Checked and kept tile by tile instead.
+                        issues.append(contentsOf: (tp.errors ?? []).map { JobIssue(.error, $0, operation: tp.name) })
                         issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
                         issues.append(contentsOf: (tp.notes ?? []).map { JobIssue(.info, $0, operation: tp.name) })
                         if tp.cuttingExtents == nil, !tp.motions.isEmpty || tp.warnings.isEmpty {
@@ -410,6 +411,7 @@ public enum CAMEngine {
                     let (scheduled, notes) = FeedScheduler.apply(tp, operation: op, uncut: uncut, wrapped: wrap != nil, project: project)
                     tp = scheduled
                     issues.append(contentsOf: notes)
+                    issues.append(contentsOf: (tp.errors ?? []).map { JobIssue(.error, $0, operation: tp.name) })
                     issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
                     issues.append(contentsOf: (tp.notes ?? []).map { JobIssue(.info, $0, operation: tp.name) })
                     issues.append(contentsOf: validate(tp, operation: op, project: project))
