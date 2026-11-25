@@ -168,6 +168,46 @@ struct TilingRegistrationTests {
         #expect(html.contains(">8</text>"))
     }
 
+    /// The sheet's dowel steps are the stop's: fit the dowels in the holes it names, clamp, then resume at the stop.
+    /// Nothing tells the operator to pull the dowels the stop then asks for (#144).
+    @Test func gridSheetsDowelTextMatchesTheStop() throws {
+        let p = Self.gridSheet()
+        let job = CAMEngine.generate(p)
+        let html = SetupSheet.html(project: p, job: job, gcodeFile: "Grid sheet.tap", date: GoldenPostTests.date)
+        #expect(!html.contains("flush") && !html.contains("pull them"), "the dowels stay in while the tile cuts")
+        let stops = (job.tiling?.tiles ?? []).compactMap { $0.first?.spindleOffStop }
+        let stop = try #require(stops.first { $0.contains("fit dowels in holes 1 and 2") }, "\(stops)")
+        #expect(stop.hasSuffix("spindle off: fit dowels in holes 1 and 2, see the setup sheet, clamp the material, then resume."), "\(stop)")
+        #expect(html.contains("Line holes 1 and 2 (tile 1 drilled them) up over the spoilboard holes: 1 at X "))
+        #expect(html.contains("Start the file: it stops at its start, spindle off, and names them. At the stop, fit a 0.250 in "
+            + "dowel in each, through into the spoilboard hole under it, clamp the material, then resume."), "\(html)")
+        #expect(html.contains("Imported Vectric (.pp) posts don't write that stop: with one, fit the dowels before starting each tile."))
+    }
+
+    /// With an imported Vectric post, which writes no stop, the sheet has the dowels fitted before each file starts.
+    @Test func gridSheetWithAVectricPostFitsTheDowelsFirst() throws {
+        let p = Self.gridSheet { p in p.machine.customPost = try? VectricPost.parse(VectricPostTests.mach4Style) }
+        try #require(p.machine.customPost != nil)
+        let job = CAMEngine.generate(p)
+        let html = SetupSheet.html(project: p, job: job, gcodeFile: "Grid sheet.tap", date: GoldenPostTests.date)
+        #expect(html.contains("This machine's imported Vectric post doesn't write the stop NativeCAM's own posts make at the start of each tile's file to name the holes its dowels go in: fit the dowels before starting each tile."))
+        #expect(html.contains("Before starting the file, fit a 0.250 in dowel in each, through into the spoilboard hole under it, "
+            + "then clamp the material. (This machine's imported Vectric post doesn't write the stop that names them.)"), "\(html)")
+        #expect(!html.contains("At the stop,"))
+        // Indeed no stop: the imported post leaves it out.
+        let file = VectricTemplatePost(project: p, pp: p.machine.customPost!, date: GoldenPostTests.date).post(job.toolpaths)
+        #expect(!file.contains("fit dowels"), "\(file.prefix(400))")
+    }
+
+    /// A white page, so a dark-mode web view doesn't draw the sheet's dark text on dark (#144); print styles unchanged.
+    @Test func setupSheetHasAWhiteBackground() throws {
+        let p = Self.gridSheet()
+        let html = SetupSheet.html(project: p, job: CAMEngine.generate(p), date: GoldenPostTests.date)
+        #expect(html.contains("body { font: 13px/1.4 -apple-system, \"Helvetica Neue\", sans-serif; color: #111; background: #fff; margin: 24px; }"))
+        #expect(html.contains("@media print { body { margin: 0; } h2 { break-after: avoid; } tr { break-inside: avoid; } "
+            + "section.tile { border-top: none; margin-top: 0; } }"))
+    }
+
     /// A part over a hole's spot: the hole slides along its tile line to clear it, and Checks says so.
     @Test func aPartOverARegistrationSpotMovesTheHole() throws {
         // A button centred where hole 2 (tile 1's second for tile 2, 11 in up the vertical tile line) would go.

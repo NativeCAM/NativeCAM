@@ -57,7 +57,10 @@ public struct AutomaticSpindle: Hashable, Codable, Sendable {
     /// True when the chip at the picked speed is outside what the chip-load check accepts.
     public var outOfRange: Bool { chip < rangeLow * floorShare - 1e-12 || chip > rangeHigh * 1.25 + 1e-12 }
 
-    private static func rpmText(_ v: Double) -> String { "\(Int(v.rounded()).formatted()) RPM" }
+    /// A speed as the posts write it: whole RPM, as in `S\(Int(rpm.rounded()))`.
+    fileprivate static func rpmText(_ v: Double) -> String { "\(Int(v.rounded()).formatted()) RPM" }
+    /// The speed the chart's chip would need, rounded to 100 RPM as the speed picked is: "about 30,500 RPM".
+    private var wantedText: String { "about \(Self.rpmText((wanted / 100).rounded() * 100))" }
     private static func chipText(_ mm: Double) -> String { String(format: "%.4f in", mm / LengthUnit.mmPerInch) }
 
     /// Why this speed, in a sentence: the feed it's for and what held it.
@@ -69,11 +72,11 @@ public struct AutomaticSpindle: Hashable, Codable, Sendable {
         case nil:
             s += ", the chart's target for this bit"
         case .spindleMaximum:
-            s += ": the chart's chip would need \(Self.rpmText(wanted)), past the spindle's fastest"
+            s += ": the chart's chip would need \(wantedText), past the spindle's fastest"
         case .spindleMinimum:
-            s += ": the chart's chip would need \(Self.rpmText(wanted)), below the spindle's slowest"
+            s += ": the chart's chip would need \(wantedText), below the spindle's slowest"
         case .bitLimit:
-            s += ": the chart's chip would need \(Self.rpmText(wanted)), past this bit's speed limit"
+            s += ": the chart's chip would need \(wantedText), past this bit's speed limit"
         }
         if depthShare < 1 - 1e-9 { s += ", with the chip cut to \(Int((100 * depthShare).rounded()))% for the pass depth" }
         return s + "."
@@ -86,9 +89,9 @@ public struct AutomaticSpindle: Hashable, Codable, Sendable {
         let thin = chip < rangeLow
         var s = "Automatic spindle speed can't keep the chip in the chart's \(range) range: "
         switch limit {
-        case .spindleMaximum: s += "it needs \(Self.rpmText(wanted)), and the spindle tops out at \(Self.rpmText(rpm))"
-        case .spindleMinimum: s += "it needs \(Self.rpmText(wanted)), and the spindle turns no slower than \(Self.rpmText(rpm))"
-        case .bitLimit: s += "it needs \(Self.rpmText(wanted)), and this bit is rated to \(Self.rpmText(rpm))"
+        case .spindleMaximum: s += "it needs \(wantedText), and the spindle tops out at \(Self.rpmText(rpm))"
+        case .spindleMinimum: s += "it needs \(wantedText), and the spindle turns no slower than \(Self.rpmText(rpm))"
+        case .bitLimit: s += "it needs \(wantedText), and this bit is rated to \(Self.rpmText(rpm))"
         case nil: s += "at \(Self.rpmText(rpm))"
         }
         s += ", so the chip is \(Self.chipText(chip))"
@@ -98,7 +101,26 @@ public struct AutomaticSpindle: Hashable, Codable, Sendable {
     }
 }
 
+public extension AutomaticSpindle {
+    /// What Spindle ▸ Automatic does with `tool` when no chip-load chart covers it (a V-bit, an engraving bit, a drill):
+    /// it keeps the tool's own speed, which the toolpath then posts. nil when a chart covers it and a speed is picked.
+    static func keepsToolRPMNote(for tool: Tool) -> String? {
+        guard !ChipLoad.applies(to: tool) || tool.fluteCount <= 0 else { return nil }
+        return "No chip-load chart covers a \(tool.shape.label.lowercased()), so Automatic keeps the tool's "
+            + "\(rpmText(tool.cutting.spindleRPM)) for this toolpath."
+    }
+}
+
 public extension ChipLoad {
+    /// The feed per tooth (mm, before radial thinning) the inspector shows under the bit picture and in the Chip load
+    /// row, so both are at the speed that will be posted: at Spindle ▸ Automatic's speed `automaticRPM`, the tool's feed
+    /// held to the machine's cutting cap over that speed (as `AutomaticSpindle.chip` works it out), else the tool's own
+    /// `Tool.chipLoad` at its RPM.
+    static func feedPerTooth(_ tool: Tool, machine: MachineProfile, automaticRPM: Double?) -> Double {
+        guard let rpm = automaticRPM, rpm > 0 else { return tool.chipLoad }
+        return min(tool.cutting.feedRate, machine.maxFeedRate) / (rpm * Double(max(1, tool.fluteCount)))
+    }
+
     /// Spindle ▸ Automatic: the speed that puts `tool`'s chip at the chart's target (`Reading.target`) at `feed` mm/min
     /// held to the machine's cutting cap, rounded to 100 RPM, within the spindle's range and never past a router bit's
     /// speed limit (unless the spindle can't turn that slowly, which the chip-load check warns about). `thinning`,

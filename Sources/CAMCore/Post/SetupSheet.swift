@@ -19,7 +19,7 @@ public enum SetupSheet {
         <!doctype html>
         <html lang="en"><head><meta charset="utf-8"><title>\(esc(title)) setup sheet</title>
         <style>
-        body { font: 13px/1.4 -apple-system, "Helvetica Neue", sans-serif; color: #111; margin: 24px; }
+        body { font: 13px/1.4 -apple-system, "Helvetica Neue", sans-serif; color: #111; background: #fff; margin: 24px; }
         h1 { font-size: 20px; margin: 0 0 2px; } h2 { font-size: 15px; margin: 22px 0 6px; }
         .sub { color: #555; margin-bottom: 14px; }
         table { border-collapse: collapse; width: 100%; } th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #ddd; vertical-align: top; }
@@ -206,6 +206,7 @@ public enum SetupSheet {
             <dt>XY zero</dt><dd>\(esc(stock.xyOrigin.label)) of the tile, \(len(layout.pitch.x)) × \(len(layout.pitch.y)): the same place on the machine for every tile</dd>
             <dt>Z zero</dt><dd>\(esc(stock.zZero.label))</dd>
             <dt>Safe Z</dt><dd>\(len(stock.clearanceHeight)) above the material</dd>
+            \(Self.gridDowelStopRow(layout, machine: project.machine))
             """
         } else {
             setupRows = """
@@ -617,7 +618,7 @@ public enum SetupSheet {
         }
         h += "<dt>Before it</dt><dd>\(esc(moveText(layout, to: k, stock: stock, len: len)))</dd>\n"
         if let reg = layout.registration, !reg.holes.isEmpty {
-            h += gridRegistration(reg, tile: k, layout: layout, work: work, len: len)
+            h += gridRegistration(reg, tile: k, layout: layout, machine: project.machine, work: work, len: len)
         } else if let reg = layout.registration {
             let dowels = reg.dowels[k], drilled = reg.drilled[k]
             if !dowels.isEmpty {
@@ -662,9 +663,23 @@ public enum SetupSheet {
         return s.count < 2 ? s.joined() : s.dropLast().joined(separator: ", ") + " and " + s[s.count - 1]
     }
 
-    /// Individual tiles: the numbered holes a tile stands on dowels through, and the ones it drills.
-    static func gridRegistration(_ reg: RegistrationLayout, tile k: Int, layout: TileLayout, work: (Vec2) -> String,
-                                 len: (Double) -> String) -> String {
+    /// Individual tiles with registration holes: the job-wide row about the stop at the start of each tile's file
+    /// (`TileSplitter.pinMessage`), which an imported Vectric post doesn't write. Empty for other tiling.
+    static func gridDowelStopRow(_ layout: TileLayout, machine: MachineProfile) -> String {
+        guard layout.mode == .grid, let reg = layout.registration, !reg.holes.isEmpty else { return "" }
+        if machine.customPost != nil {
+            return "<dt>Dowels</dt><dd>This machine's imported Vectric post doesn't write the stop NativeCAM's own posts make "
+                + "at the start of each tile's file to name the holes its dowels go in: fit the dowels before starting each tile.</dd>"
+        }
+        return "<dt>Dowels</dt><dd>Each tile's file but the first stops at its start, spindle off, to name the holes its "
+            + "dowels go in. Imported Vectric (.pp) posts don't write that stop: with one, fit the dowels before starting each tile.</dd>"
+    }
+
+    /// Individual tiles: the numbered holes a tile stands on dowels through, and the ones it drills. The dowel wording
+    /// follows the file's stop (`TileSplitter.pinMessage`): fit the dowels, clamp, then resume; with an imported Vectric
+    /// post, which writes no stop, before starting.
+    static func gridRegistration(_ reg: RegistrationLayout, tile k: Int, layout: TileLayout, machine: MachineProfile,
+                                 work: (Vec2) -> String, len: (Double) -> String) -> String {
         var h = ""
         let tile = layout.tiles[k]
         let pinned = reg.holes.filter { $0.pinnedFor == k }
@@ -673,9 +688,14 @@ public enum SetupSheet {
             let groups = Dictionary(grouping: pinned, by: \.drilledBy).sorted { $0.key < $1.key }
             let which = groups.map { "\(numberList($0.value.map(\.number))) (tile \($0.key + 1) drilled \($0.value.count == 1 ? "it" : "them"))" }
             let at = pinned.map { "\($0.number) at \(work($0.point - tile.offset))" }
-            h += "<dt>Dowels</dt><dd>Line holes \(which.joined(separator: " and ")) up over the spoilboard holes and drop a "
-                + "\(len(2 * reg.radius)) dowel through each: \(at.joined(separator: ", ")). Clamp the material, then tap the "
-                + "dowels flush or pull them out before starting. The file stops at its start to name them.</dd>\n"
+            let dowel = "fit a \(len(2 * reg.radius)) dowel in each, through into the spoilboard hole under it"
+            let steps = machine.customPost != nil
+                ? "Before starting the file, \(dowel), then clamp the material. (This machine's imported Vectric post doesn't "
+                    + "write the stop that names them.)"
+                : "Start the file: it stops at its start, spindle off, and names them. At the stop, \(dowel), clamp the "
+                    + "material, then resume."
+            h += "<dt>Dowels</dt><dd>Line holes \(which.joined(separator: " and ")) up over the spoilboard holes: "
+                + "\(at.joined(separator: ", ")). \(steps)</dd>\n"
         }
         let own = reg.numbered(drilledBy: k)
         var what: [String] = []
