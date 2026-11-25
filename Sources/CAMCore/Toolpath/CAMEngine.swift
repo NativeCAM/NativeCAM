@@ -874,10 +874,17 @@ public enum CAMEngine {
         // sheet's top or the blank's surface (#139).
         var reach = deepest
         if case let .fluting(f) = op.kind, f.surfaceModelID != nil { reach = f.depth }
+        // Past the flutes the shank rubs, which is worth a clear warning; past the stickout a 2.5D cut drives the collet
+        // nut into the stock, which is an error (#151). A 3D surface can fall away from the collet, so there it stays the
+        // warning.
         if op.kind.is3D && op.kind.turnsWholeBlank {
+        } else if !op.kind.is3D, reach > tp.tool.stickout + 1e-6 {
+            issues.append(JobIssue(.error, "Depth \(fmt(reach)) is more than \(tp.tool.name) sticks out of the collet "
+                + "(\(fmt(tp.tool.stickout))), so the collet nut would hit the stock. Cut shallower, or let the bit out "
+                + "further and set its stickout.", operation: tp.name))
         } else if reach > tp.tool.fluteLength + 1e-6 {
-            issues.append(JobIssue(.warning, "Depth \(fmt(reach)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))).",
-                                   operation: tp.name))
+            issues.append(JobIssue(.warning, "Depth \(fmt(reach)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))), "
+                + "so the shank rubs below the flutes.", operation: tp.name))
         }
         // On rotary stock the chuck and tailstock are past the ends of the blank: the whole cutter stays inside it.
         if stock.rotary != nil, ext.min.x < tp.tool.radius - 1e-6 || ext.max.x > stock.width - tp.tool.radius + 1e-6 {
