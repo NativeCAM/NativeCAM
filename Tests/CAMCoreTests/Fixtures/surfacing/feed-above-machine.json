@@ -1,0 +1,1 @@
+{"note":"A bit fed faster than the machine's highest feed is refused, not clamped.","tool":{"diameter":1.25,"fluteLength":0.25,"shape":"surfacing","feed":500},"expect":"refused","text":"is above the machine's highest feed of 400 in/min"}

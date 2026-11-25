@@ -1,0 +1,1 @@
+{"note":"A custom board whose overshoot would come within the 1/4 in margin of the travel is refused, with the length to shorten it to.","area":[60,24],"expect":"refused","text":"more than the 60.875 in of travel left with 0.25 in kept clear of each limit. Shorten the overshoot to 0.437 in"}

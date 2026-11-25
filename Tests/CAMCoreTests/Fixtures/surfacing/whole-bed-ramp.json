@@ -1,0 +1,1 @@
+{"note":"The whole bed has no room past the edges: no overshoot (every move 1/4 in inside the travel), and it ramps in over twice the bit diameter.","expect":"ok","entry":"ramp","ramp":2.5}

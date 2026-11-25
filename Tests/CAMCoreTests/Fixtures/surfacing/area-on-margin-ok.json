@@ -1,0 +1,1 @@
+{"note":"A board whose lines with their full overshoot end exactly on the 1/4 in margin (59.375 + 2 × 0.75 = 60.875 in): cut, no warnings.","area":[59.375,24],"expect":"ok","entry":"offEdge"}

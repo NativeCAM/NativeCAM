@@ -1,0 +1,1 @@
+{"note":"0.1 in off a 0.55 in board would leave less than 1/2 in: refused.","depth":0.05,"passes":2,"board":0.55,"expect":"refused","text":"leaves 0.45 in, less than 0.5 in"}

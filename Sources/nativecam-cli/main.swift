@@ -46,6 +46,17 @@ import Foundation
 //                                                      speed to the measured times, print each value before and after
 //                                                      and the F-change and G93 verdicts; --apply writes the fitted values
 //                                                      into the project's machine (in place unless -o)
+//   nativecam-cli surface [project.nativecam] [--area bed|WxH] [--inset x] [--bit n] [--stepover 50] [--depth d] [--passes n]
+//                     [--along x|y] [--one-way] [--overshoot x] [--clamp-overshoot] [--clearance z] [--board t]
+//                     [--controller c] [--units inch|mm] [-o file] [--no-air-cut]
+//                                                      write a spoilboard surfacing program for the project's machine
+//                                                      (Avid's PRO6060 without one): the whole bed (the travel less the
+//                                                      inset) or a WxH board, with the starter surfacing bit unless --bit
+//                                                      names a tool in the project or the starter library. Z zero is the
+//                                                      top of the spoilboard, XY zero the area's front-left corner. Also
+//                                                      writes an air-cut copy (file-air.tap) unless --no-air-cut. Lengths
+//                                                      are in the G-code's units; stepover in percent. A refusal or a
+//                                                      failed check exits 1 and writes nothing
 //   nativecam-cli machine <settings> [--apply project.nativecam [-o out.nativecam]]
 //                                                      read machine limits from Grbl $$, Mach4 Machine.ini, LinuxCNC
 //                                                      INI, FluidNC YAML or Fusion .mch; optionally apply to a project
@@ -389,6 +400,88 @@ case "calibrate":
         print("  Rung \(r.number): \(Calibration.feed(r.feed, u)) at \(Int(r.rpm)) RPM, \(Calibration.chipText(r.chipLoad, u)), \(r.chart.label.lowercased())")
     }
     print("Moves take about \(formatTime(program.estimatedSeconds))\(kind == .ladder ? "" : ", plus the stops")")
+
+case "surface":
+    // A standalone spoilboard surfacing program, checked, with an air-cut copy. The project (if any) only lends its machine
+    // and tools; it isn't changed.
+    let rest = Array(args.dropFirst())
+    let loaded = rest.first { $0.hasSuffix(".nativecam") }.map(loadProject)
+    var machine = loaded?.machine ?? MachineProfile()
+    if let family = option("--controller", in: args) {
+        machine.controller = ControllerProfile(family: ControllerFamily(rawValue: family), sender: option("--sender", in: args))
+        machine.model = .custom
+    }
+    if let units = option("--units", in: args) { machine.outputUnits = units == "mm" ? .mm : .inch }
+    let u = machine.outputUnits
+    func length(_ name: String) -> Double? {
+        guard let text = option(name, in: args) else { return nil }
+        guard let v = Double(text), v >= 0 else { fail("\(name) takes a length in \(u.symbol)") }
+        return u.toMM(v)
+    }
+    var tool = Surfacing.starterBit
+    if let text = option("--bit", in: args) {
+        let number = Int(text.uppercased().trimmingCharacters(in: CharacterSet(charactersIn: "T"))) ?? -1
+        let projectTools = loaded?.operations.map(\.tool) ?? []
+        guard let t = projectTools.first(where: { $0.number == number }) ?? ToolLibrary.starter.tool(number: number) else {
+            fail("--bit \(text): no such tool in the project or the starter library")
+        }
+        tool = t
+    }
+    var options = Surfacing.Options.defaults(u, tool: tool)
+    if let text = option("--area", in: args), text.lowercased() != "bed" {
+        let parts = text.lowercased().split(separator: "x").compactMap { Double($0) }
+        guard parts.count == 2, parts.allSatisfy({ $0 > 0 }) else { fail("--area takes bed or a width and height, e.g. 24x36, in \(u.symbol)") }
+        options.area = .custom(Vec2(u.toMM(parts[0]), u.toMM(parts[1])))
+    }
+    if let text = option("--stepover", in: args) {
+        guard let v = Double(text.trimmingCharacters(in: CharacterSet(charactersIn: "%"))) else { fail("--stepover takes a percentage, e.g. 50") }
+        options.stepover = v / 100
+    }
+    if let d = length("--depth") { options.depth = d }
+    if let text = option("--passes", in: args) {
+        guard let n = Int(text) else { fail("--passes takes a whole number") }
+        options.passes = n
+    }
+    if let text = option("--along", in: args) {
+        guard let a = Surfacing.Along(rawValue: text.lowercased()) else { fail("--along takes x or y") }
+        options.along = a
+    }
+    if args.contains("--one-way") { options.direction = .oneWay }
+    options.overshoot = length("--overshoot")
+    options.inset = length("--inset")
+    options.clampOvershoot = args.contains("--clamp-overshoot")
+    if let c = length("--clearance") { options.clearance = c }
+    options.boardThickness = length("--board")
+    let program: Surfacing.Program
+    do {
+        program = try Surfacing.program(machine: machine, options: options)
+    } catch {
+        fail("Not written: \(error.localizedDescription)")
+    }
+    for issue in program.issues { print("[\(issue.severity.rawValue)] \(issue.text)") }
+    for issue in program.airIssues { print("[\(issue.severity.rawValue)] Air cut: \(issue.text)") }
+    if !program.passedChecks { fail("Not written: the surfacing program failed its checks.") }
+    let path = option("-o", in: args) ?? program.fileName
+    let stem = (path as NSString).deletingPathExtension
+    let ext = (path as NSString).pathExtension.isEmpty ? program.fileExtension : (path as NSString).pathExtension
+    let gcodePath = stem + "." + ext, airPath = stem + "-air." + ext
+    let air = !args.contains("--no-air-cut")
+    do {
+        try program.gcode.write(toFile: gcodePath, atomically: true, encoding: .ascii)
+        if air { try program.airGCode.write(toFile: airPath, atomically: true, encoding: .ascii) }
+    } catch {
+        fail("Can't write: \(error.localizedDescription)")
+    }
+    let plan = program.plan
+    print("\(program.dialect.name) spoilboard surfacing -> \(gcodePath)")
+    if air { print("Air cut (Z raised \(Calibration.length(Surfacing.airHeight(u), u))) -> \(airPath)") }
+    print("  \(Calibration.size(plan.area, u)), \(plan.lines.count) lines \(options.along == .x ? "along X" : "along Y") "
+        + "\(Calibration.length(plan.spacing, u)) apart, \(options.direction.label.lowercased()), "
+        + "\(options.passes) x \(Calibration.length(options.depth, u)) = \(Calibration.length(plan.totalDepth, u)) deep")
+    print("  \(tool.name): \(Calibration.feed(plan.feed, u)), \(Int(plan.rpm)) RPM; overshoot \(Calibration.length(plan.overshoot, u)), "
+        + "entry: \(plan.entry == .ramp ? "ramp of \(Calibration.length(plan.rampLength, u))" : "plunge past the edge")")
+    for line in program.setup.prefix(2) { print("  " + line) }
+    print("Estimated run time: \(formatTime(program.estimatedSeconds))")
 
 case "machine":
     // Read machine limits from a controller's settings ($$ dump, Machine.ini, LinuxCNC INI, FluidNC YAML, Fusion .mch).

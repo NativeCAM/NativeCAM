@@ -36,6 +36,11 @@ import UniformTypeIdentifiers
 /// Calibration Programs… does (to `calibration/` in the output folder), logs their checks, draws the sheet's Programs tab
 /// (calibration-programs.png), fits times made up from slower settings and draws the Enter Times tab with the fit
 /// (calibration-fit.png).
+///
+/// With `-NativeCAMSnapshotSurfacing YES` it builds File ▸ Surface Spoilboard…'s program for the project's machine (whole
+/// bed, then a 24 × 36 in board along Y, one way), saves both to `surfacing/` in the output folder as the sheet does, logs
+/// each one's plan and checks, and draws the sheet (surfacing-sheet.png, surfacing-sheet-custom.png) and a refusal
+/// (surfacing-sheet-refused.png).
 enum DebugSnapshot {
     static var requested: (project: String, outDir: String)? {
         let d = UserDefaults.standard
@@ -84,6 +89,9 @@ enum DebugSnapshot {
         }
         if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotCalibration") {
             calibration(project, out: out, log: log, spin: spin)
+        }
+        if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotSurfacing") {
+            surfacing(project, out: out, log: log, spin: spin)
         }
         if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotRestart") {
             restart(project, out: out, log: log, spin: spin)
@@ -404,6 +412,43 @@ enum DebugSnapshot {
                 + "\(files.count) files (\(files.compactMap(\.suffix).joined(separator: ",")))\(inTravel ? ", each in travel" : ", one past the travel")")
         }
         return applied.project
+    }
+
+    /// File ▸ Surface Spoilboard… for the project's machine: the whole bed, a custom board along Y one way, and a refusal.
+    @MainActor
+    private static func surfacing(_ project: Project, out: URL, log: (String) -> Void, spin: (Double) -> Void) {
+        let machine = project.machine, u = machine.outputUnits
+        let tools = ToolLibraryStore.shared.tools
+        let folder = out.appendingPathComponent("surfacing", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var custom = SurfacingSheet.Settings()
+        custom.wholeBed = false
+        custom.width = 24.inch
+        custom.height = 36.inch
+        custom.along = .y
+        custom.direction = .oneWay
+        var refused = SurfacingSheet.Settings()
+        refused.wholeBed = false
+        refused.width = machine.travel.x - 1.inch
+        refused.height = 24.inch
+        for (name, settings) in [("surfacing-sheet", SurfacingSheet.Settings()), ("surfacing-sheet-custom", custom),
+                                 ("surfacing-sheet-refused", refused)] {
+            let tool = Surfacing.bits(tools).first { $0.number == settings.toolNumber } ?? Surfacing.bits(tools)[0]
+            let options = SurfacingSheet.options(settings, tool: tool, units: u)
+            do {
+                let program = try Surfacing.program(machine: machine, options: options)
+                let plan = program.plan
+                log("surfacing \(name): \(Calibration.size(plan.area, u)), \(plan.lines.count) lines, \(plan.entry), "
+                    + "about \(Surfacing.time(program.estimatedSeconds)), passed checks: \(program.passedChecks)")
+                for issue in program.issues + program.airIssues { log("surfacing \(name) \(issue.severity.rawValue): \(issue.text)") }
+                let saved = SurfacingSheet.write(program, to: folder.appendingPathComponent(program.fileName), airCut: true)
+                log("surfacing saved: \(saved.written.joined(separator: ", "))")
+            } catch {
+                log("surfacing \(name) refused: \(error.localizedDescription)")
+            }
+            render(SurfacingSheet(machine: machine, tools: tools, settings: settings, height: 1300, bedClear: name == "surfacing-sheet"),
+                   size: NSSize(width: 640, height: 1300), out: out, name: name + ".png", spin: spin)
+        }
     }
 
     /// File ▸ Calibration Programs… for the project's machine: saves the programs as the sheet does (to `out/calibration`),

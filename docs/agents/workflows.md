@@ -440,6 +440,21 @@ The human says a job stopped partway. A restart file is the rest of the job from
 4. Check the header the file starts with: the toolpath and pass, the line's text (the human compares it with the controller's screen), the tool to load and, on a rotary job, the A reading expected.
 5. Hand over the restart file with the header's advice: re-home and check the XY zero after a power cut or E-stop, re-zero Z at the tool change, and jog Z clear before Cycle Start. Offer an air cut of the restart (`--air-cut`) for its first run. **The human runs it.** Restarts haven't been run on a real machine yet.
 
+## 11. Surface the spoilboard
+
+The human asks for a spoilboard surfacing program. It's a standalone file, not a toolpath in a project (see [Command line](cli.md#surface)).
+
+1. **Ask** what to surface: the whole bed, or a board's size. Ask for the board's thickness if they know it, and whether they want to read tram (one way, 90% stepover, a small area, 0.01 in deep). Don't guess where the machine homes.
+2. Write it from their project, so it gets their machine and tools:
+
+   ```bash
+   $CLI surface shop.nativecam -o surface.tap                                   # whole bed
+   $CLI surface shop.nativecam --area 24x36 --board 0.75 -o board.tap           # a board
+   ```
+
+3. Read every line. `Not written: …` (exit 1) is a refusal: change the settings (a shallower pass, a smaller area, `--clamp-overshoot` if they accept a bit that doesn't clear the ends) or tell the human why. Never get around one with a different bit's made-up dimensions.
+4. Hand over the program and its `-air` copy with the header's instructions: Z zero on the top of the spoilboard with the touch plate on the board, XY zero at the area's front-left corner, every clamp off and every screw head at least 1/8 in below the cut, the air cut first. **The human runs it.** Say that it hasn't been run on a real machine yet.
+
 ## Every recipe: the hand-over
 
 Give the human:

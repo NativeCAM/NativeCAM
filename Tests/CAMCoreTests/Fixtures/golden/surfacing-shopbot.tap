@@ -1,0 +1,78 @@
+'Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board}
+'XY ZERO: the front-left corner of the 12 x 12 in board.
+'NATIVECAM SPOILBOARD SURFACING: 12 x 12 in, 1 pass of 0.02 in {0.02 in in all} with 1-1/4in
+'Surfacing Bit, 21 lines along X 0.6 in apart, both ways.
+'BED CLEAR: remove every clamp. Every screw head and T-nut must sit at least 0.125 in below the cut.
+'Set the dust shoe high enough for the surfacing bit's collet and the 0.5 in clearance.
+'Re-zero Z on the board before every run: each run takes 0.02 in off the surface it is zeroed on.
+'Runs about 2 min.
+'NativeCAM spoilboard surfacing
+'Post: ShopBot OpenSBP - NativeCAM 0.1
+'Created: 2027-01-15 08:00
+'Material: Spoilboard X12.0000 Y12.0000 Z0.7500 in
+'Z zero: Material top  XY zero: Lower left
+'T8 1-1/4in Surfacing Bit
+IF %(25)=1 THEN GOTO UNIT_ERROR
+SA
+JS,13.333,6.667
+'Load T8 1-1/4in Surfacing Bit and zero Z before starting
+TR,12000
+C6
+PAUSE 3.00
+'Surface spoilboard T8
+JZ,0.5000
+J2,-0.7500,0.0000
+MS,0.333,0.333
+MZ,-0.0200
+MS,2.500,0.333
+M2,12.7500,0.0000
+M2,12.7500,0.6000
+M2,-0.7500,0.6000
+M2,-0.7500,1.2000
+M2,12.7500,1.2000
+M2,12.7500,1.8000
+M2,-0.7500,1.8000
+M2,-0.7500,2.4000
+M2,12.7500,2.4000
+M2,12.7500,3.0000
+M2,-0.7500,3.0000
+M2,-0.7500,3.6000
+M2,12.7500,3.6000
+M2,12.7500,4.2000
+M2,-0.7500,4.2000
+M2,-0.7500,4.8000
+M2,12.7500,4.8000
+M2,12.7500,5.4000
+M2,-0.7500,5.4000
+M2,-0.7500,6.0000
+M2,12.7500,6.0000
+M2,12.7500,6.6000
+M2,-0.7500,6.6000
+M2,-0.7500,7.2000
+M2,12.7500,7.2000
+M2,12.7500,7.8000
+M2,-0.7500,7.8000
+M2,-0.7500,8.4000
+M2,12.7500,8.4000
+M2,12.7500,9.0000
+M2,-0.7500,9.0000
+M2,-0.7500,9.6000
+M2,12.7500,9.6000
+M2,12.7500,10.2000
+M2,-0.7500,10.2000
+M2,-0.7500,10.8000
+M2,12.7500,10.8000
+M2,12.7500,11.4000
+M2,-0.7500,11.4000
+M2,-0.7500,12.0000
+M2,12.7500,12.0000
+JZ,0.5000
+JZ,1.0000
+J2,0.0000,0.0000
+C7
+END
+
+UNIT_ERROR:
+'This file is in inches; set ShopBot to inches and run it again.
+PAUSE
+END

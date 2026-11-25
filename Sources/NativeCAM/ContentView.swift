@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var pendingTemplate: PendingTemplate?
     @State private var nesting: NestRequest?
     @State private var calibrating = false
+    @State private var surfacing = false
     @Environment(ToolLibraryStore.self) private var library
     @Environment(\.openWindow) private var openWindow
 
@@ -99,6 +100,9 @@ struct ContentView: View {
         .sheet(isPresented: $calibrating) {
             CalibrationSheet(project: project, tools: library.tools) { fit, toLibrary in applyCalibration(fit, toLibrary: toLibrary) }
         }
+        .sheet(isPresented: $surfacing) {
+            SurfacingSheet(machine: project.machine, tools: library.tools)
+        }
         .sheet(item: $workspace.restartPreset) { preset in
             if let job = workspace.job {
                 ExportRestartSheet(project: project, job: job, preset: preset.request) { output in saveRestart(output) }
@@ -179,6 +183,7 @@ struct ContentView: View {
             exportRestart: { if workspace.job?.toolpaths.isEmpty == false { workspace.restartPreset = RestartPreset(request: Restart.Request()) } },
             exportSetupSheet: exportSetupSheet,
             calibrate: { calibrating = true },
+            surfaceSpoilboard: { surfacing = true },
             regenerate: recalculateAll,
             simulate: simulate,
             stopSimulation: { workspace.stopSimulation(project) },

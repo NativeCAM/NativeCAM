@@ -1,0 +1,1 @@
+{"note":"A V-bit cannot surface.","tool":{"diameter":0.5,"fluteLength":0.4,"shape":"vBit"},"expect":"refused","text":"pick a surfacing bit or a flat end mill"}

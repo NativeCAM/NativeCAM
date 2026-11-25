@@ -1,0 +1,1 @@
+{"note":"The same board with Shorten the overshoot ticked: cut, with the overshoot clamped to keep the margin and a warning that the bit does not clear the ends.","area":[60,24],"clampOvershoot":true,"expect":"warning","text":"The overshoot is shortened to 0.437 in to keep 0.25 in clear of the travel's limits: the bit doesn't clear the board's X ends."}

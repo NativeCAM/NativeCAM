@@ -1,0 +1,1 @@
+{"note":"Passes that add up to more than the flute length are refused.","depth":0.1,"passes":3,"expect":"refused","text":"take off 0.3 in, more than the bit's 0.25 in flutes."}
