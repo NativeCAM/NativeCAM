@@ -23,6 +23,7 @@
 - [Rotary jobs](#rotary-jobs)
 - [Templates](#templates)
 - [Calibrating your machine](#calibrating-your-machine)
+- [Restarting a job partway through](#restarting-a-job-partway-through)
 
 ## Workflow
 
@@ -565,3 +566,44 @@ Each program is written by NativeCAM's own post for your controller, checked lik
 **Apply** writes the fitted values into this document's machine, marked as measured, and, if you leave it ticked, into the same machine in your machine library for new documents. It only ever changes them on that click, and NativeCAM's built-in machine defaults (the PRO6060's included) stay as they are. The look-ahead (how many lines the controller plans ahead) and the X/Y rapid rate aren't fitted; when the zig-zag or the segments are still well off after the fit, the sheet says so.
 
 From the [command line](command-line.md#commands), `nativecam-cli calibrate timing|rotary|ladder [project]` writes the same files, and `nativecam-cli calibrate fit times.csv project.nativecam --apply` fits and applies the times.
+
+## Restarting a job partway through
+
+A broken bit, a power cut or an E-stop can stop a job halfway. **File ▸ Export Restart…** (**⌥⇧⌘E**) saves the rest of the job as a file of its own. While simulating, **Restart Here…** in the simulation bar opens the same sheet at the pass the play head is in. Nothing is saved in the project.
+
+**Choose where to start.** Pick the toolpath, then one of:
+
+- the start of the toolpath;
+- a pass of it, where a pass begins each time the tool lifts to the plunge height or above;
+- a line of the full file, the number your controller shows. The sheet shows the line's text so you can compare it with the screen.
+
+**Re-cut from the start of that pass** is on by default. The restart then goes back to where the tool last lifted, and the pass's own entry (its ramp or plunge) runs as it did. Turn it off to restart at the move itself: the tool feeds straight down to that point at its plunge rate. NativeCAM simulates the job up to there and refuses this if the feed down would cut material. A toolpath that never lifts, such as a rounding spiral, is one pass, so a restart partway through it has to be exact. If you're not sure where the cut really stopped (the controller's highlighted line can run ahead of the tool), pick an earlier pass.
+
+**What the file does.** The restart is the full job cut down, not regenerated, so later toolpaths still cut the material the earlier ones left. On a rotary job every A word is the same as in the full file, and A doesn't unwind first. The file goes through the same post and export checks as any other, and runs in this order:
+
+1. The usual start: units, `G94`, the tool change (always, even if the bit didn't change, so Z is measured again), the dust collector, and the spindle with its spin-up dwell.
+2. Up to safe Z, over the restart point, then the turn of the blank on a rotary job.
+3. A stop, on by default, with the tool over the restart point at safe Z and the spindle off, so you can check the position. On Mach4 its message shows on screen. After the stop the spindle starts again, with a dwell of the machine's spin-up dwell or 3 s, whichever is longer: NativeCAM turned the spindle off for this stop, so it never feeds down before the spindle is back to speed.
+4. Down to the plunge height, then the pass's own entry (or, exact, a feed straight down).
+
+It's never a diagonal move and never a rapid to depth. A spin-up dwell of 0 s gets a warning: the file's first spindle start keeps your setting, and only the stop above the restart point dwells 3 s anyway. An air cut of the restart is an option on the sheet.
+
+**Before you run it.** The file's header says this too:
+
+- After a power cut or an E-stop, re-home and check the XY zero against the setup sheet.
+- Re-zero Z with the touch plate at the tool change, even if the bit didn't change.
+- Jog Z clear of the work before Cycle Start. It isn't known whether Avid's M6 macro raises Z before it moves. NativeCAM writes no `G53` moves.
+
+On a rotary job, the header gives the A reading the restart expects over the restart point.
+
+**Files of a job.** A tiled job, a job nested onto several sheets and a job split into a file per tool restart only the one file that was running: pick it on the sheet. A tile's dowel stop is kept only when the restart begins at the start of that toolpath.
+
+**What's refused:**
+
+- a point past the last cutting move;
+- a calibration program;
+- a rotary job on an imported Vectric post, which can't take the A position;
+- an exact restart whose feed down cuts material;
+- an approach the simulation shows rapiding through material.
+
+A restart covers one file. It doesn't check that the file that was running came from the project as it is now; the command line does that with `--restart-from`. Restarts haven't been run on a real machine yet (see [Known limits](known-limits.md)).

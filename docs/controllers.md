@@ -7,7 +7,7 @@
 - [Grbl family](#grbl-family)
 - [Other controllers](#other-controllers)
 - [Using your own Vectric post](#using-your-own-vectric-post)
-- [Export checks, air cuts and setup sheets](#export-checks-air-cuts-and-setup-sheets)
+- [Export checks, air cuts and setup sheets](#export-checks-air-cuts-and-setup-sheets) (and restarts)
 - [Trying a new controller safely](#trying-a-new-controller-safely)
 
 NativeCAM writes each controller's own dialect, and the export checks hold every file to that controller's rules. Pick the controller under **Job Setup ▸ Machine ▸ Controller** or with the [setup assistant](machines.md#setting-up-a-machine).
@@ -110,6 +110,8 @@ On export, NativeCAM reads the file it's about to save back and checks it before
 - **Against the machine.** The whole program, retracts and park included, is measured against the machine's travel. A program that moves further in X or Y than the travel, or whose Z span plus the longest stickout is more than the Z travel, is an error naming the axis and how far over it is: it can't run wherever the work is zeroed. That covers a move too far below the program's highest point to reach.
 
 Errors here or in the job's checks ask you to confirm before exporting; the command line refuses to write the file, and exits with status 1, without `--force`. Warnings stop neither.
+
+**File ▸ Export Restart…** (**⌥⇧⌘E**) saves the rest of a job from a toolpath, a pass or a line of the full file, for after a broken bit, a power cut or an E-stop. It goes through the same post and checks, with the full file's rotary state, and a stop over the restart point before it feeds down. See [Restarting a job partway through](using-nativecam.md#restarting-a-job-partway-through).
 
 **File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z, the safe height and the park height raised by an amount you choose, X and Y unchanged, marked by a comment at the top. **File ▸ Export Setup Sheet…** saves a printable HTML page with the machine, material and zero, tools in loading order, the run order with tool changes and times, each [V-carve inlay](using-nativecam.md#v-carve-inlays) toolpath's side and depths, clamps, and any open checks.
 

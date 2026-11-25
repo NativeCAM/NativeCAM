@@ -21,6 +21,9 @@ public struct GenericGCodePost: PostProcessor {
     public var version = "0.1"
     /// Set on each file of a split job: which file this is, and how many there are.
     public var part: (index: Int, count: Int)?
+    /// Set on a restart file (`Restart`): the rotary state the full program had reached and the stop above the restart
+    /// point, for the file's first toolpath. nil for every other file.
+    public var restart: RestartSeed?
 
     public init(project: Project, dialect: Dialect, date: Date = Date()) {
         self.project = project
@@ -116,11 +119,14 @@ public struct GenericGCodePost: PostProcessor {
         var currentRPM: Double?
         var state = ModalState()
         var turned = false
-        // The A value last written, across tool changes (the change doesn't turn the blank).
-        var lastA: Double?
+        // The A value last written, across tool changes (the change doesn't turn the blank). A restart starts from
+        // where the full program had left it.
+        var lastA: Double? = restart?.lastA
         // On a blank turned by hand, the angle the operator was last asked for; nil until the first stop.
         var dial: Double?
-        for tp in paths {
+        for (index, tp) in paths.enumerated() {
+            // A restart's first toolpath: cut down to the restart point, with the full program's turn offset.
+            let restarting = index == 0 ? restart : nil
             let toolChanged = currentTool != tp.tool.number
             if toolChanged {
                 toolChange(tp, first: currentTool == nil, frame: frame, writer: &w)
@@ -175,9 +181,11 @@ public struct GenericGCodePost: PostProcessor {
                     w.comment("SKIPPED: \(dialect.name) can't be given the right feed for wrapped moves")
                     continue
                 }
-                let approach = writer.approach(tp, state: &state, after: lastA)
+                let approach = writer.approach(tp, state: &state, after: lastA, offset: restarting?.wrapOffset)
+                for line in approach.lines { w.line(line) }
+                if let message = restarting?.pause { restartStop(message, rpm: rpm, safe: safe, writer: &w) }
                 let cut = writer.motions(tp, state: &state, offset: approach.offset)
-                for line in approach.lines + cut.lines { w.line(line) }
+                for line in cut.lines { w.line(line) }
                 if approach.turned || cut.turned { turned = true }
                 lastA = state.a ?? lastA
                 continue
@@ -194,6 +202,7 @@ public struct GenericGCodePost: PostProcessor {
                 lastA = target
                 turned = true
             }
+            if let message = restarting?.pause { restartStop(message, rpm: rpm, safe: safe, writer: &w) }
             // A calibration program's section: stop over its start with its message (shown on screen where the
             // controller reads `(MSG,…)`), then restate safe Z, which also brings the tool back if Z was jogged.
             if let message = tp.stopMessage {
@@ -216,6 +225,19 @@ public struct GenericGCodePost: PostProcessor {
         w.line("M9")
         w.line("M30")
         return w.text
+    }
+
+    /// A restart's stop with the tool over the restart point at safe Z: the spindle off (as for every program stop), its
+    /// message, then the spindle and a dwell of at least 3 s, then safe Z restated.
+    private func restartStop(_ message: String, rpm: Double, safe: Double, writer w: inout Writer) {
+        w.line("M5")
+        w.comment(dialect.showsMessages ? "MSG,\(message)" : message)
+        w.line("M0")
+        if machine.spindle == .router { w.comment("Set router speed dial to about \(Int(rpm.rounded())) RPM") }
+        w.line("S\(Int(rpm.rounded())) M3")
+        // At least 3 s, whatever the machine's spin-up dwell: NativeCAM turned the spindle off for this stop.
+        w.line(dwell(Restart.stopDwell(machine)))
+        w.line("G0 Z\(fmt(round(safe)))")
     }
 
     private func toolChange(_ tp: Toolpath, first: Bool, frame: RotaryFrame, writer w: inout Writer) {

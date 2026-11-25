@@ -12,6 +12,9 @@ import Foundation
 /// during an arc, so helical arcs are written as short lines. Without a tool changer, each tool gets its own file.
 public struct OpenSBPPost: PostProcessor {
     public var project: Project
+    /// Set on a restart file (`Restart`): the stop above the restart point, for the file's first toolpath. nil for
+    /// every other file. (OpenSBP posts write no rotary axis, so its A state is unused.)
+    public var restart: RestartSeed?
     public var date: Date
     public var timeZone: TimeZone = .current
     public var version = "0.1"
@@ -128,7 +131,8 @@ public struct OpenSBPPost: PostProcessor {
             }
         }
 
-        for tp in paths {
+        for (index, tp) in paths.enumerated() {
+            let restarting = index == 0 ? restart : nil
             let rpm = machine.spindle == .vfdSpindle ? machine.clampRPM(tp.spindleRPM) : tp.spindleRPM
             let changed = currentTool != tp.tool.number
             if changed {
@@ -185,6 +189,18 @@ public struct OpenSBPPost: PostProcessor {
                 line("JZ,\(f(round(safe)))")
                 line("J2,\(f(round(start.x))),\(f(round(start.y)))")
                 state = (round(start.x), round(start.y), round(safe))
+            }
+            // A restart: the spindle off and a stop over the restart point at safe Z, then the spindle and its spin-up
+            // pause again.
+            if let message = restarting?.pause {
+                line("C7")
+                comment(message)
+                line("PAUSE")
+                line("TR,\(Int(rpm.rounded()))")
+                line("C6")
+                // At least 3 s, whatever the machine's spin-up dwell: NativeCAM turned the spindle off for this stop.
+                line("PAUSE \(String(format: "%.2f", Restart.stopDwell(machine)))")
+                line("JZ,\(f(round(safe)))")
             }
             // A calibration program's section: stop over its start with its message, then restate safe Z.
             if let message = tp.stopMessage {

@@ -1,0 +1,69 @@
+(RESTART of Leg 2 of 2 - T2)
+(Full file: this project as it is now. Check it matches)
+(Starts at toolpath 2 of 4: Pin holes @ 90deg, from its start)
+(Load T2 1/8in Upcut End Mill, the same bit)
+(After a power cut or E-stop: re-home, check XY zero on setup sheet)
+(Re-zero Z with the touch plate at the tool change, same bit or not)
+(Jog Z clear of the work before Cycle Start)
+(The blank is turned by hand: the restart asks for 90deg first)
+(Stops over the restart point at safe Z, spindle off, to check it)
+(Leg)
+(Post: Grbl - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(Tool changes: M0 pause, change the bit, re-zero Z on the rotation axis, resum)
+(Material: Maple rotary blank, square bar, 2.0000 across, L=12.0000 in)
+(Z ZERO = CENTRE OF ROTATION)
+(Y ZERO = AXIS CENTRELINE   X ZERO = LEFT END OF THE BLANK)
+(Raise the tool clear of the chuck and tailstock before Cycle Start)
+(TURN THE BLANK BY HAND AT EACH STOP {M0})
+(Angles count up as the top of the blank rolls toward -Y)
+(Safe Z 1.6142)
+(T2 1/8in Upcut End Mill D0.1250)
+G90 G94 G17
+G20
+(Load T2 1/8in Upcut End Mill and zero Z on the rotation axis before starting)
+M8
+(Turn the blank to 90deg, then resume)
+M0
+S18000 M3
+G4 P2.00
+(Pin holes @ 90deg T2)
+G0 Z1.6142
+G0 X9.0000 Y0.0000
+M5
+(Restart: check the tool is over the restart point, then go on)
+M0
+S18000 M3
+G4 P3.00
+G0 Z1.6142
+G0 Z1.1000
+G1 Z0.5000 F25.0
+G0 Z1.6142
+M5
+(Turn the blank to 180deg, then resume)
+M0
+S18000 M3
+G4 P2.00
+(Pin holes @ 180deg T2)
+G0 Z1.6142
+G0 X9.0000 Y0.0000
+G0 Z1.1000
+G1 Z0.5000
+G0 Z1.6142
+M5
+(Turn the blank to 270deg, then resume)
+M0
+S18000 M3
+G4 P2.00
+(Pin holes @ 270deg T2)
+G0 Z1.6142
+G0 X9.0000 Y0.0000
+G0 Z1.1000
+G1 Z0.5000
+G0 Z1.6142
+G0 Z2.0000
+G0 X6.0000 Y0.0000
+M5
+M9
+M30

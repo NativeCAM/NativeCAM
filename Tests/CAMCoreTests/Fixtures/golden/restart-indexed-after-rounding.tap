@@ -1,0 +1,105 @@
+(RESTART of Rounding)
+(Full file: this project as it is now. Check it matches)
+(Starts at toolpath 2 of 2: Slot @ 0deg, from its start)
+(Load T2 1/8in Upcut End Mill, the same bit)
+(After a power cut or E-stop: re-home, check XY zero on setup sheet)
+(Re-zero Z with the touch plate at the tool change, same bit or not)
+(Jog Z clear of the work before Cycle Start)
+(A over the restart point: A169200.000 = 470 turns + 0.000 deg)
+(Stops over the restart point at safe Z, spindle off, to check it)
+(Rounding)
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
+(Material: Maple rotary blank, square bar, 50.000 across, L=300.000 mm)
+(Z ZERO = CENTRE OF ROTATION {Avid: Rotary tab > Z Axis Touch})
+(Y ZERO = AXIS CENTRELINE   X ZERO = LEFT END OF THE BLANK)
+(Raise the tool clear of the chuck and tailstock before Cycle Start)
+(Program extents: X136.588 to X163.413  Y-3.413 to Y3.413  Z22.000 to Z27.540)
+(Safe Z = 40.435)
+(Tools used:)
+(  T2 1/8in Upcut End Mill - D3.175 End Mill)
+(Toolpaths:)
+(  1. Slot @ 0deg - T2)
+G00 G94 G21 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T2 1/8in Upcut End Mill)
+(Rotary job: re-zero Z on the rotation axis {Avid: Rotary tab > Z Axis Touch}, not on the blank)
+T2M6
+M07
+S18000 M03
+G04 P2.00
+(Toolpath: Slot @ 0deg  Tool: T2 1/8in Upcut End Mill)
+G00 Z40.435
+G00 X139.143 Y-0.403
+G00 A169200.000
+M05
+(MSG,Restart: check the tool is over the restart point, then go on)
+M00
+S18000 M03
+G04 P3.00
+G00 Z40.435
+G00 Z27.540
+G01 Z23.500 F635
+G03 X139.731 Y-0.872 I0.588 J0.134 F3048
+G01 X160.269
+G03 X160.873 Y-0.269 I0.000 J0.603
+G01 Y0.269
+G03 X160.269 Y0.872 I-0.604 J0.000
+G01 X139.731
+G03 X139.128 Y0.269 I0.000 J-0.603
+G01 Y-0.269
+G01 X139.143 Y-0.403
+G01 X137.858
+G01 Y-1.539
+G03 X138.461 Y-2.142 I0.603 J0.000
+G01 X161.539
+G03 X162.143 Y-1.539 I0.000 J0.603
+G01 Y1.539
+G03 X161.539 Y2.142 I-0.604 J0.000
+G01 X138.461
+G03 X137.858 Y1.539 I0.000 J-0.603
+G01 Y-0.403
+G01 X136.588
+G01 Y-3.413
+G01 X163.413
+G01 Y3.413
+G01 X136.588
+G01 Y-0.403
+G00 Z30.080
+G00 X139.128 Y-0.269
+G00 Z24.500
+G01 Z22.000 F635
+G03 X139.731 Y-0.872 I0.603 J0.000 F3048
+G01 X160.269
+G03 X160.873 Y-0.269 I0.000 J0.603
+G01 Y0.269
+G03 X160.269 Y0.872 I-0.604 J0.000
+G01 X139.731
+G03 X139.128 Y0.269 I0.000 J-0.603
+G01 Y-0.269
+G01 X137.858
+G01 Y-1.539
+G03 X138.461 Y-2.142 I0.603 J0.000
+G01 X161.539
+G03 X162.143 Y-1.539 I0.000 J0.603
+G01 Y1.539
+G03 X161.539 Y2.142 I-0.604 J0.000
+G01 X138.461
+G03 X137.858 Y1.539 I0.000 J-0.603
+G01 Y-0.269
+G01 X136.588
+G01 Y-3.413
+G01 X163.413
+G01 Y3.413
+G01 X136.588
+G01 Y-0.269
+G00 Z40.435
+G00 Z50.400
+(A finishes 470 whole turns from where it started, so it doesn't wind back: zero A {Avid: Rotary tab > Zero A} before the next job)
+G00 A169200.000
+G00 X150.000 Y0.000
+M05
+M09
+M30

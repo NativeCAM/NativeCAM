@@ -27,6 +27,8 @@ final class Workspace {
     private(set) var sheet = 0
     /// Add Toolpath ▸ Inlay…, waiting in its sheet (any of the add-toolpath menus can ask for it).
     var inlayRequest: InlayRequest?
+    /// File ▸ Export Restart… or Restart Here…: the restart sheet, preset to a point.
+    var restartPreset: RestartPreset?
     var viewPreset: ViewPreset? = .iso
     var fitRequest = 0
     var showVectors = true

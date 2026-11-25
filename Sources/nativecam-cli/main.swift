@@ -15,6 +15,17 @@ import Foundation
 //                                                      1 unless --force (warnings don't stop it). --air-cut raises
 //                                                      every Z by height (in the G-code's units); --sheet writes a
 //                                                      printable setup sheet
+//   nativecam-cli post <project.nativecam> --restart-toolpath n [--restart-pass p] | --restart-line N
+//                     [--restart-exact] [--restart-no-stop] [--restart-file n] [--restart-from running.tap]
+//                     [--air-cut height] [-o out.tap] [--force]
+//                                                      write a restart file: the rest of the job from toolpath n (from
+//                                                      1 in the file's run order), its pass p, or the cutting move on
+//                                                      line N of the full file, snapped back to the start of its pass
+//                                                      unless --restart-exact. Stops over the restart point unless
+//                                                      --restart-no-stop. --restart-file picks a tile, sheet or tool
+//                                                      file (from 1); --restart-from names the file that was running
+//                                                      and checks the project still writes it. A refusal exits 1 and
+//                                                      --force doesn't override it
 //   nativecam-cli sim  <project.nativecam|file.tap> [--png out.png] [--cell mm] [--heights out.bin]
 //                                                      (--heights: little-endian header Int32 cols, Int32 rows,
 //                                                       Float64 cell, origin x, origin y, then Float32 heights)
@@ -104,6 +115,53 @@ func formatTime(_ s: Double) -> String {
     return String(format: "%d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60)
 }
 
+/// `post --restart-*`: writes the restart file, or exits 1 with the refusal or the failed checks.
+func postRestart(_ project: Project, job: JobResult, airCut: Double?) {
+    func number(_ name: String) -> Int? {
+        guard let text = option(name, in: args) else { return nil }
+        guard let n = Int(text), n >= 1 else { fail("\(name) needs a whole number from 1") }
+        return n
+    }
+    if option("--sheet", in: args) != nil { fail("--sheet is for the full job: post it without --restart-*") }
+    var request = Restart.Request(file: (number("--restart-file") ?? 1) - 1, airCut: airCut)
+    request.exact = args.contains("--restart-exact")
+    request.pauseAbove = !args.contains("--restart-no-stop")
+    if let line = number("--restart-line") {
+        guard option("--restart-pass", in: args) == nil else { fail("Give --restart-line or --restart-pass, not both") }
+        request.start = .line(line)
+    } else {
+        guard let toolpath = number("--restart-toolpath") else { fail("A restart needs --restart-toolpath n or --restart-line N") }
+        request.toolpath = toolpath - 1
+        request.start = number("--restart-pass").map { .pass($0) } ?? .toolpath
+    }
+    if let running = option("--restart-from", in: args) {
+        guard let text = (try? String(contentsOfFile: running, encoding: .utf8)) ?? (try? String(contentsOfFile: running, encoding: .isoLatin1))
+        else { fail("Can't read \(running)") }
+        request.runningFile = text
+        request.runningFileName = (running as NSString).lastPathComponent
+    }
+    let restart: Restart.Output
+    do {
+        restart = try Restart.make(project, job: job, request: request)
+    } catch {
+        fail("Restart refused: \(error.localizedDescription)")
+    }
+    for line in restart.header { print("  \(line)") }
+    for issue in restart.issues { print("[\(issue.severity.rawValue)] Restart: \(issue.text)") }
+    let errors = restart.issues.filter { $0.severity == .error }.count
+    if errors > 0 {
+        let reason = "the restart failed \(errors) check\(errors == 1 ? "" : "s")"
+        guard args.contains("--force") else { fail("Not written: \(reason). Fix the errors above, or pass --force to write it anyway.") }
+        print("Writing it anyway (--force): \(reason).")
+    }
+    let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? (args[1] as NSString).deletingPathExtension
+    let path = stem + (restart.file.suffix ?? "") + "." + restart.post.fileExtension
+    do { try restart.file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
+    let lines = restart.file.gcode.components(separatedBy: "\n").count - 1
+    print("Restart: \(restart.toolpaths.count) toolpath\(restart.toolpaths.count == 1 ? "" : "s"), \(lines) lines -> \(path)")
+    print("Estimated run time of the restart: \(formatTime(restart.remainingSeconds))")
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
     print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] | sim <project|tap> [--png out.png] [--cell mm]"
@@ -141,6 +199,10 @@ case "post":
     if let text = option("--air-cut", in: args) {
         guard let h = Double(text), h > 0 else { fail("--air-cut needs a height above zero") }
         airCut = project.machine.outputUnits.toMM(h)
+    }
+    if args.contains(where: { $0.hasPrefix("--restart") }) {
+        postRestart(project, job: job, airCut: airCut)
+        exit(0)
     }
     // One file, one per tool where the controller can't stop for a change, and on a tiled job that for each tile.
     guard let output = JobExport.files(project, job: job, airCut: airCut) else { fail(noPost) }

@@ -1,0 +1,124 @@
+{
+  "displayUnits" : "mm",
+  "formatVersion" : 5,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "mm",
+    "rapidRateForEstimates" : 20320,
+    "rotary" : {
+      "alignment" : "x",
+      "centerHeight" : 100,
+      "letter" : "A",
+      "reversed" : false
+    },
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 2,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Wrapped",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "65308587-9A40-4194-8FEC-D42DE27FB37F",
+      "kind" : {
+        "pocket" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 2,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "rasterAngle" : 0,
+            "strategy" : "offset"
+          }
+        }
+      },
+      "name" : "Pocket",
+      "shapeIDs" : [
+        "1B9CF13E-A75D-47EE-9E08-59FA278938DD"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 3048,
+          "plungeRate" : 635,
+          "spindleRPM" : 18000,
+          "stepdown" : 1.5875,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 3.175,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 12.7,
+        "id" : "4E415449-5645-4341-4D00-000000000002",
+        "includedAngle" : 90,
+        "name" : "1\/8\" Upcut End Mill",
+        "notes" : "",
+        "number" : 2,
+        "shankDiameter" : 3.175,
+        "shape" : "flatEndMill",
+        "stickout" : 25.4,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "1B9CF13E-A75D-47EE-9E08-59FA278938DD",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 3,
+          "height" : 20,
+          "width" : 40
+        }
+      },
+      "layer" : "Default",
+      "name" : "Rectangle",
+      "position" : {
+        "x" : 80,
+        "y" : 78.53981633974483
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 157.07963267948966,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Maple",
+    "plungeHeight" : 2.54,
+    "rotary" : {
+      "diameter" : 50,
+      "layout" : "wrapped",
+      "length" : 300,
+      "shape" : "cylinder"
+    },
+    "thickness" : 25,
+    "width" : 300,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

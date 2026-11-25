@@ -63,6 +63,10 @@ struct SimulationBar: View {
                         .foregroundStyle(.red).font(.callout)
                 }
                 Spacer(minLength: 0)
+                if workspace.externalProgramName == nil {
+                    Button("Restart Here…") { restartHere() }
+                        .help("Save the rest of the job from the pass the play head is in, for after a broken bit, a power cut or an E-stop")
+                }
                 Button("Done") { workspace.stopSimulation(project) }
             } else {
                 if let job = workspace.job {
@@ -91,6 +95,21 @@ struct SimulationBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+}
+
+extension SimulationBar {
+    /// Opens the restart sheet at the pass the play head is in.
+    func restartHere() {
+        guard let job = workspace.job, let session = workspace.session else { return }
+        workspace.isPlaying = false
+        var request = Restart.Request()
+        if let i = session.timeline.stepIndex(at: workspace.simTime) {
+            let step = session.timeline.steps[i]
+            let tp = session.timeline.toolpaths[step.toolpathIndex]
+            request = Restart.request(at: tp, start: step.start, project: project, job: job) ?? request
+        }
+        workspace.restartPreset = RestartPreset(request: request)
     }
 }
 

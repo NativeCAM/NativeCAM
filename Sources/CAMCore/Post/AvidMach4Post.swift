@@ -16,6 +16,9 @@ public struct AvidMach4Post: Sendable {
     /// Time zone for the header's "Created" line (local time by default; tests pin it).
     public var timeZone: TimeZone = .current
     public var version = "0.1"
+    /// Set on a restart file (`Restart`): the rotary state the full program had reached and the stop above the restart
+    /// point, for the file's first toolpath. nil for every other file.
+    public var restart: RestartSeed?
 
     public init(project: Project, date: Date = Date()) {
         self.project = project
@@ -86,8 +89,9 @@ public struct AvidMach4Post: Sendable {
         var currentRPM: Double?
         var state = ModalState()
         var turned = false
-        // The A value last written, across tool changes (the change doesn't turn the blank).
-        var lastA: Double?
+        // The A value last written, across tool changes (the change doesn't turn the blank). A restart starts from
+        // where the full program had left it.
+        var lastA: Double? = restart?.lastA
         // On a blank turned by hand, the angle the operator was last asked for; nil until the first stop.
         var dial: Double?
         // The A values the program cuts at, as written: a wrapped toolpath's A words, and the angle a face is cut at.
@@ -96,7 +100,9 @@ public struct AvidMach4Post: Sendable {
             cutA = cutA.map { min($0.lowerBound, r.lowerBound)...max($0.upperBound, r.upperBound) } ?? r
         }
 
-        for tp in paths {
+        for (index, tp) in paths.enumerated() {
+            // A restart's first toolpath: cut down to the restart point, with the full program's turn offset.
+            let restarting = index == 0 ? restart : nil
             let toolChanged = currentTool != tp.tool.number
             if toolChanged {
                 toolChange(tp, first: currentTool == nil, frame: frame, writer: &w, state: &state)
@@ -144,9 +150,11 @@ public struct AvidMach4Post: Sendable {
             // Wrapped: the tool stays over the axis and the blank turns under it as it cuts.
             if let rotary, tp.wrapDiameter != nil {
                 let writer = wrappedWriter(rotary, frame: frame)
-                let approach = writer.approach(tp, state: &state, after: lastA)
+                let approach = writer.approach(tp, state: &state, after: lastA, offset: restarting?.wrapOffset)
+                for line in approach.lines { w.line(line) }
+                if let message = restarting?.pause { restartStop(message, rpm: rpm, tool: tp.tool, safe: safe, writer: &w) }
                 let cut = writer.motions(tp, state: &state, offset: approach.offset)
-                for line in approach.lines + cut.lines { w.line(line) }
+                for line in cut.lines { w.line(line) }
                 if approach.turned || cut.turned { turned = true }
                 lastA = state.a ?? lastA
                 if let a = cut.cutA { cuts(a) }
@@ -166,6 +174,7 @@ public struct AvidMach4Post: Sendable {
                 turned = true
             }
             if let a = state.a, tp.motions.contains(where: { $0.kind != .rapid && $0.kind != .dwell }) { cuts(a...a) }
+            if let message = restarting?.pause { restartStop(message, rpm: rpm, tool: tp.tool, safe: safe, writer: &w) }
             // A calibration program's section: stop over its start with Mach4's on-screen message, then restate safe Z
             // (which also brings the tool back if Z was jogged during the stop).
             if let message = tp.stopMessage {
@@ -234,6 +243,20 @@ public struct AvidMach4Post: Sendable {
         if !first { w.line("G90 G91.1 G64") }
         if machine.dustCollection { w.line("M07") }
         state = ModalState()
+    }
+
+    /// A restart's stop with the tool over the restart point at safe Z, after the blank has turned: the spindle off (as
+    /// for every program stop), Mach4's on-screen message, then the spindle and a dwell of at least 3 s, then safe Z
+    /// restated, which also brings the tool back if Z was jogged during the stop.
+    private func restartStop(_ message: String, rpm: Double, tool: Tool, safe: Double, writer w: inout Writer) {
+        w.line("M05")
+        w.comment("MSG,\(message)")
+        w.line("M00")
+        if machine.spindle == .router { w.comment("Set router speed dial to about \(Int(rpm.rounded())) RPM") }
+        w.line("S\(Int(rpm.rounded())) M03")
+        // At least 3 s, whatever the machine's spin-up dwell: NativeCAM turned the spindle off for this stop.
+        w.line("G04 P\(String(format: "%.2f", Restart.stopDwell(machine)))")
+        w.line("G00 Z\(num(safe, isZ: true))")
     }
 
     private func spindleOn(rpm: Double, tool: Tool, writer w: inout Writer) {

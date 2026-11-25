@@ -28,6 +28,10 @@ import UniformTypeIdentifiers
 /// checks, draws the plug's inspector with its pocket depth changed so the offer to update the pocket shows
 /// (inspector-inlay-mismatch.png), then snapshots the project with the pair added.
 ///
+/// With `-NativeCAMSnapshotRestart YES` it draws File ▸ Export Restart…'s sheet at pass 2 of the second toolpath
+/// (restart-sheet.png), exactly at a line (restart-sheet-line.png) and past the end (restart-sheet-refused.png), and logs
+/// each restart's header and checks.
+///
 /// With `-NativeCAMSnapshotCalibration YES` it saves the calibration programs for the project's machine as File ▸
 /// Calibration Programs… does (to `calibration/` in the output folder), logs their checks, draws the sheet's Programs tab
 /// (calibration-programs.png), fits times made up from slower settings and draws the Enter Times tab with the fit
@@ -80,6 +84,9 @@ enum DebugSnapshot {
         }
         if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotCalibration") {
             calibration(project, out: out, log: log, spin: spin)
+        }
+        if UserDefaults.standard.bool(forKey: "NativeCAMSnapshotRestart") {
+            restart(project, out: out, log: log, spin: spin)
         }
 
         // 1. The whole window (sidebar, viewport, inspector), as the window server composites it.
@@ -454,6 +461,31 @@ enum DebugSnapshot {
                    size: NSSize(width: 640, height: 2200), out: out, name: "calibration-fit.png", spin: spin)
         } catch {
             log("calibration fit refused: \(error.localizedDescription)")
+        }
+    }
+
+    /// File ▸ Export Restart…'s sheet, preset three ways (see the type's notes).
+    @MainActor
+    private static func restart(_ project: Project, out: URL, log: (String) -> Void, spin: (Double) -> Void) {
+        let job = CAMEngine.generate(project)
+        let second = min(1, max(0, job.toolpaths.filter { !$0.isEmpty }.count - 1))
+        var line = Restart.Request(start: .line(200), exact: true)
+        line.airCut = nil
+        let presets: [(String, Restart.Request)] = [
+            ("restart-sheet.png", Restart.Request(toolpath: second, start: .pass(2))),
+            ("restart-sheet-line.png", line),
+            ("restart-sheet-refused.png", Restart.Request(toolpath: second, start: .pass(999))),
+        ]
+        for (name, request) in presets {
+            switch ExportRestartSheet.make(project, job, request) {
+            case let .ready(r):
+                log("restart \(name): " + r.header.joined(separator: " | "))
+                for issue in r.issues where issue.severity != .info { log("restart \(name) \(issue.severity.rawValue): \(issue.text)") }
+            case let .refused(message):
+                log("restart \(name) refused: \(message)")
+            }
+            render(ExportRestartSheet(project: project, job: job, preset: request) { _ in }, size: NSSize(width: 560, height: 640),
+                   out: out, name: name, spin: spin)
         }
     }
 

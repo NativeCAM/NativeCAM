@@ -1,0 +1,162 @@
+(RESTART of Grid sheet - tile 2 of 4 - tile 2 of 4)
+(Full file: this project as it is now. Check it matches)
+(Starts at toolpath 1 of 3: Registration holes, from its start)
+(Load T1 1/4in Upcut End Mill, the same bit)
+(After a power cut or E-stop: re-home, check XY zero on setup sheet)
+(Re-zero Z with the touch plate at the tool change, same bit or not)
+(Jog Z clear of the work before Cycle Start)
+(Stops over the restart point at safe Z, spindle off, to check it)
+(Grid sheet - tile 2 of 4)
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle, Manual {M6})
+(Material: Birch ply X=18.0000 Y=18.0000 Z=0.7500 in)
+(Z zero: Material top   XY zero: Lower left)
+(Program extents: X0.1250 to X11.0000  Y4.0000 to Y17.6250  Z-1.0000 to Z0.1000)
+(Safe Z = 0.5000)
+(Tools used:)
+(  T1 1/4in Upcut End Mill - D0.2500 End Mill)
+(  T2 1/8in Upcut End Mill - D0.1250 End Mill)
+(Toolpaths:)
+(  1. Registration holes - T1)
+(  2. Holes - T2)
+(  3. Cut out panels - T1)
+G00 G94 G20 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T1 1/4in Upcut End Mill)
+T1M6
+M07
+G00 Z0.5000
+(MSG,Tile 2 of 4, spindle off: fit dowels in holes 1 and 2, see the setup sheet, clamp the material, then resume.)
+M00
+S13000 M03
+G04 P2.00
+(Toolpath: Registration holes  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X1.0000 Y17.6250
+M05
+(MSG,Restart: check the tool is over the restart point, then go on)
+M00
+S13000 M03
+G04 P3.00
+G00 Z0.5000
+G00 Z0.1000
+G01 Z-0.1875 F50.0
+G00 Z0.1000
+G00 Z-0.1678
+G01 Z-0.3750
+G00 Z0.1000
+G00 Z-0.3553
+G01 Z-0.5625
+G00 Z0.1000
+G00 Z-0.5428
+G01 Z-0.7500
+G00 Z0.1000
+G00 Z-0.7303
+G01 Z-0.9375
+G00 Z0.1000
+G00 Z-0.9178
+G01 Z-1.0000
+G00 Z0.2000
+G00 X11.0000
+G00 Z0.1000
+G01 Z-0.1875
+G00 Z0.1000
+G00 Z-0.1678
+G01 Z-0.3750
+G00 Z0.1000
+G00 Z-0.3553
+G01 Z-0.5625
+G00 Z0.1000
+G00 Z-0.5428
+G01 Z-0.7500
+G00 Z0.1000
+G00 Z-0.7303
+G01 Z-0.9375
+G00 Z0.1000
+G00 Z-0.9178
+G01 Z-1.0000
+G00 Z0.5000
+G00 Z0.5000
+M05
+(Change to Tool: T2 1/8in Upcut End Mill)
+T2M6
+G90 G91.1 G64
+M07
+S18000 M03
+G04 P2.00
+(Toolpath: Holes  Tool: T2 1/8in Upcut End Mill)
+G00 Z0.5000
+G00 X8.0000 Y4.0000
+G00 Z0.1000
+G01 Z-0.5000 F25.0
+G00 Z0.5000
+G00 Z0.5000
+M05
+(Change to Tool: T1 1/4in Upcut End Mill)
+T1M6
+G90 G91.1 G64
+M07
+S13000 M03
+G04 P2.00
+(Toolpath: Cut out panels  Tool: T1 1/4in Upcut End Mill)
+G00 Z0.5000
+G00 X3.5000 Y4.3750
+G00 Z0.1000
+G01 Z-0.1540 F50.0
+G01 X0.1250 F220.0
+G00 Z0.2000
+G00 Y7.6250
+G00 Z0.1000
+G01 Z-0.1540 F50.0
+G01 X3.5000 F220.0
+G02 X4.1250 Y7.0000 I-0.0002 J-0.6252
+G01 Y5.0000
+G02 X3.5000 Y4.3750 I-0.6252 J0.0002
+G01 Z-0.3080 F50.0
+G01 X0.1250 F220.0
+G00 Z0.2000
+G00 Y7.6250
+G00 Z0.1000
+G01 Z-0.3080 F50.0
+G01 X3.5000 F220.0
+G02 X4.1250 Y7.0000 I-0.0002 J-0.6252
+G01 Y5.0000
+G02 X3.5000 Y4.3750 I-0.6252 J0.0002
+G01 Z-0.4620 F50.0
+G01 X0.1250 F220.0
+G00 Z0.2000
+G00 Y7.6250
+G00 Z0.1000
+G01 Z-0.4620 F50.0
+G01 X3.5000 F220.0
+G02 X4.1250 Y7.0000 I-0.0002 J-0.6252
+G01 Y5.0000
+G02 X3.5000 Y4.3750 I-0.6252 J0.0002
+G01 Z-0.6160 F50.0
+G01 X0.1250 F220.0
+G00 Z0.2000
+G00 Y7.6250
+G00 Z0.1000
+G01 Z-0.6160 F50.0
+G01 X3.5000 F220.0
+G02 X4.1250 Y7.0000 I-0.0002 J-0.6252
+G01 Y5.0000
+G02 X3.5000 Y4.3750 I-0.6252 J0.0002
+G01 Z-0.7700 F50.0
+G01 X0.1250 F220.0
+G00 Z0.2000
+G00 Y7.6250
+G00 Z0.1000
+G01 Z-0.7700 F50.0
+G01 X3.5000 F220.0
+G02 X4.1250 Y7.0000 I-0.0002 J-0.6252
+G01 Y5.0000
+G02 X3.5000 Y4.3750 I-0.6252 J0.0002
+G00 Z0.5000
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+M05
+M09
+M30

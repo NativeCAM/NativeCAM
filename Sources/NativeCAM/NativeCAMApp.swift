@@ -101,6 +101,10 @@ struct AppCommands: Commands {
             Button("Export Air Cut…") { actions?.exportAirCut() }
                 .keyboardShortcut("e", modifiers: [.command, .option])
                 .disabled(actions == nil)
+            Button("Export Restart…") { actions?.exportRestart() }
+                .keyboardShortcut("e", modifiers: [.command, .option, .shift])
+                .disabled(actions == nil)
+                .help("Save the rest of the job from part way through, after a broken bit, a power cut or an E-stop")
             Button("Export Setup Sheet…") { actions?.exportSetupSheet() }
                 .disabled(actions == nil)
             Divider()
@@ -157,6 +161,7 @@ struct WorkspaceActions {
     var simulateGCodeFile: () -> Void
     var exportGCode: () -> Void
     var exportAirCut: () -> Void
+    var exportRestart: () -> Void
     var exportSetupSheet: () -> Void
     var calibrate: () -> Void
     var regenerate: () -> Void
