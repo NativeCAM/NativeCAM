@@ -100,7 +100,7 @@ There's one line per toolpath. On an indexed rotary job, each angle is its own t
 Not written: the job has 1 error. Fix the errors above, or pass --force to write it anyway.
 ```
 
-Warnings and infos never stop it.
+Errors include a program larger than the machine's travel in X, Y or Z (`[error] G-code: The program moves 78.0541 in in X, retracts and park included, 16.6791 in more than the machine's 61.3750 in of X travel.`) and a 2.5D cut deeper than the bit's stickout. With `--force`, `post` prints the same errors, then `Writing it anyway (--force): …`, writes the file and exits 0; only the human may ask for that. Warnings and infos never stop it.
 
 **Example.** The demo sign on the default machine:
 
