@@ -485,7 +485,7 @@ public enum CAMEngine {
                 if early.kind.is3D && later.kind.is3D {
                     issues.append(JobIssue(.warning, "Runs before its roughing (“\(early.name)”). "
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: later.name))
-                } else if case let .edgeProfile(ep) = early.kind, case let .profile(pp) = later.kind, pp.tabs.enabled {
+                } else if case let .edgeProfile(ep) = early.kind, case let .profile(pp) = later.kind, PartHold.holdsPart(later, in: project) || (pp.tabs.enabled && pp.tabs.placed == nil) {
                     // Left on tabs it reaches down to: it would cut into them.
                     let u = project.displayUnits
                     func fmt(_ mm: Double) -> String { "\(u.format(mm)) \(u.symbol)" }
@@ -719,9 +719,9 @@ public enum CAMEngine {
             guard case let .edgeProfile(e) = edge.kind else { continue }
             let depth = e.depth(for: edge.tool)
             for cutOut in ops[(i + 1)...] {
-                guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(p),
+                guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(cutOut, in: project),
                       project.stock.rotary == nil, p.depth.cutDepth >= project.stock.thickness - 0.01,
-                      !Set(cutOut.shapeIDs).isDisjoint(with: edge.shapeIDs), !OperationScheduler.clearsTabs(depth, of: cutOut) else { continue }
+                      !Set(cutOut.shapeIDs).isDisjoint(with: edge.shapeIDs), !OperationScheduler.clearsTabs(depth, of: cutOut, in: project) else { continue }
                 let top = max(0, OperationScheduler.tabTop(p))
                 let left = p.depth.cutDepth - depth
                 let what = left > 1e-6 ? "takes the top off them along the edge, leaving them \(fmt(left)) thick there instead of "
@@ -891,11 +891,17 @@ public enum CAMEngine {
         if breakthrough > 0.04.inch {
             issues.append(JobIssue(.warning, "Cuts \(fmt(breakthrough)) into the spoilboard (material is \(fmt(stock.thickness)) thick).",
                                    operation: tp.name))
+        } else if breakthrough > 0.005 {
+            issues.append(JobIssue(.info, "Cuts through the material (\(fmt(breakthrough)) into the spoilboard).", operation: tp.name))
         } else if breakthrough > -0.01 {
-            issues.append(JobIssue(.info, "Cuts through the material (\(fmt(max(0, breakthrough))) into the spoilboard).", operation: tp.name))
+            // Ending at the bottom face itself (within a depth fitted to the material's tolerance): no spoilboard figure
+            // to give (#168).
+            issues.append(JobIssue(.info, "Cuts through to the bottom of the material.", operation: tp.name))
         }
         // A 3D toolpath leaves no tabs: whatever it cuts round down to the bottom comes loose while it's still cutting.
-        if breakthrough > -0.01, op.kind.is3D, !op.kind.turnsWholeBlank {
+        // With a tabbed cut-out holding its floor (`PartHold`), the hold's own note or error says what's wrong instead:
+        // this advice to add that cut-out would contradict it (#168).
+        if breakthrough > -0.01, op.kind.is3D, !op.kind.turnsWholeBlank, PartHold.hold(for: op, in: project) == nil {
             issues.append(JobIssue(.warning, "Cuts down to the material's bottom, and 3D toolpaths leave no tabs, so whatever it cuts "
                 + "round comes loose while it's still cutting. Lift the model, set Boundary to Model outline, or cut the part out "
                 + "afterwards with a tabbed profile, which holds this toolpath's floor above its tabs.", operation: tp.name))

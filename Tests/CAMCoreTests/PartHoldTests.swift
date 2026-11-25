@@ -120,6 +120,20 @@ struct PartHoldTests {
         #expect(!FileManager.default.fileExists(atPath: out.path))
     }
 
+    /// With the floor held, or failing to be held, for a tabbed cut-out, the warning that says to add one isn't given
+    /// beside it: the job already has it (#168).
+    @Test func noAddATabbedProfileAdviceWhenOneHoldsTheFloor() throws {
+        for p in [try Self.impossible(), try Self.deepRelief()] {
+            let job = CAMEngine.generate(p)
+            for name in ["Rough relief", "Finish relief"] {
+                #expect(!job.issues.contains { $0.operation == name && $0.message.contains("3D toolpaths leave no tabs") },
+                        "\(job.issues.filter { $0.operation == name }.map(\.message))")
+            }
+        }
+        let job = CAMEngine.generate(try Self.impossible())
+        #expect(job.issues.contains { $0.severity == .error && $0.operation == "Finish relief" && $0.message.contains("can't be held") })
+    }
+
     /// No cut-out: nothing to hold, and the finish reaching the bottom is a warning, with the through-cut info line.
     @Test func threeDReachingTheBottomWarns() throws {
         var p = try Self.deepRelief()
@@ -130,7 +144,7 @@ struct PartHoldTests {
         #expect(abs(Self.deepest(finish) + p.stock.thickness) < 0.01)
         let mine = job.issues.filter { $0.operation == "Finish relief" }
         #expect(mine.contains { $0.severity == .warning && $0.message.contains("Cuts down to the material's bottom") })
-        #expect(mine.contains { $0.severity == .info && $0.message.hasPrefix("Cuts through the material") })
+        #expect(mine.contains { $0.severity == .info && $0.message == "Cuts through to the bottom of the material." })
         #expect(!job.issues.contains { $0.message.hasPrefix("Holds its floor") })
     }
 
@@ -158,7 +172,15 @@ struct PartHoldTests {
         c.depth.fromBottom = nil
         p.operations[k].kind = .profile(c)
         let job = CAMEngine.generate(p)
-        #expect(job.issues.contains { $0.operation == p.operations[k].name && $0.message.hasPrefix("Cuts through the material") })
+        let mine = job.issues.filter { $0.operation == p.operations[k].name }
+        // Exactly at the bottom: no "0.0000 in into the spoilboard" (#168).
+        #expect(mine.contains { $0.severity == .info && $0.message == "Cuts through to the bottom of the material." }, "\(mine.map(\.message))")
+        #expect(!mine.contains { $0.message.contains("into the spoilboard") })
+        // A little past it still gives the figure.
+        c.depth.cutDepth = p.stock.thickness + 0.5
+        p.operations[k].kind = .profile(c)
+        #expect(CAMEngine.generate(p).issues.contains { $0.operation == p.operations[k].name
+            && $0.message.hasPrefix("Cuts through the material (") && $0.message.hasSuffix("into the spoilboard).") })
     }
 
     /// Tabs with no thickness hold nothing, whatever their count: the one test the checks share (`PartHold.holdsPart`).
@@ -167,7 +189,7 @@ struct PartHoldTests {
         c.tabs = TabSettings(enabled: true, count: 4, thickness: 0)
         #expect(!PartHold.holdsPart(c))
         let cutOut = CAMOperation(name: "Cut out", kind: .profile(c), shapeIDs: [], tool: ToolLibrary.starter.tool(number: 1)!)
-        #expect(!OperationScheduler.clearsTabs(1, of: cutOut))
+        #expect(!OperationScheduler.clearsTabs(1, of: cutOut, in: Project.demoSign()))
         c.tabs.thickness = 3
         #expect(PartHold.holdsPart(c))
         c.tabs.count = 0

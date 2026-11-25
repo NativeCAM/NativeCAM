@@ -538,8 +538,8 @@ public struct NestJob: Sendable {
         return (kept, moved)
     }
 
-    /// Every operation on `shape` also cuts `newShape` (the vectors split from it), right after it; corner choices on
-    /// those vectors go with them.
+    /// Every operation on `shape` also cuts `newShape` (the vectors split from it), right after it; corner choices,
+    /// tabs placed by hand and chosen starts on those vectors go with them.
     static func sharing(_ operations: [CAMOperation], shape: UUID, with newShape: UUID, paths: Set<Int>,
                         original: DesignShape) -> [CAMOperation] {
         guard case let .paths(all) = original.kind else { return operations }
@@ -555,6 +555,13 @@ public struct NestJob: Sendable {
             }
             return s
         }
+        func movedMarks(_ marks: [ContourMark]?) -> [ContourMark]? {
+            marks?.map { m in
+                guard m.shapeID == shape,
+                      paths.contains(where: { i in i < all.count && all[i].closestPoint(to: m.point).distance < 1e-3 }) else { return m }
+                return ContourMark(shapeID: newShape, point: m.point)
+            }
+        }
         return operations.map { op in
             guard let at = op.shapeIDs.firstIndex(of: shape) else { return op }
             var op = op
@@ -562,6 +569,8 @@ public struct NestJob: Sendable {
             switch op.kind {
             case var .profile(q):
                 q.cornerRelief = moved(q.cornerRelief)
+                q.tabs.placed = movedMarks(q.tabs.placed)
+                q.startPoints = movedMarks(q.startPoints)
                 op.kind = .profile(q)
             case var .pocket(q):
                 q.cornerRelief = moved(q.cornerRelief)
@@ -573,8 +582,8 @@ public struct NestJob: Sendable {
         }
     }
 
-    /// Corner choices are kept in a shape's own coordinates; for an imported shape whose vectors moved within it, the
-    /// choices on the moved vectors move with them.
+    /// Corner choices, tabs placed by hand and chosen starts are kept in a shape's own coordinates; for an imported
+    /// shape whose vectors moved within it, those on the moved vectors move with them.
     static func movingCornerChoices(_ operations: [CAMOperation], shape: DesignShape,
                                     moves: [(paths: Set<Int>, motion: RigidMotion)]) -> [CAMOperation] {
         guard case let .paths(paths) = shape.kind else { return operations }
@@ -594,12 +603,24 @@ public struct NestJob: Sendable {
             }
             return s
         }
+        func movedMarks(_ marks: [ContourMark]?) -> [ContourMark]? {
+            marks?.map { m in
+                guard m.shapeID == shape.id else { return m }
+                for move in moves {
+                    let near = move.paths.contains { i in i < paths.count && paths[i].closestPoint(to: m.point).distance < 1e-3 }
+                    if near, let local = shape.localMotion(move.motion) { return ContourMark(shapeID: m.shapeID, point: local.apply(m.point)) }
+                }
+                return m
+            }
+        }
         return operations.map { op in
             guard op.shapeIDs.contains(shape.id) else { return op }
             var op = op
             switch op.kind {
             case var .profile(q):
                 q.cornerRelief = moved(q.cornerRelief)
+                q.tabs.placed = movedMarks(q.tabs.placed)
+                q.startPoints = movedMarks(q.startPoints)
                 op.kind = .profile(q)
             case var .pocket(q):
                 q.cornerRelief = moved(q.cornerRelief)

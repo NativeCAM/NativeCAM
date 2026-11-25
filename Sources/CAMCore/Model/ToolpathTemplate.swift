@@ -526,8 +526,9 @@ public struct ToolpathTemplate: Hashable, Sendable {
         return missing
     }
 
-    /// `op` as a template keeps it: no shapes but the rule that finds them, no corner overrides (they belong to this
-    /// design's shapes), and a depth through the material on a flat sheet tied to the thickness, so the template cuts
+    /// `op` as a template keeps it: no shapes but the rule that finds them, no corner overrides, tabs placed by hand or
+    /// chosen starts (they belong to this design's shapes: placed tabs go back to evenly spaced, keeping their shape and
+    /// size), and a depth through the material on a flat sheet tied to the thickness, so the template cuts
     /// through material of any thickness.
     static func templateCopy(of op: CAMOperation, in project: Project) -> CAMOperation {
         var copy = op
@@ -539,6 +540,8 @@ public struct ToolpathTemplate: Hashable, Sendable {
         switch copy.kind {
         case var .profile(p):
             p.cornerRelief?.overrides = nil
+            p.tabs.placed = nil
+            p.startPoints = nil
             if p.depth.fromBottom == nil { p.depth.fromBottom = through(p.depth.cutDepth) }
             copy.kind = .profile(p)
         case var .pocket(p):

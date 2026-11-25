@@ -212,7 +212,8 @@ enum LeadPlanner {
                       rampLength: Double?, tabs: TabPlan, linkLimit: Double, chordTolerance: Double) -> FittedLead? {
         let walker = LoopWalker(loop)
         let L = walker.length
-        guard L > 1e-6, loop.count >= 2 else { return nil }
+        // Never on a tab (a tab placed by hand can be anywhere round the loop).
+        guard L > 1e-6, loop.count >= 2, !tabs.contains(0) else { return nil }
         let p = loop.points[0]
         let tIn = (loop.points[1] - p).normalized
         guard let leadIn = leadPoints(at: p, tangent: tIn, settings: settings, wasteOnLeft: wasteOnLeft, out: false,
@@ -294,18 +295,44 @@ enum LeadPlanner {
     }
 }
 
-/// Where a closed profile loop's tabs go: evenly spaced, centred between the loop start and the next tab so the
-/// entry isn't on a tab.
+/// Where a closed profile loop's tabs go, and how high the tool lifts over each: arc-length spans along the loop as
+/// cut, measured from its start.
+///
+/// Evenly spaced tabs are centred between the loop start and the next tab, so the entry is never on one. Tabs at fixed
+/// places (placed by hand, or any other caller's, such as holding tabs on another toolpath) are given as absolute
+/// centres along the loop (`init(centres:...)`): the same tabs land on the wall wherever the loop starts. Overlapping
+/// tabs merge into one lift.
+///
+/// A rectangular tab lifts the tool to `z` across its span. A triangular one ramps up from `base` over the first part
+/// of the span, runs flat at `z` across `flatFraction` of it (one bit diameter, so a flat bit leaves the wall the tab's
+/// full thickness at its centre and its set length at its base), and ramps back down.
 struct TabPlan {
+    struct Tab {
+        /// Arc length where it begins, in [0, length).
+        var start: Double
+        /// Arc length where it ends: after `start`, past `length` when it wraps over the loop's start.
+        var end: Double
+        var span: Double { end - start }
+    }
+
+    /// The tabs as given (not merged), in order of `start`.
+    let tabs: [Tab]
+    /// The stretches the tool is lifted over: the tabs merged where they overlap and split at the loop's start, none
+    /// wrapping past its end, in order.
     let intervals: [(Double, Double)]
     let length: Double
     /// Top of the tabs (design Z).
     let z: Double
-    /// The loop was too short for its tabs (they're left off it).
+    /// Where a triangular tab's ramps start and end (design Z): the cut's bottom.
+    let base: Double
+    /// nil for rectangular tabs; for triangular ones the share of each tab's span that's flat at the top.
+    let flatFraction: Double?
+    /// The loop was too short for its tabs (they're left off it), or for one placed by hand (that one's left off).
     let tooShort: Bool
 
+    /// Evenly spaced tabs, `params.tabs.count` of them, measured from the loop's start.
     init(length L: Double, params: ProfileParams, tool: Tool, lastLevel: Double) {
-        var intervals: [(Double, Double)] = []
+        var tabs: [Tab] = []
         var tooShort = false
         let tabZ = -params.depth.cutDepth + params.tabs.thickness
         if params.tabs.enabled, params.side != .on, params.tabs.count > 0, tabZ > lastLevel {
@@ -313,36 +340,94 @@ struct TabPlan {
             if span * Double(params.tabs.count) < L * 0.8 {
                 for k in 0..<params.tabs.count {
                     let c = L * (Double(k) + 0.5) / Double(params.tabs.count)
-                    intervals.append((c - span / 2, c + span / 2))
+                    tabs.append(Tab(start: c - span / 2, end: c + span / 2))
                 }
             } else {
                 tooShort = true
             }
         }
-        self.intervals = intervals
-        self.tooShort = tooShort
-        length = L
-        z = tabZ
+        self.init(tabs: tabs, length: L, z: tabZ, base: tabZ - params.tabs.thickness,
+                  flatFraction: Self.flatFraction(params, tool: tool), tooShort: tooShort)
     }
 
-    /// A plan with these tabs: arc-length intervals along a loop `length` long, none wrapping past its end.
+    /// Tabs centred at these arc lengths along the loop as cut (measured from its start, any value: they wrap). A tab
+    /// whose span (its length plus the bit's diameter) is more than 80% of the loop is left off, and `tooShort` says so.
+    init(centres: [Double], length L: Double, params: ProfileParams, tool: Tool, lastLevel: Double) {
+        var tabs: [Tab] = []
+        var tooShort = false
+        let tabZ = -params.depth.cutDepth + params.tabs.thickness
+        if params.tabs.enabled, params.side != .on, tabZ > lastLevel, L > 1e-9 {
+            let span = params.tabs.width + tool.diameter
+            for c in centres {
+                guard span < L * 0.8 else { tooShort = true; continue }
+                var a = (c - span / 2).truncatingRemainder(dividingBy: L)
+                if a < 0 { a += L }
+                tabs.append(Tab(start: a, end: a + span))
+            }
+        }
+        self.init(tabs: tabs, length: L, z: tabZ, base: tabZ - params.tabs.thickness,
+                  flatFraction: Self.flatFraction(params, tool: tool), tooShort: tooShort)
+    }
+
+    /// A plan with these rectangular tabs: arc-length intervals along a loop `length` long, none wrapping past its end.
     init(intervals: [(Double, Double)], length: Double, z: Double, tooShort: Bool = false) {
-        self.intervals = intervals.sorted { $0.0 < $1.0 }
-        self.length = length
+        self.init(tabs: intervals.map { Tab(start: $0.0, end: $0.1) }, length: length, z: z, base: z, flatFraction: nil,
+                  tooShort: tooShort)
+    }
+
+    init(tabs given: [Tab], length L: Double, z: Double, base: Double, flatFraction: Double?, tooShort: Bool) {
+        let tabs = given.sorted { $0.start < $1.start }
+        self.tabs = tabs
+        length = L
         self.z = z
+        self.base = base
+        self.flatFraction = flatFraction
         self.tooShort = tooShort
+        // Split at the loop's start, then merge what overlaps.
+        var split: [(Double, Double)] = []
+        for t in tabs {
+            if t.end > L + 1e-9, t.start < L {
+                split.append((t.start, L))
+                split.append((0, t.end - L))
+            } else {
+                split.append((t.start, t.end))
+            }
+        }
+        split.sort { $0.0 < $1.0 }
+        var merged: [(Double, Double)] = []
+        for iv in split {
+            if let last = merged.last, iv.0 < last.1 - 1e-9 {
+                merged[merged.count - 1].1 = max(last.1, iv.1)
+            } else {
+                merged.append(iv)
+            }
+        }
+        intervals = merged
+    }
+
+    /// For triangular tabs: the share of a tab's span that's flat at the top (one bit diameter of the tab length plus
+    /// it). nil for rectangular tabs.
+    static func flatFraction(_ params: ProfileParams, tool: Tool) -> Double? {
+        guard params.tabs.shape == .triangular else { return nil }
+        let span = params.tabs.width + tool.diameter
+        return span > 1e-9 ? min(1, tool.diameter / span) : 1
+    }
+
+    /// The same tabs, not flagged as too short (a finishing pass's own, once the roughing has said so).
+    var withoutTooShort: TabPlan {
+        TabPlan(tabs: tabs, length: length, z: z, base: base, flatFraction: flatFraction, tooShort: false)
     }
 
     /// The tabs `plan` puts on `reference`, carried onto `loop`: another loop round the same wall (one offset from it,
     /// the same loop started somewhere else, run the other way or with corner reliefs added). Each tab's ends and
     /// middle are carried across to the nearest point on `loop`, so every loop round the wall lifts over the same
-    /// stretch of it. A profile's finishing pass plans its tabs once on the finished wall and carries them onto each
-    /// roughing loop with this.
+    /// stretch of it, with the same shape. A profile's finishing pass plans its tabs once on the finished wall and
+    /// carries them onto each roughing loop with this.
     static func mapped(_ plan: TabPlan, from reference: Polyline, onto loop: Polyline) -> TabPlan {
         let target = LoopWalker(loop)
         let L = target.length
-        guard !plan.intervals.isEmpty, L > 1e-9 else {
-            return TabPlan(intervals: [], length: L, z: plan.z, tooShort: plan.tooShort)
+        guard !plan.tabs.isEmpty, L > 1e-9 else {
+            return TabPlan(tabs: [], length: L, z: plan.z, base: plan.base, flatFraction: plan.flatFraction, tooShort: plan.tooShort)
         }
         let source = LoopWalker(reference)
         func along(_ p: Vec2) -> Double {
@@ -353,42 +438,87 @@ struct TabPlan {
         }
         /// Forward distance from `a` to `b` round the loop.
         func ahead(_ a: Double, _ b: Double) -> Double { let d = b - a; return d < 0 ? d + L : d }
-        var out: [(Double, Double)] = []
-        for (a, b) in plan.intervals {
-            let p = along(source.point(at: a)), q = along(source.point(at: b)), m = along(source.point(at: (a + b) / 2))
+        var out: [Tab] = []
+        for t in plan.tabs {
+            let p = along(source.point(at: t.start)), q = along(source.point(at: t.end))
+            let m = along(source.point(at: (t.start + t.end) / 2))
             // The stretch from one end to the other that passes through the middle (either way round, as `loop` may run
             // the other way from `reference`).
             let (lo, hi) = ahead(p, m) <= ahead(p, q) ? (p, q) : (q, p)
-            if lo <= hi {
-                out.append((lo, hi))
-            } else {
-                out.append((lo, L))
-                out.append((0, hi))
-            }
+            out.append(Tab(start: lo, end: lo <= hi ? hi : hi + L))
         }
-        return TabPlan(intervals: out, length: L, z: plan.z, tooShort: plan.tooShort)
+        return TabPlan(tabs: out, length: L, z: plan.z, base: plan.base, flatFraction: plan.flatFraction, tooShort: plan.tooShort)
     }
 
     /// Arc length where the first tab begins, nil without tabs.
     var firstStart: Double? { intervals.first?.0 }
 
-    func contains(_ s: Double) -> Bool {
-        guard !intervals.isEmpty else { return false }
+    /// Steepest a triangular tab's ramps climb, degrees from horizontal; nil for rectangular tabs or none.
+    var rampAngle: Double? {
+        guard let f = flatFraction, let t = tabs.first else { return nil }
+        let ramp = t.span * (1 - f) / 2
+        return atan2(z - base, max(ramp, 1e-9)) * 180 / .pi
+    }
+
+    /// Where `s` is on the loop, in [0, length).
+    private func wrapped(_ s: Double) -> Double {
         var d = s.truncatingRemainder(dividingBy: length)
         if d < 0 { d += length }
+        return d
+    }
+
+    func contains(_ s: Double) -> Bool {
+        guard !intervals.isEmpty else { return false }
+        let d = wrapped(s)
         return intervals.contains { d > $0.0 && d < $0.1 }
     }
 
-    func breaks(_ s0: Double, _ s1: Double) -> [Double] {
+    /// The lowest the tool may go at `s` (design Z), nil where there's no tab.
+    func floor(at s: Double) -> Double? {
+        guard !tabs.isEmpty else { return nil }
+        guard let f = flatFraction else { return contains(s) ? z : nil }
+        let d = wrapped(s)
+        var best: Double?
+        for t in tabs {
+            for x in [d, d + length] where x > t.start && x < t.end {
+                let ramp = t.span * (1 - f) / 2
+                let u = min(x - t.start, t.end - x)
+                let h = ramp > 1e-9 ? base + (z - base) * min(1, u / ramp) : z
+                best = max(best ?? -.infinity, h)
+            }
+        }
+        return best
+    }
+
+    /// Arc lengths between `s0` and `s1` (unwrapped) where the lift over a tab changes slope, for the walker to put a
+    /// vertex on: each tab's ends, and for triangular tabs the top's ends and where each ramp crosses `level` (the
+    /// pass's Z), so the chord between vertices follows the tab exactly.
+    func breaks(_ s0: Double, _ s1: Double, level: Double? = nil) -> [Double] {
         guard !intervals.isEmpty else { return [] }
+        var local: [Double] = []
+        if let f = flatFraction {
+            for t in tabs {
+                let ramp = t.span * (1 - f) / 2
+                local += [t.start, t.end, t.start + ramp, t.end - ramp]
+                if let level, level > base + 1e-9, level < z - 1e-9, ramp > 1e-9 {
+                    let along = ramp * (level - base) / (z - base)
+                    local += [t.start + along, t.end - along]
+                }
+            }
+        } else {
+            for (a, c) in intervals { local += [a, c] }
+        }
         var out: [Double] = []
         var w = (s0 / length).rounded(.down) - 1
         while w * length <= s1 {
-            for (a, c) in intervals { out.append(w * length + a); out.append(w * length + c) }
+            for x in local { out.append(w * length + x) }
             w += 1
         }
         return out
     }
 
-    func clamp(_ s: Double, _ zz: Double) -> Double { contains(s) && zz < z ? z : zz }
+    func clamp(_ s: Double, _ zz: Double) -> Double {
+        guard let f = floor(at: s) else { return zz }
+        return max(zz, f)
+    }
 }

@@ -76,20 +76,90 @@ public struct DepthSettings: Hashable, Codable, Sendable {
     }
 }
 
-public struct TabSettings: Hashable, Codable, Sendable {
+/// The cross-section of a profile's tabs along the cut.
+public enum TabShape: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// The tool lifts straight up over the tab and plunges back down past it.
+    case rectangular
+    /// The tool ramps up over the tab and back down, with a flat top one bit diameter long, so the wall keeps the tab's
+    /// full thickness at its centre and its full length at its base and the machine never stops to move in Z. Needs a
+    /// flat-bottomed bit (end mill, bull nose, surfacing); others cut rectangular tabs.
+    case triangular
+    public var id: String { rawValue }
+    public var label: String { rawValue.capitalized }
+}
+
+/// A point placed on a shape's outline by hand: a tab, or the start of a profile's loop. It's kept in the shape's own
+/// coordinates (before its position, rotation and scale), like `CornerOverride`, so moving, turning, scaling or nesting
+/// the shape keeps it; when the shape's geometry changes, it follows the outline while it stays within
+/// `ContourMarks.tolerance` of it and is reported as no longer on its shape (kept in the file) otherwise.
+public struct ContourMark: Hashable, Codable, Sendable {
+    public var shapeID: UUID
+    /// On (or near) the drawn outline, in the shape's own coordinates, mm.
+    public var point: Vec2
+
+    public init(shapeID: UUID, point: Vec2) {
+        self.shapeID = shapeID
+        self.point = point
+    }
+}
+
+public struct TabSettings: Hashable, Sendable {
     public var enabled: Bool
-    /// Tabs per closed contour (evenly spaced along it).
+    /// Tabs per closed contour (evenly spaced along it), when they aren't placed by hand.
     public var count: Int
     /// Tab length along the contour, mm.
     public var width: Double
     /// Tab thickness: how much material is left standing above the final cut depth, mm.
     public var thickness: Double
+    /// Their cross-section. Saved only when triangular (format 29).
+    public var shape: TabShape
+    /// Tabs placed by hand on the canvas, exactly these (an empty list is no tabs at all); nil = `count` evenly spaced
+    /// along each loop. Format 29.
+    public var placed: [ContourMark]?
 
-    public init(enabled: Bool = false, count: Int = 4, width: Double = 0.375.inch, thickness: Double = 0.125.inch) {
+    public init(enabled: Bool = false, count: Int = 4, width: Double = 0.375.inch, thickness: Double = 0.125.inch,
+                shape: TabShape = .rectangular, placed: [ContourMark]? = nil) {
         self.enabled = enabled
         self.count = count
         self.width = width
         self.thickness = thickness
+        self.shape = shape
+        self.placed = placed
+    }
+
+    /// Tabs placed by hand rather than evenly spaced.
+    public var isPlaced: Bool { placed != nil }
+
+    /// The file format these settings need: triangular tabs and tabs placed by hand are format 29, since an older build
+    /// would ignore them and cut its own rectangular, evenly spaced tabs, which may land on the details the user kept
+    /// them off.
+    public var requiredFormatVersion: Int { enabled && (shape != .rectangular || placed != nil) ? TabSettings.formatVersion : 1 }
+
+    /// The format that adds triangular tabs, tabs placed by hand and a profile's chosen start points.
+    public static let formatVersion = 29
+}
+
+extension TabSettings: Codable {
+    private enum CodingKeys: String, CodingKey { case enabled, count, width, thickness, shape, placed }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decode(Bool.self, forKey: .enabled)
+        count = try c.decode(Int.self, forKey: .count)
+        width = try c.decode(Double.self, forKey: .width)
+        thickness = try c.decode(Double.self, forKey: .thickness)
+        shape = try c.decodeIfPresent(TabShape.self, forKey: .shape) ?? .rectangular
+        placed = try c.decodeIfPresent([ContourMark].self, forKey: .placed)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(count, forKey: .count)
+        try c.encode(width, forKey: .width)
+        try c.encode(thickness, forKey: .thickness)
+        if shape != .rectangular { try c.encode(shape, forKey: .shape) }
+        try c.encodeIfPresent(placed, forKey: .placed)
     }
 }
 
@@ -261,10 +331,14 @@ public struct ProfileParams: Hashable, Codable, Sendable {
     public var cornerRelief: CornerReliefSettings?
     /// A separate finishing lap that cuts the wall to size after the roughing passes; nil = none (the default). Format 28.
     public var finishPass: ProfileFinishPass?
+    /// Where closed loops start, chosen on the canvas: at most one per drawn loop, on its outline. A loop without one
+    /// starts where it's nearest the tool. Only inside and outside cuts use them. nil = none. Format 29.
+    public var startPoints: [ContourMark]?
 
     public init(side: CutSide = .outside, direction: CutDirection = .climb, depth: DepthSettings,
                 allowance: Double = 0, tabs: TabSettings = TabSettings(), entry: EntrySettings = EntrySettings(),
-                leads: LeadSettings? = nil, cornerRelief: CornerReliefSettings? = nil, finishPass: ProfileFinishPass? = nil) {
+                leads: LeadSettings? = nil, cornerRelief: CornerReliefSettings? = nil, finishPass: ProfileFinishPass? = nil,
+                startPoints: [ContourMark]? = nil) {
         self.side = side
         self.direction = direction
         self.depth = depth
@@ -274,11 +348,25 @@ public struct ProfileParams: Hashable, Codable, Sendable {
         self.leads = leads
         self.cornerRelief = cornerRelief
         self.finishPass = finishPass
+        self.startPoints = startPoints
     }
 
     /// The project file format these settings need: a finishing pass is format 28, since an older build would ignore it
-    /// and cut the part to the roughing's size, the finish allowance fat.
-    public var requiredFormatVersion: Int { finishPass == nil ? 1 : ProfileFinishPass.formatVersion }
+    /// and cut the part to the roughing's size, the finish allowance fat. Triangular tabs, tabs placed by hand and chosen
+    /// start points are format 29 (`TabSettings.formatVersion`) on an inside or outside cut: an older build would cut
+    /// its own tabs, and start each loop elsewhere.
+    public var requiredFormatVersion: Int {
+        let finish = finishPass == nil ? 1 : ProfileFinishPass.formatVersion
+        guard side != .on else { return finish }
+        let starts = startPoints?.isEmpty == false ? TabSettings.formatVersion : 1
+        return max(finish, tabs.requiredFormatVersion, starts)
+    }
+
+    /// Whether these settings cut tabs at all (before matching any placed by hand to their shapes): tabs on, an inside
+    /// or outside cut, some thickness, and evenly spaced ones or a placed list that isn't empty.
+    public var cutsTabs: Bool {
+        side != .on && tabs.enabled && tabs.thickness > 1e-6 && (tabs.placed.map { !$0.isEmpty } ?? (tabs.count > 0))
+    }
 }
 
 /// A profile's separate finishing pass (`ProfileParams.finishPass`): the roughing passes stop `allowance` off the
@@ -1893,7 +1981,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`). Edge
     /// profiles are format 18. A chamfer with an overcut or a form bit is format 19. Constant scallop, spiral and radial
     /// 3D finishing are format 21. Mouldings are format 22. Flutes that follow a 3D model are format 25. A profile's
-    /// separate finishing pass is format 28 (`ProfileParams.requiredFormatVersion`).
+    /// separate finishing pass is format 28, and its triangular or hand-placed tabs and chosen start points are format 29
+    /// (`ProfileParams.requiredFormatVersion`).
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {

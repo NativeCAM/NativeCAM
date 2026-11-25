@@ -62,6 +62,20 @@ enum ProfileGenerator {
                 params.tabs.enabled = false
             }
         }
+        // Triangular tabs ramp over the tab with the bit's flat bottom; a ball, V or tapered tip would leave a thinner,
+        // rounded tab than set, so those cut rectangular ones.
+        if params.tabs.enabled, params.side != .on, params.tabs.shape == .triangular {
+            if !tool.shape.hasFlatBottom {
+                warnings.append("Triangular tabs need a flat-bottomed bit (end mill, bull nose or surfacing), and \(bitName) is a "
+                    + "\(tool.shape.label.lowercased()), so its tabs are cut rectangular.")
+                params.tabs.shape = .rectangular
+            } else if params.tabs.thickness > params.tabs.width / 2 + 1e-9 {
+                let angle = atan2(params.tabs.thickness, max(params.tabs.width / 2, 1e-9)) * 180 / .pi
+                warnings.append("The triangular tabs ramp at \(Int(angle.rounded()))°, steeper than 45° (they're "
+                    + "\(context.length(params.tabs.thickness)) thick and only \(context.length(params.tabs.width)) long), so the tool "
+                    + "comes down off each one at the plunge rate. Longer or thinner tabs ramp at the cutting feed.")
+            }
+        }
         let polys = shapes.flatMap { $0.polylines(tolerance: context.flattenTolerance) }
         let closed = polys.filter { $0.isClosed && $0.count >= 3 }
         let open = polys.filter { !$0.isClosed && $0.count >= 2 }
@@ -93,6 +107,14 @@ enum ProfileGenerator {
             var loop: Polyline; var closed: Bool; var nesting: Int; var reliefs: [CornerRelief.Relief] = []
             /// With a finishing pass: the finishing loop (in `finishes`) this roughing loop is finished by.
             var group = -1
+            /// Tabs placed by hand on this loop: their centres projected onto it (tool-centre XY).
+            var tabAt: [Vec2] = []
+            /// The start chosen for this loop, projected onto it, and the drawn point and mark it came from.
+            var start: Vec2?
+            var startMark: (drawn: Vec2, mark: ContourMark)?
+            /// The loop goes round a part (an outside cut's outer loop) or the waste inside a hole (an inside cut): with
+            /// no tabs on it, a cut through the material frees what's inside.
+            var holds = false
         }
         var contours: [Contour] = []
         // The drawn regions and the tool-centre regions offset from them (inside and outside cuts): the roughing's.
@@ -131,8 +153,10 @@ enum ProfileGenerator {
             // Inside: the region is waste → keep orientation for climb.
             let reverse = (params.side == .outside) == (params.direction == .climb)
             for region in offsetRegions {
-                for loop in region.loops {
-                    contours.append(Contour(loop: reverse ? loop.reversed : loop, closed: true, nesting: 0))
+                for (k, loop) in region.loops.enumerated() {
+                    var c = Contour(loop: reverse ? loop.reversed : loop, closed: true, nesting: 0)
+                    c.holds = params.side == .inside || k == 0
+                    contours.append(c)
                 }
             }
         }
@@ -185,6 +209,8 @@ enum ProfileGenerator {
             /// The loop as planned (started between tabs, reliefs in) and its tabs: set from the first roughing loop's
             /// entry, and carried onto every loop round the wall.
             var reference: (loop: Polyline, tabs: TabPlan)?
+            /// Tabs placed by hand on this wall, projected onto the finishing loop.
+            var tabAt: [Vec2] = []
         }
         var finishes: [FinishLoop] = []
         var refusedLoops = 0
@@ -221,6 +247,53 @@ enum ProfileGenerator {
                 }
                 contours[i].group = best
                 if best >= 0 { finishes[best].remaining += 1 }
+            }
+        }
+
+        // Tabs placed by hand and chosen starts: each mark is found on its shape's drawn outline, then on the tool-centre
+        // loop nearest it (the one offset from that outline). Marks no longer on their shapes are left off.
+        let marks = ContourMarks.Index(shapes, flatten: context.flattenTolerance)
+        let markTolerance = ContourMarks.tolerance(toolRadius: tool.radius)
+        let placing = params.tabs.enabled && params.side != .on && params.tabs.isPlaced
+        var orphanedTabs = 0, orphanedStarts = 0
+        var orphanMarks: [TabMark] = []
+        func nearest(_ loops: [Polyline], to p: Vec2) -> (index: Int, point: Vec2)? {
+            var best: (Int, Vec2, Double)?
+            for (i, loop) in loops.enumerated() {
+                let c = loop.closestPoint(to: p)
+                if c.distance < (best?.2 ?? .infinity) { best = (i, c.point, c.distance) }
+            }
+            return best.map { ($0.0, $0.1) }
+        }
+        let closedIndices = contours.indices.filter { contours[$0].closed }
+        if placing, let placed = params.tabs.placed {
+            for mark in placed {
+                guard let drawn = marks.resolve(mark, tolerance: markTolerance) else {
+                    orphanedTabs += 1
+                    // Shown where it was, in orange, so it can be removed or placed again.
+                    if let shape = shapes.first(where: { $0.id == mark.shapeID }) {
+                        let at = shape.transform.apply(mark.point)
+                        orphanMarks.append(TabMark(point: at, from: at, to: at, placed: true, shapeID: mark.shapeID, localPoint: mark.point,
+                                                   cut: false, flag: "No longer on its shape, so it's left off"))
+                    }
+                    continue
+                }
+                if let hit = nearest(closedIndices.map { contours[$0].loop }, to: drawn) {
+                    contours[closedIndices[hit.index]].tabAt.append(hit.point)
+                }
+                if let hit = nearest(finishes.map(\.loop), to: drawn) { finishes[hit.index].tabAt.append(hit.point) }
+            }
+        }
+        if params.side != .on, let starts = params.startPoints {
+            for mark in starts {
+                guard let drawn = marks.resolve(mark, tolerance: markTolerance) else { orphanedStarts += 1; continue }
+                guard let hit = nearest(closedIndices.map { contours[$0].loop }, to: drawn) else { continue }
+                let i = closedIndices[hit.index]
+                // One per loop: the first one found on it.
+                if contours[i].start == nil {
+                    contours[i].start = hit.point
+                    contours[i].startMark = (drawn, mark)
+                }
             }
         }
 
@@ -297,13 +370,14 @@ enum ProfileGenerator {
         for depth in Set(contours.map(\.nesting)).sorted(by: >) {
             let group = contours.filter { $0.nesting == depth }
             func exit(_ i: Int, entry: Vec2) -> Vec2 { group[i].closed ? entry : group[i].loop.points[group[i].loop.count - 1] }
-            var entries: [Vec2] = group.map { $0.loop.points[0] }
+            var entries: [Vec2] = group.map { $0.start ?? $0.loop.points[0] }
             var remaining = Array(group.indices)
             var probe = cursor
             while !remaining.isEmpty {
                 var best = 0, bestD = Double.infinity, bestEntry = Vec2.zero
                 for (k, i) in remaining.enumerated() {
-                    let p = group[i].closed ? group[i].loop.closestPoint(to: probe).point : group[i].loop.points[0]
+                    // A loop with a chosen start is entered there.
+                    let p = group[i].closed ? (group[i].start ?? group[i].loop.closestPoint(to: probe).point) : group[i].loop.points[0]
                     let d = p.distanceSquared(to: probe)
                     if d < bestD { bestD = d; best = k; bestEntry = p }
                 }
@@ -316,7 +390,7 @@ enum ProfileGenerator {
             if let last = tour.last { cursor = exit(last, entry: entries[last]) }
         }
 
-        let firstXY = ordered.first.map { $0.loop.points[0] }
+        let firstXY = ordered.first.map { $0.start ?? $0.loop.points[0] }
         var leads = params.side == .on ? nil : params.leads
         if undercut, params.side != .on {
             // Straight off the wall, at least the undercut long, and back out the same way.
@@ -350,10 +424,40 @@ enum ProfileGenerator {
             guard tool.shape.cutsEdgesOnly, let top = context.materialTop else { return false }
             return top(p, plungeProbe) > z + 0.05
         }
+        /// The tabs on a loop as cut: evenly spaced from its start, or those placed by hand at `placedAt` (nil when the
+        /// tabs aren't placed by hand).
+        func planTabs(_ loop: Polyline, placedAt: [Vec2]?) -> TabPlan {
+            guard let placedAt else { return TabPlan(length: loop.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]) }
+            let walker = LoopWalker(loop)
+            let centres = placedAt.map { p -> Double in
+                let c = loop.closestPoint(to: p)
+                return walker.cumulative[c.segment] + loop.points[c.segment].distance(to: c.point)
+            }
+            return TabPlan(centres: centres, length: walker.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1])
+        }
+        /// `p` on `loop` moved on past any tab placed by hand it's on (half a bit diameter past the tab's end, in the
+        /// direction of the cut), and whether it moved: a loop never starts on a tab.
+        func offTabs(_ p: Vec2, on loop: Polyline, placedAt: [Vec2]) -> (point: Vec2, moved: Bool) {
+            guard placing, !placedAt.isEmpty else { return (p, false) }
+            let plan = planTabs(loop, placedAt: placedAt)
+            guard !plan.intervals.isEmpty else { return (p, false) }
+            let walker = LoopWalker(loop)
+            let c = loop.closestPoint(to: p)
+            var s = walker.cumulative[c.segment] + loop.points[c.segment].distance(to: c.point)
+            var moved = false
+            for _ in 0...plan.intervals.count {
+                let d = s.truncatingRemainder(dividingBy: walker.length)
+                guard plan.contains(d), let iv = plan.intervals.first(where: { d > $0.0 && d < $0.1 }) else { break }
+                s += iv.1 - d + tool.radius
+                moved = true
+            }
+            return moved ? (walker.point(at: s), true) : (p, false)
+        }
         // The finishing pass: the loop as planned for finishing loop `g`, started nearest `p` (between tabs).
         func finishReference(_ g: Int, startingNear p: Vec2) -> (loop: Polyline, tabs: TabPlan) {
-            let loop = CornerRelief.insert(finishes[g].reliefs, into: finishes[g].loop.startingNearest(p))
-            return (loop, TabPlan(length: loop.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]))
+            let start = offTabs(p, on: finishes[g].loop, placedAt: finishes[g].tabAt).point
+            let loop = CornerRelief.insert(finishes[g].reliefs, into: finishes[g].loop.startingNearest(start))
+            return (loop, planTabs(loop, placedAt: placing ? finishes[g].tabAt : nil))
         }
         /// A roughing loop's tabs with a finishing pass: the finishing loop's, carried onto it. nil without one.
         func roughTabs(_ contour: Contour, _ cut: Polyline) -> TabPlan? {
@@ -361,13 +465,47 @@ enum ProfileGenerator {
             let reference = finishes[contour.group].reference ?? finishReference(contour.group, startingNear: cut.points[0])
             return TabPlan.mapped(reference.tabs, from: reference.loop, onto: cut)
         }
+        // What the canvas shows: each tab on the finished wall (the finishing loop's with a finishing pass, else each
+        // roughing loop's), and each loop's start.
+        var tabMarks: [TabMark] = []
+        var startMarks: [StartMark] = []
+        let wallReach = abs(offset) + finishAllowance + markTolerance + 1
+        func recordTabs(_ loop: Polyline, _ plan: TabPlan) {
+            guard params.side != .on else { return }
+            let walker = LoopWalker(loop)
+            for t in plan.tabs {
+                let mid = (t.start + t.end) / 2
+                let centre = walker.point(at: mid)
+                guard let mark = marks.mark(near: centre, within: wallReach), let drawn = marks.resolve(mark, tolerance: wallReach) else { continue }
+                func onWall(_ s: Double) -> Vec2 {
+                    let q = walker.point(at: s)
+                    return marks.mark(near: q, within: wallReach).flatMap { marks.resolve($0, tolerance: wallReach) } ?? q
+                }
+                var flag: String?
+                if placing, let top = context.materialTop, top(centre, r * 0.5) < plan.z - 0.05 {
+                    flag = "An earlier toolpath has already cut below its top here, so it's thinner than set"
+                }
+                tabMarks.append(TabMark(point: drawn, from: onWall(mid - params.tabs.width / 2), to: onWall(mid + params.tabs.width / 2),
+                                        placed: placing, shapeID: mark.shapeID, localPoint: mark.point, flag: flag))
+            }
+        }
+        var startsOffTabs = 0
+        var startsMoved: [Double] = []
+        /// Notes where a loop started: `requested` is where it was asked to (the chosen start, moved off any tab).
+        func recordStart(_ contour: Contour, cut: Polyline) {
+            guard let chosen = contour.startMark, let used = cut.points.first else { return }
+            let dir = cut.count > 1 ? (cut.points[1] - used).normalized : Vec2(1, 0)
+            let moved = contour.start.map { used.distance(to: $0) } ?? 0
+            startMarks.append(StartMark(requested: chosen.drawn, used: used, direction: dir, moved: moved,
+                                        shapeID: chosen.mark.shapeID, localPoint: chosen.mark.point))
+        }
         var finishEnteredOnWall = 0
         var finishCut: [Polyline] = []
         /// Cuts finishing loop `g`'s lap(s), entered in the kerf its roughing loops cut.
         func cutFinish(_ g: Int, _ finish: ProfileFinishPass) {
             let reference = finishes[g].reference ?? finishReference(g, startingNear: b.position.xy)
             // Its own tabs aren't a contour too short for them again: the roughing said so.
-            let tabs = TabPlan(intervals: reference.tabs.intervals, length: reference.tabs.length, z: reference.tabs.z)
+            let tabs = reference.tabs.withoutTooShort
             let kerf = ProfileFinish.Kerf(finish: finishRegions, rough: offsetRegions, inside: params.side == .inside,
                                           reference: reference.loop, tabs: tabs, toolRadius: tool.radius)
             var finishParams = paramsAtDepth
@@ -382,7 +520,7 @@ enum ProfileGenerator {
                                              chordTolerance: context.arcTolerance) {
                 let mapped = TabPlan.mapped(tabs, from: reference.loop, onto: lead.loop)
                 cutClosedWithLeads(lead, levels: finishLevels, params: finishParams, tool: tool,
-                                   tabs: TabPlan(intervals: mapped.intervals, length: mapped.length, z: mapped.z), laps: laps,
+                                   tabs: mapped.withoutTooShort, laps: laps,
                                    builder: &b, warnings: &warnings)
             } else {
                 finishEnteredOnWall += 1
@@ -391,10 +529,17 @@ enum ProfileGenerator {
             }
             b.retract()
             finishCut.append(reference.loop)
+            recordTabs(reference.loop, tabs)
         }
         for contour in ordered {
-            let near = probe ?? b.position.xy
+            var near = contour.start ?? probe ?? b.position.xy
             probe = nil
+            if contour.closed {
+                let off = offTabs(near, on: contour.loop, placedAt: contour.tabAt)
+                if off.moved, contour.start != nil { startsOffTabs += 1 }
+                near = off.point
+            }
+            let placedAt = placing ? contour.tabAt : nil
             // A finishing lap follows the last roughing loop round its wall.
             defer {
                 if let finish, contour.group >= 0 {
@@ -407,7 +552,7 @@ enum ProfileGenerator {
                     let relieved = CornerRelief.insert(contour.reliefs, into: contour.loop)
                     if let lead = LeadPlanner.fit(contour.loop, relieved: relieved, near: near, settings: leads, wasteOnLeft: wasteOnLeft,
                                                   clearance: centreClearance, rampLength: rampLength,
-                                                  tabs: { roughTabs(contour, $0) ?? TabPlan(length: $0.length, params: paramsAtDepth, tool: tool, lastLevel: levels[levels.count - 1]) },
+                                                  tabs: { roughTabs(contour, $0) ?? planTabs($0, placedAt: placedAt) },
                                                   linkLimit: max(3 * tool.diameter, 10), chordTolerance: context.arcTolerance) {
                         // The lead planner shortens a lead that doesn't fit; an undercut bit needs the whole length.
                         if undercut, !(clearOfWalls(lead.start) && clearOfWalls(lead.leadOut[lead.leadOut.count - 1])) {
@@ -415,9 +560,15 @@ enum ProfileGenerator {
                             continue
                         }
                         if intoMaterial(lead.start, z: levels[0]) { plungesIntoMaterial += 1 }
-                        let tabs = roughTabs(contour, lead.loop)
                         if contour.group >= 0, finishes[contour.group].reference == nil {
                             finishes[contour.group].reference = finishReference(contour.group, startingNear: lead.loop.points[0])
+                        }
+                        let tabs = roughTabs(contour, lead.loop) ?? planTabs(lead.loop, placedAt: placedAt)
+                        if finish == nil { recordTabs(lead.loop, tabs) }
+                        recordStart(contour, cut: lead.loop)
+                        if let start = contour.start {
+                            let moved = lead.loop.points[0].distance(to: start)
+                            if moved > max(2 * leads.size, 5) { startsMoved.append(moved) }
                         }
                         cutClosedWithLeads(lead, levels: levels, params: paramsAtDepth, tool: tool, tabs: tabs, builder: &b, warnings: &warnings)
                         b.retract()
@@ -432,10 +583,12 @@ enum ProfileGenerator {
                 // Reliefs go in after the start is chosen, so the entry never lands on a relief tip.
                 let loop = CornerRelief.insert(contour.reliefs, into: contour.loop.startingNearest(near))
                 if intoMaterial(loop.points[0], z: levels[0]) { plungesIntoMaterial += 1 }
-                let tabs = roughTabs(contour, loop)
                 if finish != nil, contour.group >= 0, finishes[contour.group].reference == nil {
                     finishes[contour.group].reference = finishReference(contour.group, startingNear: loop.points[0])
                 }
+                let tabs = roughTabs(contour, loop) ?? planTabs(loop, placedAt: placedAt)
+                if finish == nil { recordTabs(loop, tabs) }
+                recordStart(contour, cut: loop)
                 cutClosed(loop, levels: levels, params: paramsAtDepth, tool: tool, tabs: tabs, builder: &b, warnings: &warnings)
             } else {
                 cutOpen(contour.loop, levels: levels, builder: &b)
@@ -459,6 +612,46 @@ enum ProfileGenerator {
         if params.tabs.enabled && params.side == .on {
             warnings.append("Tabs are only applied to inside/outside profiles.")
         }
+        var notes: [String] = []
+        if placing {
+            if orphanedTabs > 0 {
+                warnings.append((orphanedTabs == 1 ? "1 tab placed by hand is no longer on its shape (the shape changed or left this "
+                    + "toolpath), so it was left off." : "\(orphanedTabs) tabs placed by hand are no longer on their shapes (the shapes "
+                    + "changed or left this toolpath), so they were left off.") + " Place tabs again on the canvas, or reset them to evenly spaced.")
+            }
+            // A loop round a part with no tabs on a cut through the material frees the part.
+            let through = context.stock.rotary == nil && params.depth.cutDepth >= context.stock.thickness - 0.01
+            let free = contours.filter { $0.closed && $0.holds && $0.tabAt.isEmpty }.count
+            if through, free > 0 {
+                let what = params.side == .inside ? (free == 1 ? "the piece inside it" : "the pieces inside them")
+                    : (free == 1 ? "its part" : "their parts")
+                warnings.append("\(free == 1 ? "1 loop has" : "\(free) loops have") no tabs (they're placed by hand), so this cut "
+                    + "through the material frees \(what). Place tabs on the canvas, or hold \(free == 1 ? "it" : "them") another way.")
+            }
+            // A tab on material an earlier toolpath has already cut below the tabs' top is thinner than set, or gone.
+            if let top = context.materialTop {
+                let tabTop = -params.depth.cutDepth + params.tabs.thickness
+                let low = contours.flatMap(\.tabAt).filter { top($0, r * 0.5) < tabTop - 0.05 }.count
+                if low > 0 {
+                    warnings.append("\(low == 1 ? "1 tab placed by hand is" : "\(low) tabs placed by hand are") where an earlier toolpath "
+                        + "has already cut below the tabs' top, so \(low == 1 ? "it's" : "they're") thinner than set there, or gone. Move "
+                        + "\(low == 1 ? "it" : "them") along the cut.")
+                }
+            }
+        }
+        if orphanedStarts > 0 {
+            notes.append(orphanedStarts == 1 ? "1 chosen start is no longer on its shape, so its loop starts nearest the tool instead."
+                : "\(orphanedStarts) chosen starts are no longer on their shapes, so their loops start nearest the tool instead.")
+        }
+        if startsOffTabs > 0 {
+            notes.append(startsOffTabs == 1 ? "The start chosen on 1 loop is on a tab, so the loop starts just past the tab."
+                : "The starts chosen on \(startsOffTabs) loops are on tabs, so those loops start just past their tabs.")
+        }
+        if !startsMoved.isEmpty {
+            let far = startsMoved.max() ?? 0
+            notes.append(startsMoved.count == 1 ? "The lead didn't fit at the start chosen on 1 loop, so it's entered \(context.length(far)) away."
+                : "The leads didn't fit at the starts chosen on \(startsMoved.count) loops, so they're entered up to \(context.length(far)) away.")
+        }
         if let finish {
             if finishEnteredOnWall > 0 {
                 warnings.append("The finishing pass's lead didn't fit in the roughing's kerf on \(finishEnteredOnWall == 1 ? "1 loop" : "\(finishEnteredOnWall) loops"), "
@@ -467,6 +660,9 @@ enum ProfileGenerator {
         }
         var toolpath = b.build(id: op.id, name: op.name, tool: tool, rpm: tool.cutting.spindleRPM, warnings: warnings)
         toolpath.reliefCorners = reliefCorners
+        if params.tabs.enabled, params.side != .on { toolpath.tabMarks = tabMarks + orphanMarks }
+        if !startMarks.isEmpty { toolpath.startMarks = startMarks }
+        if !notes.isEmpty { toolpath.notes = (toolpath.notes ?? []) + notes }
         if !errors.isEmpty { toolpath.errors = errors }
         if let finish, !finishCut.isEmpty {
             toolpath.finishLaps = FinishLaps(loops: finishCut, tolerance: ProfileFinish.loopTolerance(allowance: finish.allowance))
@@ -485,10 +681,8 @@ enum ProfileGenerator {
 
         let tabs = given ?? TabPlan(length: L, params: params, tool: tool, lastLevel: levels[levels.count - 1])
         let lap = L * Double(max(1, laps))
-        if tabs.tooShort {
-            warnings.append("A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it.")
-        }
-        func tabBreaks(_ s0: Double, _ s1: Double) -> [Double] { tabs.breaks(s0, s1) }
+        if tabs.tooShort { warnings.append(tooShortWarning(params)) }
+        func tabBreaks(_ s0: Double, _ s1: Double, _ z: Double) -> [Double] { tabs.breaks(s0, s1, level: z) }
         func clampTab(_ s: Double, _ z: Double) -> Double { tabs.clamp(s, z) }
 
         let useRamp = params.entry.kind == .ramp && params.entry.rampLength > 0
@@ -502,7 +696,7 @@ enum ProfileGenerator {
             if useRamp {
                 let s0 = s, zp = zPrev
                 // The ramp end must be its own vertex, or a long edge would stretch the descent across its full length.
-                let breaks = tabBreaks(s0, s0 + rampLen + lap) + [s0 + rampLen]
+                let breaks = tabBreaks(s0, s0 + rampLen + lap, z) + [s0 + rampLen]
                 let pts = walker.walk(from: s0, to: s0 + rampLen + lap, breaks: breaks) { t in
                     let base = t < s0 + rampLen ? zp + (z - zp) * (t - s0) / rampLen : z
                     return clampTab(t, base)
@@ -512,7 +706,7 @@ enum ProfileGenerator {
             } else {
                 b.feed(Vec3(walker.point(at: s), clampTab(s, z)))
                 let s0 = s
-                let pts = walker.walk(from: s0, to: s0 + lap, breaks: tabBreaks(s0, s0 + lap)) { t in clampTab(t, z) }
+                let pts = walker.walk(from: s0, to: s0 + lap, breaks: tabBreaks(s0, s0 + lap, z)) { t in clampTab(t, z) }
                 b.follow(pts)
                 s = s0 + lap
             }
@@ -536,9 +730,7 @@ enum ProfileGenerator {
         let L = walker.length
         guard L > 1e-6, let deepest = levels.last else { return }
         let tabs = given ?? TabPlan(length: L, params: params, tool: tool, lastLevel: deepest)
-        if tabs.tooShort {
-            warnings.append("A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it.")
-        }
+        if tabs.tooShort { warnings.append(tooShortWarning(params)) }
         let useRamp = params.entry.kind == .ramp && params.entry.rampLength > 0
         let a = lead.start
         let leadIn = lead.leadIn
@@ -565,13 +757,13 @@ enum ProfileGenerator {
                     pts.append(Vec3(leadIn[j], rampZ(cumulative[j])))
                 }
                 b.follow(pts)
-                let breaks = tabs.breaks(0, lapEnd) + (rampWall > 1e-9 ? [rampWall] : [])
+                let breaks = tabs.breaks(0, lapEnd, level: z) + (rampWall > 1e-9 ? [rampWall] : [])
                 b.follow(walker.walk(from: 0, to: lapEnd, breaks: breaks) { t in
                     tabs.clamp(t, t < rampWall ? z0 + (z - z0) * (leadInLength + t) / rampTotal : z)
                 })
             } else {
                 b.follow(leadIn.dropFirst().map { Vec3($0, z) })
-                b.follow(walker.walk(from: 0, to: lapEnd, breaks: tabs.breaks(0, lapEnd)) { t in tabs.clamp(t, z) })
+                b.follow(walker.walk(from: 0, to: lapEnd, breaks: tabs.breaks(0, lapEnd, level: z)) { t in tabs.clamp(t, z) })
             }
             let exitZ = b.position.z
             b.follow(lead.leadOut.dropFirst().map { Vec3($0, exitZ) })
@@ -585,6 +777,13 @@ enum ProfileGenerator {
                 b.enter(at: Vec3(a, useRamp ? zPrev : next))
             }
         }
+    }
+
+    /// The Checks warning for a loop too short for its tabs.
+    static func tooShortWarning(_ params: ProfileParams) -> String {
+        params.tabs.isPlaced
+            ? "A tab placed by hand is too long for the loop it's on (with the bit's width it would take most of the loop); it was left off."
+            : "A contour is too short for \(params.tabs.count) tabs; tabs were skipped on it."
     }
 
     private static func cutOpen(_ line: Polyline, levels: [Double], builder b: inout ToolpathBuilder) {

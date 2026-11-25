@@ -79,7 +79,7 @@ public enum OperationScheduler {
         /// cut-out, so the edge profile may run on either side of it (the user's order stands).
         func heldByTabs(_ edge: CAMOperation, _ cutOut: CAMOperation) -> Bool {
             guard case let .edgeProfile(e) = edge.kind else { return false }
-            return Self.clearsTabs(e.depth(for: edge.tool), of: cutOut)
+            return Self.clearsTabs(e.depth(for: edge.tool), of: cutOut, in: project)
         }
         func inside(_ inner: [Area], _ outer: [Area]) -> Bool {
             !inner.isEmpty && inner.allSatisfy { r in
@@ -156,8 +156,8 @@ public enum OperationScheduler {
     /// Whether an edge profile `depth` deep (its tip below the material top) stays above the tabs `cutOut` leaves: a
     /// profile with tabs whose tops are at least that deep. Tabs are at the bottom of the cut, so a top-edge profile
     /// normally clears them.
-    public static func clearsTabs(_ depth: Double, of cutOut: CAMOperation) -> Bool {
-        guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(p) else { return false }
+    public static func clearsTabs(_ depth: Double, of cutOut: CAMOperation, in project: Project) -> Bool {
+        guard case let .profile(p) = cutOut.kind, PartHold.holdsPart(cutOut, in: project) else { return false }
         return depth <= tabTop(p) + 1e-6
     }
 

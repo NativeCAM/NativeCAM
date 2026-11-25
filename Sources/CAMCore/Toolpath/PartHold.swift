@@ -22,15 +22,24 @@ public enum PartHold {
         public var possible: Bool { z < -0.01 }
     }
 
-    /// Whether a profile leaves tabs that hold the part it cuts out. The one place that decides it, so tabs placed by
-    /// hand only need to change this: a tab count alone doesn't say whether any tabs are cut.
-    public static func holdsPart(_ p: ProfileParams) -> Bool {
-        p.side != .on && p.tabs.enabled && p.tabs.count > 0 && p.tabs.thickness > 1e-6
+    /// Whether a profile's settings leave tabs that hold the part it cuts out. The one place that decides it: a tab
+    /// count alone doesn't say whether any tabs are cut. With tabs placed by hand, an empty list holds nothing; whether
+    /// the placed tabs are still on their shapes needs the design (`holdsPart(_:in:)`).
+    public static func holdsPart(_ p: ProfileParams) -> Bool { p.cutsTabs }
+
+    /// Whether a profile operation leaves tabs that hold its part, in this design: as `holdsPart(_:)`, and with tabs
+    /// placed by hand, at least one of them still on its shape (marks no longer on their shapes are left off the cut,
+    /// so they hold nothing).
+    public static func holdsPart(_ op: CAMOperation, in project: Project) -> Bool {
+        guard case let .profile(p) = op.kind, holdsPart(p) else { return false }
+        guard let placed = p.tabs.placed else { return true }
+        return ContourMarks.matchedCount(placed, shapes: project.shapes(for: op), toolRadius: op.tool.radius) > 0
     }
 
     /// Whether `op` is a profile through the flat material that leaves tabs: a cut-out its part stays on.
-    public static func isTabbedCutOut(_ op: CAMOperation, thickness: Double) -> ProfileParams? {
-        guard op.enabled, case let .profile(p) = op.kind, holdsPart(p), p.depth.cutDepth >= thickness - 0.01 else { return nil }
+    public static func isTabbedCutOut(_ op: CAMOperation, in project: Project) -> ProfileParams? {
+        guard op.enabled, case let .profile(p) = op.kind, holdsPart(op, in: project),
+              p.depth.cutDepth >= project.stock.thickness - 0.01 else { return nil }
         return p
     }
 
@@ -81,7 +90,7 @@ public enum PartHold {
         }
         var best: (thickness: Double, name: String)?
         for cutOut in project.operations {
-            guard cutOut.id != op.id, let p = isTabbedCutOut(cutOut, thickness: stock.thickness) else { continue }
+            guard cutOut.id != op.id, let p = isTabbedCutOut(cutOut, in: project) else { continue }
             let near = project.shapes(for: cutOut).contains { s in
                 let r = s.bounds
                 let sheet = project.sheetIndex(of: s)

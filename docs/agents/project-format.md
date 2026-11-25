@@ -94,6 +94,7 @@ What raises it, from the code:
 | 26 | Adaptive 3D roughing (`"clearing": "adaptive"`) |
 | 27 | A `cutDirection` other than the toolpath's default |
 | 28 | A profile's `finishPass` |
+| 29 | A profile's triangular tabs (`"shape": "triangular"`), tabs placed by hand (`placed`) or `startPoints`, on an inside or outside cut |
 
 The code names no feature for formats 11, 23 or 24. Settings that change nothing for an older build don't raise the format (`fromBottom`, `restFromEarlier`, `flatRaster`, `adjustFeedsForLoad`, `spindleSpeed`, the `layers` list).
 
@@ -265,7 +266,8 @@ Each kind's parameters go in `kind.<name>._0`. **Required** keys must be present
 Shared parts:
 
 - **`depth`** (profile, pocket): `startDepth` and `cutDepth` required; `passDepth` optional (the tool's `stepdown`); `fromBottom` optional. With `fromBottom`, the cut stops that far above the material's bottom (a negative value goes through, that far into the spoilboard), and `cutDepth` is kept fitted to the thickness when the thickness changes. Set both, as `{"cutDepth": 18.5, "startDepth": 0, "fromBottom": -0.5}` on 18 mm material.
-- **`tabs`**: `enabled`, `count` (per closed loop), `width` (along the cut) and `thickness` (left standing), all required.
+- **`tabs`**: `enabled`, `count` (per closed loop), `width` (along the cut) and `thickness` (left standing), all required. Optional: `shape` (`rectangular`, the default, or `triangular`: ramped over, with a flat top one bit diameter long; flat-bottomed bits only, others cut rectangular) and `placed`, a list of marks (below) that replaces `count`: exactly those tabs, evenly spaced ones not cut at all, and an empty list is no tabs. Either one is format 29.
+- **A mark** (`ContourMark`, for `tabs.placed` and a profile's `startPoints`): `{"shapeID": "…", "point": {"x": …, "y": …}}`, the point on or near the shape's drawn outline in the shape's own coordinates (before its `position`, `rotation` and `scale`), mm. It's matched to the outline within max(1 mm, the bit's radius); one further off is kept but left off the cut, with a warning. To place one in the middle of a drawn rectangle's bottom edge, `point` is `{"x": 0, "y": -height/2}`.
 - **`entry`**: `kind` (`plunge` or `ramp`) and `rampLength`, both required.
 - **`leads`** (optional): `kind` (`arc` or `line`), `radius`, `sweep`, `length`, `angle`, `leadOut` and `overlap`, all required when `leads` is present (defaults in the app: arc, 6.35, 90°, 6.35, 45°, true, 0).
 - **`cornerRelief`** (optional): `style` (`dogbone` or `tBone`), `tBoneSide` (`longer`, `shorter`, `alongX`, `alongY`) and `maxCornerAngle` (120) required; `overrides` and `avoidsOtherParts` (true) optional.
@@ -275,7 +277,7 @@ Shared parts:
 
 ### profile
 
-Cuts along closed or open vectors. `side` (`outside`, `inside`, `on`), `direction`, `depth`, `allowance` (material left on the wall), `tabs` and `entry` are required. `leads`, `cornerRelief` and `finishPass` are optional.
+Cuts along closed or open vectors. `side` (`outside`, `inside`, `on`), `direction`, `depth`, `allowance` (material left on the wall), `tabs` and `entry` are required. `leads`, `cornerRelief`, `finishPass` and `startPoints` are optional. `startPoints` is a list of marks, at most one per drawn loop, where those loops start (the lead still has to fit there; when it doesn't, the entry moves along the loop and `post` notes how far); format 29. Inside and outside cuts only.
 
 `finishPass` (format 28) adds a separate finishing lap per loop: the roughing stops `allowance` (mm) further off the wall, then the finish cuts it, at `depth` `fullDepth` (one lap at the cut depth) or `eachPass` (one at each roughing depth), in its own `direction` (the app's default is `conventional`), at `feedPercent` of the bit's feed (1 = 100%, 0.25–1.5), with an optional `springPass`. All five keys are required inside it: `{"allowance": 0.508, "depth": "fullDepth", "direction": "conventional", "feedPercent": 1, "springPass": false}`. Leave it out for none. `post` refuses the job (an `[error]` starting "Refused:", exit 1, nothing written) when the finish allowance is over half the bit's width, a full-depth finish is deeper than the flutes, or a loop's roughing offset doesn't fit where its finish does; fix the project rather than forcing it. It only applies to `inside` and `outside` profiles, and is skipped on tiled jobs. See `Fixtures/projects/finishing-pass-v28.nativecam` and `Fixtures/finishing-pass/`.
 
