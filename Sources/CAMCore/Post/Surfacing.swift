@@ -13,6 +13,9 @@ import Foundation
 ///   board's bottom). The file's first line says so, and every cut reads back at exactly −k × the pass depth.
 /// - **XY zero is the area's front-left corner.** No `G53`: NativeCAM knows the travel's size, not where the work zero sits
 ///   in it, so whole-bed mode tells the operator to back off the front-left limit of travel by the inset.
+/// - **Margin:** every move (lines, overshoot, ramps and links) keeps at least the inset (1/4 in or 6 mm) clear of the
+///   travel's ends, so a pull-off, a jog or soft-limit rounding can't trip a limit with the bit in the board. On the whole
+///   bed the lines stop on the area's edges (no overshoot); the bit still sweeps its radius past them.
 /// - **Entry:** on a custom area (taken to be the board) the bit plunges in free air past the edge, then feeds in; on the
 ///   whole bed (no room past the edges) it ramps along the first line over at least twice its diameter, then goes back
 ///   along the ramp at depth.
@@ -89,7 +92,8 @@ public enum Surfacing {
         public var direction: Direction
         /// How far each line runs past the area's edge, mm; nil for the bit's radius + 1/8 in (3 mm).
         public var overshoot: Double?
-        /// The whole bed's inset from the travel on each side, mm; nil for 1/4 in (6 mm).
+        /// The margin kept clear of the travel's ends on every side, mm; nil for 1/4 in (6 mm). The whole bed is the
+        /// travel less this on each side.
         public var inset: Double?
         /// Shorten the overshoot to fit the travel, rather than refusing a custom area that's too long with it.
         public var clampOvershoot: Bool
@@ -150,6 +154,8 @@ public enum Surfacing {
         public var warnings: [String]
         /// The whole bed's inset from the travel, mm (nil for a custom area).
         public var inset: Double?
+        /// The margin every move keeps from the travel's ends, mm.
+        public var margin: Double
         /// The ramp's length, mm.
         public var rampLength: Double
     }
@@ -256,30 +262,34 @@ public enum Surfacing {
         let wanted = options.overshoot ?? (r + defaultOvershootMargin(u))
         guard wanted >= 0 else { throw Refused("The overshoot can't be negative.") }
         var area: Vec2, overshoot: Double, inset: Double?
+        let margin = options.inset ?? defaultInset(u)
+        guard margin >= 0 else { throw Refused("The inset can't be negative.") }
+        // The room the program's moves may span: the travel less the margin at each end.
+        let usable = Vec2(travel.x - 2 * margin, travel.y - 2 * margin)
         switch options.area {
         case .wholeBed:
-            let i = options.inset ?? defaultInset(u)
-            guard i >= 0 else { throw Refused("The inset can't be negative.") }
-            area = Vec2(travel.x - 2 * i, travel.y - 2 * i)
+            area = usable
             guard area.x > 0, area.y > 0 else { throw Refused("The inset leaves nothing of the \(Calibration.size(travel, u)) travel.") }
-            // No room past the travel: the lines run to the travel's ends and no further.
-            overshoot = min(wanted, i)
-            inset = i
+            // No room past the area: the lines stop on its edges, so every move stays the margin inside the travel.
+            overshoot = 0
+            inset = margin
         case .custom(let size):
             guard size.x > 0, size.y > 0 else { throw Refused("The area needs a width and a height.") }
             area = size
             inset = nil
-            if across(size) > across(travel) + 1e-6 || lengthwise(size) > lengthwise(travel) + 1e-6 {
-                throw Refused("The \(Calibration.size(size, u)) area is bigger than the machine's \(Calibration.size(travel, u)) travel.")
+            if size.x > usable.x + 1e-6 || size.y > usable.y + 1e-6 {
+                throw Refused("The \(Calibration.size(size, u)) area doesn't fit in the machine's \(Calibration.size(travel, u)) travel with "
+                    + "\(len(margin)) kept clear of the limits on every side: at most \(Calibration.size(usable, u)).")
             }
-            let room = (lengthwise(travel) - lengthwise(size)) / 2
+            let room = (lengthwise(usable) - lengthwise(size)) / 2
             if wanted > room + 1e-6 {
                 guard options.clampOvershoot else {
                     throw Refused("With the \(len(wanted)) overshoot at each end, the lines run \(len(lengthwise(size) + 2 * wanted)) in \(axis), "
-                        + "more than the machine's \(len(lengthwise(travel))) of travel. Shorten the overshoot to \(len(room)) or make the area smaller.")
+                        + "more than the \(len(lengthwise(usable))) of travel left with \(len(margin)) kept clear of each limit. "
+                        + "Shorten the overshoot to \(len(room)) or make the area smaller.")
                 }
                 overshoot = room
-                warnings.append("The overshoot is shortened to \(len(room)) to fit the travel"
+                warnings.append("The overshoot is shortened to \(len(room)) to keep \(len(margin)) clear of the travel's limits"
                     + (room < r ? ": the bit doesn't clear the board's \(axis) ends." : "."))
             } else {
                 overshoot = wanted
@@ -294,7 +304,7 @@ public enum Surfacing {
         let entry: Entry = overshoot >= r + plungeClearance(u) - 1e-6 ? .offEdge : .ramp
         let rampLength = min(2 * tool.diameter, lengthwise(area) + 2 * overshoot)
         return Plan(area: area, overshoot: overshoot, spacing: spacing, lines: lines, entry: entry, feed: feed, plunge: plunge,
-                    rpm: rpm, totalDepth: total, warnings: warnings, inset: inset, rampLength: rampLength)
+                    rpm: rpm, totalDepth: total, warnings: warnings, inset: inset, margin: margin, rampLength: rampLength)
     }
 
     /// The machine the program is posted for: NativeCAM's own post, and a spin-up dwell of at least
@@ -408,9 +418,9 @@ public enum Surfacing {
         if let inset = plan.inset {
             lines.append("XY ZERO: the front-left corner of the area, \(len(inset)) in from the front-left limits of travel: jog to the "
                 + "front-left limit of X and Y travel, move \(len(inset)) towards the back and \(len(inset)) to the right, then zero X and Y.")
-            let reach = plan.overshoot + options.tool.diameter / 2
-            lines.append("WHOLE BED: the bit reaches \(len(min(reach, inset + options.tool.diameter / 2))) past the area's edges at most; "
-                + "any of the board beyond that is out of the machine's reach and isn't surfaced.")
+            let swept = Vec2(plan.area.x + options.tool.diameter, plan.area.y + options.tool.diameter)
+            lines.append("WHOLE BED: the bit's centre stays \(len(inset)) inside the travel's limits on every side, so it surfaces "
+                + "\(Calibration.size(swept, u)): the area plus the bit's radius all round. Any of the board beyond that isn't surfaced.")
         } else {
             lines.append("XY ZERO: the front-left corner of the \(Calibration.size(plan.area, u)) board.")
         }
@@ -479,11 +489,13 @@ public enum Surfacing {
             issues.append(GCodeCheck.Issue(.error, "Z zero isn't the top of the spoilboard."))
         }
         var minZ = Double.infinity
+        var ext = (lo: Vec2(.infinity, .infinity), hi: Vec2(-.infinity, -.infinity))
         var lowRapid = false, offLevel = false, outside = false
         for seg in read.segments {
             for m in seg.motions where m.kind != .dwell {
                 let e = stock.fromWork(m.end)
                 let z = e.z - raised
+                ext = (Vec2(min(ext.lo.x, e.x), min(ext.lo.y, e.y)), Vec2(max(ext.hi.x, e.x), max(ext.hi.y, e.y)))
                 minZ = min(minZ, z)
                 if m.kind == .rapid, e.z < clear - tol, !lowRapid {
                     lowRapid = true
@@ -510,9 +522,16 @@ public enum Surfacing {
             issues.append(GCodeCheck.Issue(.error, "Reads back \(Calibration.length(-minZ, u)) deep at most, where the program "
                 + "takes off \(Calibration.length(total, u))."))
         }
+        // The program's whole extent, park and links included, keeps the margin clear of the travel's ends: its span
+        // within the travel less two margins and, on the whole bed (zeroed the inset in from the front-left limits),
+        // its position too.
         let travel = program.project.machine.travel
-        if hi.x - lo.x > travel.x + tol || hi.y - lo.y > travel.y + tol {
-            issues.append(GCodeCheck.Issue(.error, "The lines span \(Calibration.size(Vec2(hi.x - lo.x, hi.y - lo.y), u)), more than the machine's travel."))
+        let m = plan.margin
+        if ext.hi.x - ext.lo.x > travel.x - 2 * m + tol || ext.hi.y - ext.lo.y > travel.y - 2 * m + tol {
+            issues.append(GCodeCheck.Issue(.error, "The program spans \(Calibration.size(Vec2(ext.hi.x - ext.lo.x, ext.hi.y - ext.lo.y), u)), "
+                + "more than the machine's travel less \(Calibration.length(m, u)) at each end."))
+        } else if plan.inset != nil, ext.lo.x < -tol || ext.lo.y < -tol || ext.hi.x > travel.x - 2 * m + tol || ext.hi.y > travel.y - 2 * m + tol {
+            issues.append(GCodeCheck.Issue(.error, "The program comes within \(Calibration.length(m, u)) of the travel's limits."))
         }
         return issues
     }

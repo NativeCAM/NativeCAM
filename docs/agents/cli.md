@@ -334,30 +334,30 @@ Writes a spoilboard surfacing program for the project's machine, or for the defa
 
 | Option | Default | Rules |
 |---|---|---|
-| `--area` | `bed`: the travel less `--inset` (1/4 in or 6 mm) on each side | `WxH` is a board. The area, or a board's lines with their overshoot, past the travel is refused |
+| `--area` | `bed`: the travel less `--inset` (1/4 in or 6 mm) on each side | `WxH` is a board. Every move keeps `--inset` clear of the travel's limits: a board, or its lines with their overshoot, that would come nearer is refused |
 | `--bit n` | the starter surfacing bit, T8 (1-1/4") | a surfacing bit or flat end mill from the project's toolpaths or the starter library. Its feed and RPM are used; a feed above the machine's highest is refused |
 | `--stepover` | 50 (percent of the bit) | 10 to 90; a warning above 80 |
 | `--depth` | 0.02 in or 0.5 mm per pass | at most min(flute length, 1/8 in or 3 mm); a warning above 1/16 in or 1.5 mm |
 | `--passes` | 1 | 1 to 20; the total no deeper than the flutes, a warning above 1/8 in |
 | `--along` | `x` | lines along X or Y |
 | `--one-way` | zig-zag | every line climb, with a retract between: for reading tram |
-| `--overshoot` | the bit's radius + 1/8 in (3 mm) | the whole bed's is cut to the inset. `--clamp-overshoot` shortens a board's to fit the travel, with a warning, instead of refusing |
+| `--overshoot` | the bit's radius + 1/8 in (3 mm) | none on the whole bed: its lines stop on the area's edges. `--clamp-overshoot` shortens a board's to keep the margin, with a warning, instead of refusing |
 | `--clearance` | 0.5 in or 12 mm | every rapid stays at or above it |
 | `--board t` | none | the spoilboard's thickness: refused when less than 1/2 in (12 mm) would be left |
 
-The program's first line is `(Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board})`. XY zero is the area's front-left corner (for the whole bed, the inset in from the front-left limits of travel). The spindle dwells at least 3 s before the first contact, whatever the machine's spin-up dwell. A custom board plunges in free air past its edge; the whole bed ramps in over at least twice the bit's diameter. The file is checked with the same read-back as `post`, plus its own: every cut at exactly −k × the depth, the lowest point at the total depth, no rapid below the clearance, the lines inside the travel. Both files must pass, or nothing is written.
+The program's first line is `(Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board})`. XY zero is the area's front-left corner (for the whole bed, the inset in from the front-left limits of travel). The spindle dwells at least 3 s before the first contact, whatever the machine's spin-up dwell. A custom board plunges in free air past its edge; the whole bed ramps in over at least twice the bit's diameter. The file is checked with the same read-back as `post`, plus its own: every cut at exactly −k × the depth, the lowest point at the total depth, no rapid below the clearance, the program's whole extent at least the inset inside the travel (by span on a board; by position on the whole bed, zeroed the inset in from the front-left limits). Both files must pass, or nothing is written.
 
 ```text
 $ nativecam-cli surface
 Avid Mach4 spoilboard surfacing -> surface-spoilboard-61x61in.tap
 Air cut (Z raised 1 in) -> surface-spoilboard-61x61in-air.tap
   60.875 × 60.875 in, 99 lines along X 0.621 in apart, both ways (zig-zag), 1 x 0.02 in = 0.02 in deep
-  1-1/4" Surfacing Bit: 150 in/min, 12000 RPM; overshoot 0.25 in, entry: ramp of 2.5 in
+  1-1/4" Surfacing Bit: 150 in/min, 12000 RPM; overshoot 0 in, entry: ramp of 2.5 in
   Z ZERO: TOP OF THE SPOILBOARD (touch plate on the board)
   XY ZERO: the front-left corner of the area, 0.25 in in from the front-left limits of travel: …
-Estimated run time: 0:41:13
-$ nativecam-cli surface --area 61x24
-Not written: With the 0.75 in overshoot at each end, the lines run 62.5 in in X, more than the machine's 61.375 in of travel. Shorten the overshoot to 0.188 in or make the area smaller.
+Estimated run time: 0:40:53
+$ nativecam-cli surface --area 60x24
+Not written: With the 0.75 in overshoot at each end, the lines run 61.5 in in X, more than the 60.875 in of travel left with 0.25 in kept clear of each limit. Shorten the overshoot to 0.437 in or make the area smaller.
 $ nativecam-cli surface --area 12x12 --one-way --stepover 90 --depth 0.01
 [warning] A stepover of 90% is above 80%: fine for reading tram, but it can leave ridges.
 Avid Mach4 spoilboard surfacing -> surface-spoilboard-12x12in.tap

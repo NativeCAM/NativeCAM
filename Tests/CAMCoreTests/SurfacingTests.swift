@@ -151,12 +151,12 @@ struct SurfacingTests {
         return seconds
     }
 
-    /// The whole bed at the defaults, by hand: 99 lines of 61.375 in, 98 steps of 0.621 in and the 2 × 2.5 in ramp at
+    /// The whole bed at the defaults, by hand: 99 lines of 60.875 in, 98 steps of 0.621 in and the 2 × 2.5 in ramp at
     /// 150 in/min, 0.5 in down at 20 in/min: about 41 min. The program says so in its header and its estimate.
     @Test func wholeBedTimeMatchesAHandCount() throws {
         let program = try Self.program()
         #expect(program.plan.lines.count == 99)
-        let cut = (99 * 61.375 + 98 * (60.875 / 98) + 5) / 150 * 60 + 0.5 / 20 * 60
+        let cut = (99 * 60.875 + 98 * (60.875 / 98) + 5) / 150 * 60 + 0.5 / 20 * 60
         let estimate = CycleTimeEstimator.estimate(program.toolpaths, project: program.project)
         #expect(abs((estimate.feedSeconds + estimate.rapidSeconds) / cut - 1) < 0.10, "\(estimate.feedSeconds) s vs \(cut) s")
         #expect(program.setup.contains("Runs about \(Surfacing.time(program.estimatedSeconds))."))
@@ -190,6 +190,29 @@ struct SurfacingTests {
         // The plunge is outside the area by more than the bit's radius.
         let plunge = try #require(custom.toolpaths[0].motions.first { $0.kind == .feed })
         #expect(plunge.end.x < -custom.options.tool.diameter / 2)
+    }
+
+    /// Every move, ramps and links included, stays the inset inside the travel: on the whole bed by position (the zero
+    /// is the inset in from the front-left limits), on a board by span. A program that doesn't is flagged by `verify`.
+    @Test func everyMoveKeepsTheMarginFromTheTravel() throws {
+        let bed = try Self.program()
+        let travel = bed.project.machine.travel, m = 0.25.inch
+        #expect(bed.plan.overshoot == 0)
+        for tp in bed.toolpaths + bed.airToolpaths {
+            for p in tp.motions.map(\.end) + [tp.start] {
+                #expect(p.x >= -1e-9 && p.y >= -1e-9 && p.x <= travel.x - 2 * m + 1e-9 && p.y <= travel.y - 2 * m + 1e-9, "\(p)")
+            }
+        }
+        #expect(bed.setup.contains { $0.contains("surfaces 62.125 × 62.125 in") }, "\(bed.setup)")
+        // A wider margin than the program was made for: the same file now comes too near the limits.
+        var tight = bed
+        tight.plan.margin = 0.5.inch
+        let issues = Surfacing.verify(tight.gcode, program: tight)
+        #expect(issues.contains { $0.severity == .error && $0.message.contains("more than the machine's travel less 0.5 in") }, "\(issues.map(\.text))")
+        // A board's span keeps two margins clear.
+        let board = try Self.program { $0.area = .custom(Vec2(59.375.inch, 24.inch)) }
+        let span = board.plan.area.x + 2 * board.plan.overshoot
+        #expect(abs(span - (travel.x - 2 * m)) < 1e-9)
     }
 
     @Test func oneWayCutsEveryLineTheSameWay() throws {
@@ -359,6 +382,6 @@ struct SurfacingCommandLineTests {
         let small = SurfacingTests.fixtures.appendingPathComponent("small-machine.nativecam").path
         let tooBig = try CommandLineTests.run(["surface", small, "--area", "36x36", "-o", dir.appendingPathComponent("big.tap").path])
         #expect(tooBig.status != 0)
-        #expect(tooBig.output.contains("bigger than the machine's 24 × 24 in travel"), "\(tooBig.output)")
+        #expect(tooBig.output.contains("doesn't fit in the machine's 24 × 24 in travel"), "\(tooBig.output)")
     }
 }

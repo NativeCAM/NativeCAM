@@ -1,0 +1,1 @@
+{"note":"A board that fits the travel but reaches into the 1/4 in margin at its ends is refused, even with the overshoot shortened.","area":[61,24],"clampOvershoot":true,"expect":"refused","text":"with 0.25 in kept clear of the limits on every side: at most 60.875 × 60.875 in."}

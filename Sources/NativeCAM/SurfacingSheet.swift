@@ -135,10 +135,12 @@ struct SurfacingSheet: View {
             }
         } footer: {
             note(settings.wholeBed
-                 ? "The machine's \(Calibration.size(machine.travel.xy, units)) travel less \(len(Surfacing.defaultInset(units))) on each side. "
+                 ? "The machine's \(Calibration.size(machine.travel.xy, units)) travel less \(len(Surfacing.defaultInset(units))) on each side: "
+                    + "every move stays that far inside the limits, and the bit surfaces its radius past the area's edges. "
                     + "XY zero is the area's front-left corner."
                  : "A board this size, zeroed at its front-left corner. The bit plunges just past its edge and runs "
-                    + "\(len(tool.diameter / 2 + Surfacing.defaultOvershootMargin(units))) past each end.", problem: false)
+                    + "\(len(tool.diameter / 2 + Surfacing.defaultOvershootMargin(units))) past each end, keeping "
+                    + "\(len(Surfacing.defaultInset(units))) clear of the travel's limits.", problem: false)
         }
     }
 
