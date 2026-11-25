@@ -80,16 +80,21 @@ public struct MouldingRoughing: Hashable, Codable, Sendable {
     public var passDepth: Double?
     /// Stepover as a fraction of the tool diameter; nil uses the tool's.
     public var stepoverFraction: Double?
+    /// The offset rings' cut direction; nil = climb, as they always have. Conventional is format 27.
+    public var cutDirection: PassDirection?
 
-    public init(tool: Tool, allowance: Double = 0.02.inch, passDepth: Double? = nil, stepoverFraction: Double? = nil) {
+    public init(tool: Tool, allowance: Double = 0.02.inch, passDepth: Double? = nil, stepoverFraction: Double? = nil,
+                cutDirection: PassDirection? = nil) {
         self.tool = tool
         self.allowance = allowance
         self.passDepth = passDepth
         self.stepoverFraction = stepoverFraction
+        self.cutDirection = cutDirection
     }
 
     /// The 3D roughing settings this pass cuts with, over the swept surface.
     public var rough3D: Rough3DParams {
-        Rough3DParams(allowance: allowance, passDepth: passDepth, stepoverFraction: stepoverFraction, boundary: .model)
+        Rough3DParams(allowance: allowance, passDepth: passDepth, stepoverFraction: stepoverFraction, boundary: .model,
+                      cutDirection: cutDirection)
     }
 }

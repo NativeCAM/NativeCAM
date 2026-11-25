@@ -31,6 +31,10 @@ struct OperationInspector: View {
                         thickness: project.stock.thickness, spindleSpeed: $op.spindleSpeed,
                         automatic: workspace.job?.toolpaths.first { $0.sourceOperationID == op.id && $0.tool == op.tool }?.automaticSpindle)
             parameters
+            if op.kind.passDirectionChoices != nil {
+                CutDirectionSection(kind: $op.kind, rotary: project.stock.rotary != nil,
+                                    time: workspace.job?.toolpaths.first { $0.id == op.id }?.directionTime)
+            }
             if project.stock.rotary != nil, let job = workspace.job,
                case let tps = job.toolpaths.filter({ $0.sourceOperationID == op.id }), tps.count > 1 {
                 IndexedResultSection(toolpaths: tps, job: job, rapidRate: project.machine.rapidRateForEstimates, units: units)
@@ -557,11 +561,47 @@ struct MouldingRoughingSection: View {
                                                               set: { var q = p; q.roughing?.passDepth = max(0.05, $0); set(q) }), units: units)
                 PercentField(title: "Stepover", fraction: Binding(get: { r.stepoverFraction ?? r.tool.cutting.stepoverFraction },
                                                                  set: { var q = p; q.roughing?.stepoverFraction = $0; set(q) }))
+                Picker("Cut direction", selection: Binding(get: { r.rough3D.directionInUse },
+                                                           set: { var q = p; q.roughing?.cutDirection = $0 == .climb ? nil : $0; set(q) })) {
+                    ForEach(r.rough3D.directionChoices) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
                 Text("Clears the moulding in layers with \(r.tool.name), with its own feeds, before the finish.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Without roughing, the finishing bit cuts the whole depth in its first passes.")
                     .font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// Cut direction for the toolpaths whose passes run in rows, rings or a pattern (`OperationKind.passDirection`): the
+/// directions the pattern can hold, why some passes can't, and with one way, the planner's time against both ways.
+struct CutDirectionSection: View {
+    @Binding var kind: OperationKind
+    let rotary: Bool
+    let time: DirectionTime?
+
+    var body: some View {
+        if let choices = kind.passDirectionChoices, let current = kind.passDirection {
+            Section("Direction") {
+                Picker("Cut direction", selection: Binding(get: { current }, set: { kind.passDirection = $0 })) {
+                    ForEach(choices) { Text($0.label).tag($0) }
+                }
+                .help("Climb keeps the uncut material on the bit's right (clockwise spindle, M3); conventional keeps it on the "
+                      + "left; both ways zig-zags, every other pass coming back")
+                if let note = kind.passDirectionNote {
+                    SectionNote(text: note, warning: true)
+                } else if let time, current != .both {
+                    let extra = time.extraSeconds
+                    LabeledContent("Against Both ways", value: extra >= 0 ? "+\(formatDuration(extra))" : "−\(formatDuration(-extra))")
+                    SectionNote(text: "The planner's estimate: \(formatDuration(time.seconds)) one way, \(formatDuration(time.bothWaysSeconds)) "
+                        + "both ways. Each pass links back from its end to the next one's start over the material.")
+                } else if rotary {
+                    SectionNote(text: "Judged on the unrolled blank, from outside: turning forward, climbing keeps the material still "
+                        + "to come on the bit's right.")
+                }
             }
         }
     }

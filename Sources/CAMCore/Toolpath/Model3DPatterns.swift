@@ -24,11 +24,16 @@ extension Model3DGenerator {
         // comes back in a little way along.
         var hop = max(f.linkLimit, f.tool.diameter)
         let passes: [Pass]
+        let direction = f.params.directionInUse
         switch f.params.strategy {
         case .constantScallop:
             passes = constantScallopPasses(map, inside: inside, f)
         case .spiral:
             passes = spiralPasses(f, warnings: &warnings)
+        case .radial where direction != .both:
+            // One way: the spokes in turn round the centre, each the same way, the link back a lift.
+            hop = f.linkLimit
+            passes = radialPasses(f, warnings: &warnings)[0]
         case .radial:
             // Spokes start at different distances from the centre, so the hop between one's inner end and the next's
             // can be long; it's still along the surface, over ground the spokes around it cut. Of the two orders the
@@ -57,7 +62,8 @@ extension Model3DGenerator {
     // MARK: Constant scallop
 
     /// Passes a stepover apart along the CL surface: the iso-lines of geodesic distance from the boundary (see
-    /// `GeodesicField`), outermost first, climb milled (the higher ground inside a pass on its right). Where the
+    /// `GeodesicField`), outermost first, climb milled (the higher ground inside a pass on its right), or each the other
+    /// way round going conventional. Where the
     /// distance tops out between two levels (round a peak, along a ridge) more than half a stepover above the last,
     /// a pass halfway between fills in, so nowhere is more than half a stepover from a pass.
     static func constantScallopPasses(_ map: CLMap, inside: [Bool], _ f: Finishing) -> [Pass] {
@@ -95,8 +101,10 @@ extension Model3DGenerator {
             for loop in list where loop.points.count >= 3 { loops.append((loop.points, j)) }
         }
         let dropped = ParallelResults<[Vec3]>(count: loops.count, initial: [])
+        let conventional = f.params.directionInUse == .conventional
         DispatchQueue.concurrentPerform(iterations: loops.count) { i in
-            dropped[i] = drop(loops[i].points + [loops[i].points[0]], f)
+            let loop = loops[i].points + [loops[i].points[0]]
+            dropped[i] = drop(conventional ? loop.reversed() : loop, f)
         }
         return dropped.array.enumerated().compactMap { i, pts in
             pts.count >= 2 ? Pass(points: pts, closed: true, group: loops[i].group) : nil
@@ -235,8 +243,12 @@ extension Model3DGenerator {
 
     /// An Archimedean spiral from the centre out past the boundary's farthest point, counter-clockwise (climb milling:
     /// the uncut ground outside the turn is on its right), clipped to the boundary. Its turns are a stepover apart in
-    /// plan, or with `spiralHoldsScallop` a stepover apart along the surface where it slopes across them.
+    /// plan, or with `spiralHoldsScallop` a stepover apart along the surface where it slopes across them. Going
+    /// conventional, the spiral winds clockwise instead, the uncut ground outside on its left; climbing or conventional,
+    /// the arcs left inside the boundary are each cut the spiral's own way round, not from whichever end is nearer.
     static func spiralPasses(_ f: Finishing, warnings: inout [String]) -> [Pass] {
+        let direction = f.params.directionInUse
+        let turn = direction == .conventional ? -1.0 : 1.0
         let centre = patternCentre(f, warnings: &warnings)
         let s = f.stepover
         let end = reach(from: centre, f) + s
@@ -247,7 +259,7 @@ extension Model3DGenerator {
         var hint: Int32 = -1
         let delta = max(f.cell, s / 4)
         while r <= end {
-            let u = Vec2(cos(theta), sin(theta))
+            let u = Vec2(cos(theta), turn * sin(theta))
             let p = centre + u * r
             pts.append(p)
             var pitch = s
@@ -267,7 +279,9 @@ extension Model3DGenerator {
         // an oval, the corners of a rectangle, round a hole) a turn leaves the boundary and comes back in, so the rest
         // are cut nearest first, each from whichever end is nearer: one arc and back along the next, linking along
         // the surface, rather than lifting over the outside of every turn (#127).
-        return dropped.array.enumerated().map { i, p in Pass(points: p, closed: false, group: i == 0 ? 0 : 1, reversible: i > 0) }
+        return dropped.array.enumerated().map { i, p in
+            Pass(points: p, closed: false, group: i == 0 ? 0 : 1, reversible: i > 0 && direction == .both)
+        }
     }
 
     /// Spokes from the centre at the angular step, alternately out and back in, clipped to the boundary. Near the
@@ -308,14 +322,18 @@ extension Model3DGenerator {
         DispatchQueue.concurrentPerform(iterations: runs.count) { i in dropped[i] = drop(runs[i].points, f) }
         let spokes = dropped.array
 
-        // Whole: the spokes in turn, every other one coming back in (its runs reversed), in that order.
+        // Whole: the spokes in turn, every other one coming back in (its runs reversed), in that order. One way, every
+        // spoke goes the same way: the next spoke round (counter-clockwise) is on the left of one going out, so
+        // conventional goes out and climb comes in.
+        let direction = f.params.directionInUse
         var whole: [Pass] = []
         var i = 0, spoke = 0
         while i < runs.count {
             var j = i
             while j < runs.count, runs[j].spoke == runs[i].spoke { j += 1 }
             var own = spokes[i..<j].filter { $0.count >= 2 }
-            if spoke % 2 == 1 { own = own.reversed().map { Array($0.reversed()) } }
+            let inward = direction == .both ? spoke % 2 == 1 : direction == .climb
+            if inward { own = own.reversed().map { Array($0.reversed()) } }
             for p in own { whole.append(Pass(points: p, closed: false, group: whole.count)) }
             spoke += 1
             i = j

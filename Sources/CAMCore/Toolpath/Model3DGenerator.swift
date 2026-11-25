@@ -189,13 +189,14 @@ enum Model3DGenerator {
             // The pocket engine keeps the tool radius inside each region, plus a margin covering grid sampling
             // (interpolated contours sit within three quarters of a cell of a steep wall, closer on slopes),
             // outline simplification (a quarter cell) and a quarter cell spare, so walls can't be nicked.
-            let pp = PocketParams(strategy: clearing == .raster ? .raster : .offset, direction: .climb,
+            let pp = PocketParams(strategy: clearing == .raster ? .raster : .offset, direction: params.wallDirection,
                                   depth: DepthSettings(startDepth: -previous, cutDepth: -z, passDepth: abs(z - previous) + 1),
                                   allowance: g.cellSize * 1.25, rasterAngle: params.rasterAngle ?? 0,
                                   stepoverFraction: params.stepoverFraction)
             // Roughing leaves an allowance, so its outermost rings may be rounded too (never outward).
             let w = PocketGenerator.generate(regions: layer.regions, tool: tool, params: pp, context: context,
-                                             smoothBoundary: true, builder: &b)
+                                             smoothBoundary: true, rasterPasses: clearing == .raster ? params.directionInUse : .both,
+                                             builder: &b)
             for m in w where !m.contains("too large") { clipped.insert(m) }
             b.retract()
         }
@@ -206,6 +207,9 @@ enum Model3DGenerator {
     }
 
     /// One layer of 3D roughing.
+    ///
+    /// (Cut direction: offset rings, adaptive clearing and the pass round a raster layer's walls follow
+    /// `Rough3DParams.wallDirection`; raster lines are cut one way or zig-zag, `PocketGenerator.cutRaster`.)
     struct RoughLayer {
         /// The layer's depth, and the one above it (0 for the first).
         var z: Double
@@ -318,7 +322,7 @@ enum Model3DGenerator {
             let left = Region.nest(Clipper.difference(reach, minus: seed)).reduce(0) { $0 + $1.area }
             if left < 0.25 * tool.diameter * tool.diameter { return nil }
         }
-        let pp = PocketParams(strategy: .adaptive, direction: .climb,
+        let pp = PocketParams(strategy: .adaptive, direction: params.wallDirection,
                               depth: DepthSettings(startDepth: -above, cutDepth: -layer.z, passDepth: abs(layer.z - above) + 1),
                               allowance: allowance, stepoverFraction: params.stepoverFraction, adaptive: params.adaptive)
         return AdaptiveLayer(z: layer.z, boundary: boundary, params: pp, seed: seed, stepUp: false)

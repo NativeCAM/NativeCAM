@@ -335,6 +335,36 @@ extension Model3DGenerator {
         }
     }
 
+    /// The raster one way (climb or conventional): the rows in order up the raster (+90° from its angle), each cut the
+    /// way that keeps the next row's material on the tool's right (climb: travelling at the raster angle + 180°) or its
+    /// left (conventional: at the raster angle). Within a row, a short hop to its next segment follows the surface
+    /// forward; every other row is entered from above, ramping in along it, so the link back is a lift over the surface,
+    /// which the job's link optimiser lowers to just above the material where that's safe.
+    static func linkRowsOneWay(_ segments: [RasterSegment], paths: [[Vec3]], angle: Double, climb: Bool, _ f: Finishing,
+                               _ b: inout ToolpathBuilder) {
+        let dir = Vec2.fromAngle(angle.radians)
+        let travel = climb ? -dir : dir
+        let order = segments.indices.sorted { i, j in
+            segments[i].row != segments[j].row ? segments[i].row < segments[j].row
+                : (climb ? segments[i].along > segments[j].along : segments[i].along < segments[j].along)
+        }
+        var previous: (row: Int, end: Vec3)?
+        for i in order {
+            let path = climb ? Array(paths[i].reversed()) : paths[i]
+            guard let start = path.first else { continue }
+            if let p = previous, p.row == segments[i].row, b.position.z < f.setup.stock.plungeHeight,
+               (start.xy - p.end.xy).dot(travel) > 0, let link = f.surfaceLink(from: p.end, to: start) {
+                b.follow(link)
+            } else if f.params.smoothLinks {
+                enter(start, travelling: travel, f, &b)
+            } else {
+                b.enter(at: start)
+            }
+            b.follow(Array(path.dropFirst()))
+            previous = (segments[i].row, path.last ?? start)
+        }
+    }
+
     /// Up, over and down to `start`, ramping in along the path's line where the start is on the model.
     static func enter(_ start: Vec3, travelling d: Vec2, _ f: Finishing, _ b: inout ToolpathBuilder) {
         if let ramp = f.rampIn(to: start, travelling: d), let top = ramp.first {
@@ -354,7 +384,10 @@ extension Model3DGenerator {
             guard !segments.isEmpty else { continue }
             any = true
             let paths = dropSegments(segments, f)
-            if f.params.smoothLinks {
+            let direction = f.params.directionInUse
+            if direction != .both {
+                linkRowsOneWay(segments, paths: paths, angle: angle, climb: direction == .climb, f, &b)
+            } else if f.params.smoothLinks {
                 linkRowsSmoothly(segments, paths: paths, angle: angle, f, &b)
             } else {
                 linkRowsAsBefore(segments, paths: paths, f, &b)
@@ -366,7 +399,8 @@ extension Model3DGenerator {
 
     // MARK: Waterline
 
-    /// One waterline pass: a closed loop or part of one, at a level, with the material on its right.
+    /// One waterline pass: a closed loop or part of one, at a level, with the material on its right (climb milling);
+    /// `cutWaterline` turns them round to go conventional.
     struct WaterPiece {
         var points: [Vec2]
         var closed: Bool
@@ -472,8 +506,15 @@ extension Model3DGenerator {
 
     /// Cuts waterline pieces top down a column at a time: a piece waits until every piece in the level above that it
     /// could be under (their outlines within a link of each other) is done, and of those ready the nearest goes next.
-    static func cutWaterline(_ pieces: [WaterPiece], _ map: CLMap, _ f: Finishing, _ b: inout ToolpathBuilder) {
-        guard !pieces.isEmpty else { return }
+    static func cutWaterline(_ climbing: [WaterPiece], _ map: CLMap, _ f: Finishing, _ b: inout ToolpathBuilder) {
+        guard !climbing.isEmpty else { return }
+        // Conventional: every loop the other way round, the material on its left.
+        let conventional = f.params.directionInUse == .conventional
+        let pieces = conventional ? climbing.map { p -> WaterPiece in
+            var q = p
+            q.points.reverse()
+            return q
+        } : climbing
         let reach = f.linkLimit
         var byLevel: [Int: [Int]] = [:]
         for (i, p) in pieces.enumerated() { byLevel[p.level, default: []].append(i) }
@@ -521,7 +562,7 @@ extension Model3DGenerator {
             if !first, b.position.z < f.setup.stock.plungeHeight,
                let link = f.surfaceLink(from: b.position, to: start, low: min(b.position.z, p.z)) {
                 b.follow(link)
-            } else if f.params.smoothLinks, let lead = leadIn(to: pts, z: p.z, map, f), let top = lead.first {
+            } else if f.params.smoothLinks, let lead = leadIn(to: pts, z: p.z, freeOnLeft: !conventional, map, f), let top = lead.first {
                 b.enter(at: top)
                 b.follow(Array(lead.dropFirst()) + [start])
             } else {
@@ -532,14 +573,15 @@ extension Model3DGenerator {
         }
     }
 
-    /// A quarter circle onto a waterline pass's start from its free side (the left, the material being on the right),
-    /// all of it where the tool clears the model at that height: the tool comes down there instead of onto the wall.
-    static func leadIn(to pts: [Vec2], z: Double, _ map: CLMap, _ f: Finishing) -> [Vec3]? {
+    /// A quarter circle onto a waterline pass's start from its free side (the left when climbing, the material being on
+    /// the right; the right going conventional), all of it where the tool clears the model at that height: the tool
+    /// comes down there instead of onto the wall.
+    static func leadIn(to pts: [Vec2], z: Double, freeOnLeft: Bool = true, _ map: CLMap, _ f: Finishing) -> [Vec3]? {
         guard pts.count >= 2 else { return nil }
         let s = pts[0]
         let d = (pts[1] - pts[0]).normalized
         guard d.lengthSquared > 0.5 else { return nil }
-        let left = d.perpLeft
+        let left = freeOnLeft ? d.perpLeft : d.perpRight
         var hint: Int32 = -1
         func clear(_ p: Vec2) -> Bool { map.height(p, hint: &hint) <= z - 1e-4 }
         for radius in [max(0.5, f.tool.radius), max(0.25, f.tool.radius / 2)] {

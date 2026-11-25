@@ -12,6 +12,12 @@ import Foundation
 ///   turn, and finishes with a full turn at the other end; the next layer comes back.
 /// - **Along** (raster): passes parallel to the axis, stepping round by the stepover at the largest radius. On a
 ///   square bar it skips the angles where the layer would only cut air (the faces, until the layers reach them).
+///
+/// Cut direction (`RoundingParams.directionInUse`), judged on the unrolled blank (`PassDirection`): turning forward,
+/// a layer that steps +X climbs and one coming back −X goes conventional; Along's passes, stepping round the blank,
+/// climb travelling −X. Both ways (as it always has), the layers come back the other way and Along zig-zags; climbing
+/// or conventional, every layer starts from the same end and every pass runs the same way, back over the blank's
+/// farthest reach between them.
 enum RoundingGenerator {
     static func generate(op: CAMOperation, params p: RoundingParams, context ctx: GenerationContext) -> Toolpath {
         let stock = ctx.stock, tool = op.tool
@@ -43,13 +49,64 @@ enum RoundingGenerator {
 
         // In over the start, just clear of the blank's farthest reach.
         let above = outer + max(0.5, stock.plungeHeight)
+        let direction = p.directionInUse
+        // One way: the end every layer (Around) starts from, and the end every pass (Along) runs to.
+        let home = direction == .conventional ? x1 : x0
         var motions: [Motion] = []
         var angle = 0.0
-        tp.start = point(x0, angle, top + clearance)
-        motions.append(.rapid(point(x0, angle, above)))
-        var r = above, x = x0
+        let begin = p.method == .radial ? home : x0
+        tp.start = point(begin, angle, top + clearance)
+        motions.append(.rapid(point(begin, angle, above)))
+        var r = above, x = begin
+
+        /// Back to `to` over the blank's farthest reach, then down to just above the last layer at the same angle.
+        func back(to: Double) {
+            guard abs(x - to) > 1e-9 else { return }
+            motions.append(.rapid(point(x, angle, above)))
+            motions.append(.rapid(point(to, angle, above)))
+            let over = min(above, r + max(0.5, stock.plungeHeight))
+            if over < above - 1e-9 { motions.append(.rapid(point(to, angle, over))) }
+            x = to
+        }
 
         switch p.method {
+        case .radial where direction != .both:
+            for rho in radii {
+                back(to: home)
+                let far = home == x0 ? x1 : x0
+                angle += 2 * .pi
+                motions.append(.feed(point(x, angle, rho), feed))
+                angle += abs(far - x) / step * 2 * .pi
+                motions.append(.feed(point(far, angle, rho), feed))
+                angle += 2 * .pi
+                motions.append(.feed(point(far, angle, rho), feed))
+                x = far
+                r = rho
+            }
+        case .raster where direction != .both:
+            // Every pass the same way: −X climbs (the next pass round is on the tool's right), +X is conventional.
+            let (from, to) = direction == .climb ? (x1, x0) : (x0, x1)
+            let count = max(3, Int((2 * .pi * outer / step).rounded(.up)))
+            let turn = 2 * .pi / Double(count)
+            var previous = outer
+            for rho in radii {
+                let lines = Self.lines(blank: blank, tool: tool, rho: rho, previous: previous, count: count, turn: turn)
+                previous = rho
+                guard !lines.isEmpty else { continue }
+                let base = (angle / (2 * .pi)).rounded(.up) * 2 * .pi
+                for j in lines {
+                    // Up over the blank, round to the line and back to its start, down, and along it.
+                    if motions.last?.end != point(x, angle, above) { motions.append(.rapid(point(x, angle, above))) }
+                    angle = base + Double(j) * turn
+                    motions.append(.rapid(point(from, angle, above)))
+                    let over = min(above, r + max(0.5, stock.plungeHeight))
+                    if over < above - 1e-9 { motions.append(.rapid(point(from, angle, over))) }
+                    motions.append(.feed(point(from, angle, rho), tool.cutting.plungeRate))
+                    motions.append(.feed(point(to, angle, rho), feed))
+                    x = to
+                }
+                r = rho
+            }
         case .radial:
             for rho in radii {
                 let far = x == x0 ? x1 : x0
@@ -68,17 +125,8 @@ enum RoundingGenerator {
             let turn = 2 * .pi / Double(count)
             var previous = outer
             for rho in radii {
-                // The angles where this layer meets material the previous one left. Across its width the tool's bottom
-                // is a plane tangent at the layer's radius, so at φ off its axis it only reaches in to ρ / cos φ: right
-                // over a square bar's face it cuts nothing.
-                let half = asin(min(1, tool.radius / max(rho, 1e-6)))
-                let lines = (0..<count).filter { j in
-                    let a = Double(j) * turn
-                    return (-4...4).contains { k in
-                        let phi = half * Double(k) / 4
-                        return min(blank.surfaceRadius(atDegrees: (a + phi) * 180 / .pi), previous) > rho / cos(phi) + 1e-6
-                    }
-                }
+                // The angles where this layer meets material the previous one left.
+                let lines = Self.lines(blank: blank, tool: tool, rho: rho, previous: previous, count: count, turn: turn)
                 previous = rho
                 guard let first = lines.first else { continue }
                 let base = (angle / (2 * .pi)).rounded(.up) * 2 * .pi
@@ -100,6 +148,20 @@ enum RoundingGenerator {
         motions.append(.rapid(Vec3(x, cy + angle * top, clearance)))
         tp.motions = motions
         return tp
+    }
+
+    /// The lines (of `count`, `turn` apart round the blank) where layer `rho` meets material the previous one, at
+    /// `previous`, left. Across its width the tool's bottom is a plane tangent at the layer's radius, so at φ off its
+    /// axis it only reaches in to ρ / cos φ: right over a square bar's face it cuts nothing.
+    static func lines(blank: RotaryStock, tool: Tool, rho: Double, previous: Double, count: Int, turn: Double) -> [Int] {
+        let half = asin(min(1, tool.radius / max(rho, 1e-6)))
+        return (0..<count).filter { j in
+            let a = Double(j) * turn
+            return (-4...4).contains { k in
+                let phi = half * Double(k) / 4
+                return min(blank.surfaceRadius(atDegrees: (a + phi) * 180 / .pi), previous) > rho / cos(phi) + 1e-6
+            }
+        }
     }
 
     /// The radius a rounding turns the blank down to.
