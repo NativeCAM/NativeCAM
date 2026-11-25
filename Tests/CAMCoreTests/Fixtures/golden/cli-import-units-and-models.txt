@@ -1,0 +1,19 @@
+$ nativecam-cli import projects/cli-import-target.nativecam import/cli-no-units.dxf import/cli-mm-part.svg import/cli-cube-mm.stl import/cli-cube.3mf --units in --layer Profile -o <out>/models.nativecam
+cli-no-units.dxf: inches, from --units (the file carries no unit)
+[warning] cli-no-units.dxf: No $INSUNITS in the DXF header; assuming inches.
+  Added “cli-no-units – Profile” on layer “Profile”: 6.0000 × 4.0000 in from (2.0000, 2.0000) to (8.0000, 6.0000), 1 closed path
+  Added “cli-no-units – Pocket” on layer “Profile”: 2.0000 × 2.0000 in from (4.0000, 3.0000) to (6.0000, 5.0000), 1 closed path
+  Kept the file's coordinates
+cli-mm-part.svg: millimetres, as the file says
+  Added “cli-mm-part” on layer “Profile”: 3.1496 × 1.5748 in from (0.3937, 0.3937) to (3.5433, 1.9685), 1 closed path
+  Kept the file's coordinates
+cli-cube-mm.stl: inches, from --units (the file carries no unit)
+  Added 3D model “cli-cube-mm” on layer “Default”: 10.0000 × 10.0000 in centred at (12.0000, 9.0000), 0.7300 in deep, scale 1
+cli-cube.3mf: millimetres, as the file says
+[warning] cli-cube.3mf: the file says it's in millimetres, so --units in doesn't apply to it
+  Added 3D model “cli-cube” on layer “Default”: 0.7894 × 0.7894 in centred at (12.0000, 9.0000), 0.7300 in deep, scale 1
+Toolpaths whose vectors changed:
+  Cut out part (Layer “Profile”): 0 → 3 vectors (3 added)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote <out>/models.nativecam (format 1)
+exit 0

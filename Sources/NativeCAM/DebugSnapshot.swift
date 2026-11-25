@@ -69,11 +69,10 @@ enum DebugSnapshot {
         if let path = UserDefaults.standard.string(forKey: "NativeCAMSnapshotImport") {
             let url = URL(fileURLWithPath: path)
             do {
-                let result = try VectorImporter.importFile(at: url)
-                let shapes = result.shapes(name: url.deletingPathExtension().lastPathComponent, stock: project.stock)
-                project.shapes += shapes
+                // File ▸ Import's import, shared with the command line's.
+                let file = try project.importFile(at: url)
                 project.bindVectors()
-                for shape in shapes { log("import \(shape.name): layer “\(shape.layer)”") }
+                for shape in project.shapes where file.shapeIDs.contains(shape.id) { log("import \(shape.name): layer “\(shape.layer)”") }
             } catch {
                 log("import failed: \(error.localizedDescription)")
             }

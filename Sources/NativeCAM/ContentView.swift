@@ -357,24 +357,17 @@ struct ContentView: View {
         var added: [UUID] = []
         var warnings: [String] = []
         for url in urls {
-            let name = url.deletingPathExtension().lastPathComponent
-            let ext = url.pathExtension.lowercased()
             do {
-                if ModelImporter.supportedExtensions.contains(ext) {
-                    let result = try ModelImporter.importFile(at: url)
-                    warnings.append(contentsOf: result.warnings.map { "\(url.lastPathComponent): \($0)" })
-                    let shape = workspace.placedOnSheet(ShapeFactory.model(result, name: name, stock: workspace.shown(project).stock), of: project)
-                    document.project.shapes.append(shape)
-                    // On a rotary blank it lies along the axis, scaled to fit.
-                    document.project.placeModelsOnBlank()
-                    added.append(shape.id)
+                // The import the command line and snapshot mode share: shapes per layer on the sheet shown, models
+                // centred, fitted and (on a rotary blank) laid along the axis.
+                var p = document.project
+                let file = try p.importFile(at: url, options: ImportOptions(sheet: workspace.sheet))
+                warnings.append(contentsOf: file.warnings.map { "\(url.lastPathComponent): \($0)" })
+                if file.shapeIDs.isEmpty {
+                    warnings.append("\(url.lastPathComponent): no usable vectors found.")
                 } else {
-                    let result = try VectorImporter.importFile(at: url, tolerance: 0.01)
-                    warnings.append(contentsOf: result.warnings.map { "\(url.lastPathComponent): \($0)" })
-                    let shapes = result.shapes(name: name, stock: workspace.shown(project).stock).map { workspace.placedOnSheet($0, of: project) }
-                    if shapes.isEmpty { warnings.append("\(url.lastPathComponent): no usable vectors found.") }
-                    document.project.shapes.append(contentsOf: shapes)
-                    added.append(contentsOf: shapes.map(\.id))
+                    document.project = p
+                    added.append(contentsOf: file.shapeIDs)
                 }
             } catch {
                 warnings.append("\(url.lastPathComponent): \(error.localizedDescription)")

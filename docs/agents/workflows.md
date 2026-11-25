@@ -63,22 +63,41 @@ PLUNGE = {"kind": "plunge", "rampLength": 25.4}
 
 ## 1. Import vectors and cut a profile, pocket and drill job
 
-**The CLI can't import DXF, SVG, PDF or Illustrator files**, and snapshot mode's `-NativeCAMSnapshotImport` imports only into its render; it doesn't save the project. There are two honest routes:
+**Import the drawing with `nativecam-cli import`**, which adds it as **File ▸ Import** does, through the same code (see [Command line](cli.md#import)). Have the toolpaths find their vectors by layer, and the import binds them:
 
-- **Ask the human** to open the project in the app, choose **File ▸ Import**, and save. The import puts each shape on its file's layer. Read the new shapes' `id`s from the saved file, then continue from step 3 below.
-- **Write the vectors yourself** as a `paths` shape: flatten every curve to polylines (0.01–0.05 mm tolerance), convert to millimetres, and keep each closed loop as one polyline with `"isClosed": true`. Loops inside loops are holes. Check its size against the drawing's before you add toolpaths. This is fine for simple outlines; for anything with splines, text or many layers, prefer the app's importer.
+1. Start from a project with the material set, and toolpaths whose `vectorSelection` names the drawing's layers: `{"layers": ["Cut Out"]}` and so on. `template apply` gives you those from a template; otherwise add them to the JSON with empty `shapeIDs`.
+2. Import, saying the unit if the file doesn't (a DXF without `$INSUNITS` is refused until you do). Keep the file's coordinates if they're on the material; otherwise pass `--center` or `--at x,y`.
+3. Read what it printed: the unit, each shape's size (does it match the drawing?), any `open` paths, and that every toolpath you expected is in `Toolpaths whose vectors changed`.
+4. Post, then simulate.
 
-To preview how the app would import a file (its layers and shapes), a snapshot run does show it:
+Here with the test fixtures in `Tests/CAMCoreTests/Fixtures` (a two-layer DXF in inches and a DXF of drill points, into a project whose toolpaths find layers “Profile”, “Pocket” and “Holes”):
 
-```bash
-"$REPO/build/NativeCAM.app/Contents/MacOS/NativeCAM" -NativeCAMSnapshotProject "$PWD/new.nativecam" \
-  -NativeCAMSnapshotOut "$PWD/snap" -NativeCAMSnapshotImport "$PWD/part.svg" 2> snap.log
-grep 'snapshot: import' snap.log
+```text
+$ "$CLI" import projects/cli-import-target.nativecam import/cli-two-layers-inch.dxf import/cli-points.dxf -o part.nativecam
+cli-two-layers-inch.dxf: inches, as the file says
+  Added “cli-two-layers-inch – Profile” on layer “Profile”: 6.0000 × 4.0000 in from (2.0000, 2.0000) to (8.0000, 6.0000), 1 closed path
+  Added “cli-two-layers-inch – Pocket” on layer “Pocket”: 2.0000 × 2.0000 in from (4.0000, 3.0000) to (6.0000, 5.0000), 1 closed path
+  Kept the file's coordinates
+cli-points.dxf: inches, as the file says
+  Added “cli-points points” on layer “Holes”: 4.0394 × 2.0394 in from (2.9803, 2.9803) to (7.0197, 5.0197), 4 closed paths
+  Kept the file's coordinates
+Toolpaths whose vectors changed:
+  Pocket (Layer “Pocket”): 0 → 1 vector (1 added)
+  Drill holes (Layer “Holes”): 0 → 1 vector (1 added)
+  Cut out part (Layer “Profile”): 0 → 1 vector (1 added)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote part.nativecam (format 1)
+$ "$CLI" post part.nativecam -o part.tap
+[info] Drill holes: Cuts through the material (0.0200 in into the spoilboard).
+[info] Cut out part: Cuts through the material (0.0200 in into the spoilboard).
+Generated 4 toolpaths in 0.01s, 783 lines -> part.tap
 ```
 
-`$REPO` is the repository, with the app built by `scripts/build-app.sh`. Pass absolute paths. Each imported shape logs as `snapshot: import <name>: layer “<layer>”`. See [Verifying output](verification.md#snapshot-mode-for-ui-screenshots).
+If you then move shapes to other layers in the JSON, `"$CLI" rebind bracket.nativecam -o rebound.nativecam` has the toolpaths look again; `post --rebind` does that in memory before posting. Without it, `post` cuts exactly the `shapeIDs` the file lists.
 
-**Steps**, here with a bracket outline written as vectors:
+**Writing the vectors yourself** as a `paths` shape is still possible for a simple outline you're given as numbers rather than a file: flatten every curve to polylines (0.01–0.05 mm tolerance), convert to millimetres, and keep each closed loop as one polyline with `"isClosed": true`. Loops inside loops are holes. Check its size against the drawing's before you add toolpaths. For any drawing that exists as a file, import it instead.
+
+**The same job written by hand**, here with a bracket outline written as vectors:
 
 1. Start from `new.nativecam`. Set the material and units.
 2. Add the shapes: the imported outline (`paths`), a recess (`rectangle`) and holes (`circle`), each on its own layer.

@@ -1,0 +1,14 @@
+$ nativecam-cli import projects/cli-import-target.nativecam import/cli-off-material.dxf -o <out>/x.nativecam
+cli-off-material.dxf: inches, as the file says
+  Added “cli-off-material” on layer “Profile”: 4.0000 × 3.0000 in from (30.0000, 30.0000) to (34.0000, 33.0000), 1 closed path
+Not written: cli-off-material.dxf doesn't fit on the material in the file's coordinates. The drawing runs from (30.0000, 30.0000) to (34.0000, 33.0000) in; the material is 24.0000 × 18.0000 in from (0, 0). Pass --center to centre it on the material, or --at x,y to put its lower-left corner there.
+exit 1
+$ nativecam-cli import projects/cli-import-target.nativecam import/cli-off-material.dxf --center -o <out>/centred.nativecam
+cli-off-material.dxf: inches, as the file says
+  Added “cli-off-material” on layer “Profile”: 4.0000 × 3.0000 in from (10.0000, 7.5000) to (14.0000, 10.5000), 1 closed path
+  Centred on the material
+Toolpaths whose vectors changed:
+  Cut out part (Layer “Profile”): 0 → 1 vector (1 added)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote <out>/centred.nativecam (format 1)
+exit 0

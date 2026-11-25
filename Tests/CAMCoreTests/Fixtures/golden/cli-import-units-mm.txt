@@ -1,0 +1,13 @@
+$ nativecam-cli import projects/cli-import-target.nativecam import/cli-no-units.dxf --units mm -o <out>/mm.nativecam
+cli-no-units.dxf: millimetres, from --units (the file carries no unit)
+[warning] cli-no-units.dxf: No $INSUNITS in the DXF header; assuming millimetres.
+  Added “cli-no-units – Profile” on layer “Profile”: 0.2362 × 0.1575 in from (0.0787, 0.0787) to (0.3150, 0.2362), 1 closed path
+  Added “cli-no-units – Pocket” on layer “Pocket”: 0.0787 × 0.0787 in from (0.1575, 0.1181) to (0.2362, 0.1969), 1 closed path
+  Kept the file's coordinates
+[warning] cli-no-units.dxf: the drawing is only 0.2362 × 0.1575 in, under 1% of the material (24.0000 × 18.0000 in). Check its unit: was it drawn in inches (--units in)?
+Toolpaths whose vectors changed:
+  Pocket (Layer “Pocket”): 0 → 1 vector (1 added)
+  Cut out part (Layer “Profile”): 0 → 1 vector (1 added)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote <out>/mm.nativecam (format 1)
+exit 0

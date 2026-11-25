@@ -1,0 +1,15 @@
+$ nativecam-cli import projects/cli-import-target.nativecam import/cli-two-layers-inch.dxf import/cli-points.dxf -o <out>/two.nativecam
+cli-two-layers-inch.dxf: inches, as the file says
+  Added “cli-two-layers-inch – Profile” on layer “Profile”: 6.0000 × 4.0000 in from (2.0000, 2.0000) to (8.0000, 6.0000), 1 closed path
+  Added “cli-two-layers-inch – Pocket” on layer “Pocket”: 2.0000 × 2.0000 in from (4.0000, 3.0000) to (6.0000, 5.0000), 1 closed path
+  Kept the file's coordinates
+cli-points.dxf: inches, as the file says
+  Added “cli-points points” on layer “Holes”: 4.0394 × 2.0394 in from (2.9803, 2.9803) to (7.0197, 5.0197), 4 closed paths
+  Kept the file's coordinates
+Toolpaths whose vectors changed:
+  Pocket (Layer “Pocket”): 0 → 1 vector (1 added)
+  Drill holes (Layer “Holes”): 0 → 1 vector (1 added)
+  Cut out part (Layer “Profile”): 0 → 1 vector (1 added)
+Kept as chosen by hand: Hand-picked V-carve (1 vector)
+Wrote <out>/two.nativecam (format 1)
+exit 0

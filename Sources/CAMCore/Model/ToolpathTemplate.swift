@@ -418,20 +418,9 @@ extension Project {
     }
 
     /// Gives every toolpath that finds its own shapes (by layer or kind) the shapes its rule finds now. Returns true
-    /// when any changed.
+    /// when any changed; `bindVectorChanges()` says which.
     @discardableResult
-    public mutating func bindVectors() -> Bool {
-        var changed = false
-        for i in operations.indices {
-            guard operations[i].kind.needsShapes, let rule = operations[i].vectorSelection, rule != .selection else { continue }
-            let ids = shapeIDs(matching: rule)
-            if ids != operations[i].shapeIDs {
-                operations[i].shapeIDs = ids
-                changed = true
-            }
-        }
-        return changed
-    }
+    public mutating func bindVectors() -> Bool { !bindVectorChanges().isEmpty }
 
     /// Puts shapes on a layer, and has toolpaths that find their shapes by layer pick them up (or drop them).
     public mutating func setLayer(_ name: String, of ids: Set<UUID>) {
