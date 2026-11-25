@@ -13,6 +13,30 @@ public enum CutDirection: String, Codable, Sendable, CaseIterable, Identifiable 
     public var label: String { rawValue.capitalized }
 }
 
+/// The cut direction of the toolpaths whose passes run in rows, rings or a pattern rather than round a wall: 3D finishing
+/// and roughing, mouldings, V-carving, fluting and the rotary toolpaths (`OperationKind.passDirection`). Like
+/// `CutDirection` it assumes a clockwise (M3) spindle: climbing keeps the uncut material, the side the next pass steps
+/// to (or the wall a pass follows), on the tool's right. On a rotary job it's judged on the unrolled blank, looking at
+/// its surface from outside, from the tool's motion over the surface as the blank turns under it: along the blank
+/// (+X) with the rotary turning forward (+A), the material on the right is the material still to come at +X.
+public enum PassDirection: String, Codable, Sendable, CaseIterable, Identifiable {
+    case climb, conventional
+    /// Zig-zag: every other pass comes back the other way, climbing one way and conventional the other.
+    case both
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .climb: "Climb"
+        case .conventional: "Conventional"
+        case .both: "Both ways"
+        }
+    }
+
+    /// The first build that reads a cut direction other than a toolpath's default: an older one would cut it its own
+    /// way.
+    public static let formatVersion = 27
+}
+
 /// Depths are measured down from the material top (positive numbers, mm).
 public struct DepthSettings: Hashable, Codable, Sendable {
     public var startDepth: Double
@@ -437,9 +461,12 @@ public struct VCarveParams: Hashable, Sendable {
     /// No new file format: a build that doesn't know the key clears the same floor in rings, which is slower but not
     /// wrong.
     public var flatRaster: VCarveRaster?
+    /// Cut direction (`directionInUse`); nil = the default, climbing along each outline, with raster clearing
+    /// zig-zag. Saved only when set; a direction other than the default is format 27.
+    public var cutDirection: PassDirection?
 
     public init(flatDepth: Double? = nil, passDepth: Double? = nil, sampleSpacing: Double = 0.25, clearanceTool: Tool? = nil,
-                startDepth: Double = 0, inlay: VCarveInlay? = nil, flatRaster: VCarveRaster? = nil) {
+                startDepth: Double = 0, inlay: VCarveInlay? = nil, flatRaster: VCarveRaster? = nil, cutDirection: PassDirection? = nil) {
         self.flatDepth = flatDepth
         self.passDepth = passDepth
         self.sampleSpacing = sampleSpacing
@@ -447,7 +474,21 @@ public struct VCarveParams: Hashable, Sendable {
         self.startDepth = startDepth
         self.inlay = inlay
         self.flatRaster = flatRaster
+        self.cutDirection = cutDirection
     }
+
+    /// Whether the V-bit clears the flats itself in raster lines, which can zig-zag.
+    public var rastersFlats: Bool { vBitClearsFlats && flatRaster != nil }
+
+    /// The directions a V-carve can cut: climbing or conventional along the outlines (and round the flats), and with
+    /// raster clearing, both ways along its lines.
+    public var directionChoices: [PassDirection] { rastersFlats ? [.climb, .conventional, .both] : [.climb, .conventional] }
+
+    /// The direction a V-carve has always cut: climbing, with its raster lines zig-zag.
+    public var defaultDirection: PassDirection { rastersFlats ? .both : .climb }
+
+    /// The cut direction in use.
+    public var directionInUse: PassDirection { cutDirection.flatMap { directionChoices.contains($0) ? $0 : nil } ?? defaultDirection }
 
     public var isPlug: Bool { inlay?.role == .plug }
 
@@ -465,6 +506,7 @@ public struct VCarveParams: Hashable, Sendable {
     /// ignore them and carve from the surface (a plug as an ordinary V-carve of the design). A whole-board plug is
     /// format 14: a format-13 build can't read the boundary.
     public var requiredFormatVersion: Int {
+        if directionInUse != defaultDirection { return PassDirection.formatVersion }
         if inlay?.boundary == .board { return 14 }
         return startDepth > 1e-9 || isPlug ? 6 : 1
     }
@@ -534,7 +576,9 @@ public struct VCarveRaster: Hashable, Codable, Sendable {
 }
 
 extension VCarveParams: Codable {
-    private enum CodingKeys: String, CodingKey { case flatDepth, passDepth, sampleSpacing, clearanceTool, startDepth, inlay, flatRaster }
+    private enum CodingKeys: String, CodingKey {
+        case flatDepth, passDepth, sampleSpacing, clearanceTool, startDepth, inlay, flatRaster, cutDirection
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -545,6 +589,7 @@ extension VCarveParams: Codable {
         startDepth = try c.decodeIfPresent(Double.self, forKey: .startDepth) ?? 0
         inlay = try c.decodeIfPresent(VCarveInlay.self, forKey: .inlay)
         flatRaster = try c.decodeIfPresent(VCarveRaster.self, forKey: .flatRaster)
+        cutDirection = try c.decodeIfPresent(PassDirection.self, forKey: .cutDirection)
     }
 
     /// A start depth of 0, no inlay and ring clearing are left out, so ordinary V-carves save exactly as before.
@@ -557,6 +602,7 @@ extension VCarveParams: Codable {
         if startDepth != 0 { try c.encode(startDepth, forKey: .startDepth) }
         try c.encodeIfPresent(inlay, forKey: .inlay)
         try c.encodeIfPresent(flatRaster, forKey: .flatRaster)
+        try c.encodeIfPresent(cutDirection, forKey: .cutDirection)
     }
 }
 
@@ -708,10 +754,13 @@ public struct Rough3DParams: Hashable, Codable, Sendable {
     /// steps left on the model: the layers between are stepped up, clearing only the terraces). nil = automatic,
     /// `automaticClearingDepth`.
     public var clearingDepth: Double?
+    /// Cut direction (`directionInUse`); nil = the default: offset rings and adaptive clearing climb, raster lines
+    /// zig-zag. A direction other than the default is format 27.
+    public var cutDirection: PassDirection?
 
     public init(allowance: Double = 0.02.inch, passDepth: Double? = nil, stepoverFraction: Double? = nil, boundary: ModelBoundary = .model,
                 boundaryMargin: Double? = nil, clearing: Rough3DClearing? = nil, rasterAngle: Double? = nil,
-                adaptive: AdaptiveSettings? = nil, clearingDepth: Double? = nil) {
+                adaptive: AdaptiveSettings? = nil, clearingDepth: Double? = nil, cutDirection: PassDirection? = nil) {
         self.allowance = allowance
         self.passDepth = passDepth
         self.stepoverFraction = stepoverFraction
@@ -721,7 +770,21 @@ public struct Rough3DParams: Hashable, Codable, Sendable {
         self.rasterAngle = rasterAngle
         self.adaptive = adaptive
         self.clearingDepth = clearingDepth
+        self.cutDirection = cutDirection
     }
+
+    /// The directions the clearing can cut: raster lines also both ways.
+    public var directionChoices: [PassDirection] { clearingInUse == .raster ? [.climb, .conventional, .both] : [.climb, .conventional] }
+
+    /// The direction 3D roughing has always cut: climbing rings and adaptive clearing, zig-zag raster lines.
+    public var defaultDirection: PassDirection { clearingInUse == .raster ? .both : .climb }
+
+    /// The cut direction in use.
+    public var directionInUse: PassDirection { cutDirection.flatMap { directionChoices.contains($0) ? $0 : nil } ?? defaultDirection }
+
+    /// The direction offset rings, adaptive clearing and the pass round each raster layer's walls go: climb, unless
+    /// conventional is chosen.
+    public var wallDirection: CutDirection { directionInUse == .conventional ? .conventional : .climb }
 
     public static func autoMargin(tool: Tool) -> Double { tool.diameter + 1 }
 
@@ -753,7 +816,10 @@ public struct Rough3DParams: Hashable, Codable, Sendable {
     public static let adaptiveFormatVersion = 26
 
     /// The project file format these settings need.
-    public var requiredFormatVersion: Int { clearingInUse == .adaptive ? Self.adaptiveFormatVersion : 1 }
+    public var requiredFormatVersion: Int {
+        if directionInUse != defaultDirection { return PassDirection.formatVersion }
+        return clearingInUse == .adaptive ? Self.adaptiveFormatVersion : 1
+    }
 }
 
 /// How 3D finishing covers the surface.
@@ -847,12 +913,15 @@ public struct Finish3DParams: Hashable, Sendable {
     /// Radial: how close spokes may come near the centre before every other one stops short, mm; nil = half the stepover
     /// (so between the centre and the boundary neighbouring spokes are between half a stepover and a stepover apart).
     public var radialMinSpacing: Double?
+    /// Cut direction (`directionInUse`); nil = the strategy's default, the way it has always cut. Saved only when set;
+    /// a direction other than the default is format 27.
+    public var cutDirection: PassDirection?
 
     public init(stepoverFraction: Double = 0.1, rasterAngle: Double = 0, allowance: Double = 0, boundary: ModelBoundary = .model,
                 boundaryMargin: Double? = nil, strategy: Finish3DStrategy = .raster, crossHatch: Bool = false,
                 steepAngle: Double? = nil, overlap: Double? = nil, smoothLinks: Bool = true, rest: RestSettings? = nil,
                 scallopHeight: Double? = nil, centre: Vec2? = nil, spiralHoldsScallop: Bool = false, radialStep: Double? = nil,
-                radialMinSpacing: Double? = nil) {
+                radialMinSpacing: Double? = nil, cutDirection: PassDirection? = nil) {
         self.stepoverFraction = stepoverFraction
         self.rasterAngle = rasterAngle
         self.allowance = allowance
@@ -869,9 +938,46 @@ public struct Finish3DParams: Hashable, Sendable {
         self.spiralHoldsScallop = spiralHoldsScallop
         self.radialStep = radialStep
         self.radialMinSpacing = radialMinSpacing
+        self.cutDirection = cutDirection
     }
 
-    /// Rest finishing's settings in use.
+    /// The directions the strategy can cut. Waterline and constant scallop passes are loops round the model, so they
+    /// climb or go conventional; the rest can also zig-zag. Pencil passes run along creases with the model rising on
+    /// both sides, so they can't hold either (`directionNote`); they're offered so the inspector can say so.
+    public var directionChoices: [PassDirection] {
+        switch strategy {
+        case .waterline, .constantScallop: [.climb, .conventional]
+        default: [.climb, .conventional, .both]
+        }
+    }
+
+    /// The direction the strategy has always cut: waterline and constant scallop loops climb; raster rows, steep and
+    /// shallow's rows (its loops climb), rest rows, radial spokes and pencil passes go both ways; a spiral climbs on its
+    /// continuous turn and cuts the arcs left inside the boundary from whichever end is nearer, which counts as both.
+    public var defaultDirection: PassDirection {
+        strategy == .waterline || strategy == .constantScallop ? .climb : .both
+    }
+
+    /// The cut direction in use.
+    public var directionInUse: PassDirection { cutDirection.flatMap { directionChoices.contains($0) ? $0 : nil } ?? defaultDirection }
+
+    /// Whether the direction in use changes what's cut: pencil passes can't hold a direction, so theirs is cut the same.
+    public var cutsInChosenDirection: Bool { directionInUse != defaultDirection && strategy != .pencil }
+
+    /// Why some passes can't hold the direction chosen, for the inspector and Checks; nil when they all can.
+    public var directionNote: String? {
+        guard directionInUse != .both else { return nil }
+        let way = directionInUse.label.lowercased()
+        if strategy == .pencil {
+            return "Pencil passes run along creases with the model rising on both sides, so they can't be cut \(way): each is "
+                + "cut from whichever end is nearer, as with Both ways."
+        }
+        if strategy == .rest, restSettings.pencil {
+            return "The pencil passes in the rest areas run along creases with the model rising on both sides, so they can't be "
+                + "cut \(way): each is cut from whichever end is nearer. The rest rows are cut \(way)."
+        }
+        return nil
+    }
     public var restSettings: RestSettings { rest ?? RestSettings() }
 
     public static func autoMargin(tool: Tool) -> Double { tool.radius + 0.5 }
@@ -900,6 +1006,7 @@ public struct Finish3DParams: Hashable, Sendable {
     /// radial finishing are format 21, which an older build can't read; their settings mean nothing to the others, so
     /// they don't raise it on their own.
     public var requiredFormatVersion: Int {
+        if cutsInChosenDirection { return PassDirection.formatVersion }
         if strategy.isFormat21 { return 21 }
         if strategy == .rest { return 17 }
         return strategy != .raster || (crossHatch && strategy.usesRaster) ? 10 : 1
@@ -949,7 +1056,7 @@ public struct RestSettings: Hashable, Codable, Sendable {
 extension Finish3DParams: Codable {
     private enum CodingKeys: String, CodingKey {
         case stepoverFraction, rasterAngle, allowance, boundary, boundaryMargin, strategy, crossHatch, steepAngle, overlap, smoothLinks, rest
-        case scallopHeight, centre, spiralHoldsScallop, radialStep, radialMinSpacing
+        case scallopHeight, centre, spiralHoldsScallop, radialStep, radialMinSpacing, cutDirection
     }
 
     /// Keys missing from older files read as the raster without cross-hatching or smooth links they meant.
@@ -971,6 +1078,7 @@ extension Finish3DParams: Codable {
         spiralHoldsScallop = try c.decodeIfPresent(Bool.self, forKey: .spiralHoldsScallop) ?? false
         radialStep = try c.decodeIfPresent(Double.self, forKey: .radialStep)
         radialMinSpacing = try c.decodeIfPresent(Double.self, forKey: .radialMinSpacing)
+        cutDirection = try c.decodeIfPresent(PassDirection.self, forKey: .cutDirection)
     }
 
     /// Defaults are left out, so a plain raster saves exactly as before (apart from smooth links, which are on).
@@ -992,6 +1100,7 @@ extension Finish3DParams: Codable {
         if spiralHoldsScallop { try c.encode(spiralHoldsScallop, forKey: .spiralHoldsScallop) }
         try c.encodeIfPresent(radialStep, forKey: .radialStep)
         try c.encodeIfPresent(radialMinSpacing, forKey: .radialMinSpacing)
+        try c.encodeIfPresent(cutDirection, forKey: .cutDirection)
     }
 }
 
@@ -1020,6 +1129,12 @@ public struct RoundingParams: Hashable, Codable, Sendable {
     /// Where along the blank (X) the rounding starts and ends, mm; nil keeps the cutter just inside each end.
     public var startX: Double?
     public var endX: Double?
+    /// Cut direction (`directionInUse`); nil = both ways, as rounding has always cut: Around, each layer comes back
+    /// along the blank the other way; Along, its passes zig-zag. A direction other than both ways is format 27.
+    public var cutDirection: PassDirection?
+
+    /// The cut direction in use.
+    public var directionInUse: PassDirection { cutDirection ?? .both }
 
     /// The diameter this turns `blank` down to.
     public func finishedDiameter(on blank: RotaryStock) -> Double {
@@ -1027,13 +1142,14 @@ public struct RoundingParams: Hashable, Codable, Sendable {
     }
 
     public init(finishedDiameter: Double? = nil, method: Method = .radial, passDepth: Double? = nil, stepoverFraction: Double? = nil,
-                startX: Double? = nil, endX: Double? = nil) {
+                startX: Double? = nil, endX: Double? = nil, cutDirection: PassDirection? = nil) {
         self.finishedDiameter = finishedDiameter
         self.method = method
         self.passDepth = passDepth
         self.stepoverFraction = stepoverFraction
         self.startX = startX
         self.endX = endX
+        self.cutDirection = cutDirection
     }
 }
 
@@ -1078,12 +1194,19 @@ public struct RotaryFinishParams: Hashable, Codable, Sendable {
     public var passDepth: Double?
     /// The layers' stepover as a fraction of the tool diameter; nil = 40%, or the finish's if that's more.
     public var layerStepoverFraction: Double?
+    /// Cut direction (`directionInUse`); nil = both ways, as it has always cut: each layer and the finish go the other
+    /// way along the blank from the last (a spiral or rings climb going +X and go conventional coming back), and Along X
+    /// passes zig-zag. A direction other than both ways is format 27.
+    public var cutDirection: PassDirection?
+
+    /// The cut direction in use.
+    public var directionInUse: PassDirection { cutDirection ?? .both }
 
     public static let defaultLayerStepover = 0.4
 
     public init(pattern: Pattern = .spiral, stepoverFraction: Double = 0.1, allowance: Double = 0, startX: Double? = nil,
                 endX: Double? = nil, sampleSpacing: Double = 0.25, angleStep: Double? = nil, passDepth: Double? = nil,
-                layerStepoverFraction: Double? = nil) {
+                layerStepoverFraction: Double? = nil, cutDirection: PassDirection? = nil) {
         self.pattern = pattern
         self.stepoverFraction = stepoverFraction
         self.allowance = allowance
@@ -1093,6 +1216,7 @@ public struct RotaryFinishParams: Hashable, Codable, Sendable {
         self.angleStep = angleStep
         self.passDepth = passDepth
         self.layerStepoverFraction = layerStepoverFraction
+        self.cutDirection = cutDirection
     }
 
     /// The finish's stepover with `tool`, mm.
@@ -1150,12 +1274,24 @@ public struct RotaryRoughParams: Hashable, Codable, Sendable {
     /// How far apart the tool is dropped onto the model to find each layer's area, along the blank and round it at the
     /// stock's surface, mm.
     public var sampleSpacing: Double
+    /// Cut direction (`directionInUse`); nil = the default: lines zig-zag, offset rings climb. A direction other than
+    /// the default is format 27.
+    public var cutDirection: PassDirection?
+
+    /// The directions the pattern can cut: lines also both ways.
+    public var directionChoices: [PassDirection] { pattern == .offset ? [.climb, .conventional] : [.climb, .conventional, .both] }
+
+    /// The direction 3D rotary roughing has always cut.
+    public var defaultDirection: PassDirection { pattern == .offset ? .climb : .both }
+
+    /// The cut direction in use.
+    public var directionInUse: PassDirection { cutDirection.flatMap { directionChoices.contains($0) ? $0 : nil } ?? defaultDirection }
 
     public static let defaultAllowance = 0.02.inch
 
     public init(pattern: Pattern = .auto, stepdown: Double? = nil, stepoverFraction: Double? = nil,
                 allowance: Double = RotaryRoughParams.defaultAllowance, startX: Double? = nil, endX: Double? = nil,
-                sampleSpacing: Double = 0.5) {
+                sampleSpacing: Double = 0.5, cutDirection: PassDirection? = nil) {
         self.pattern = pattern
         self.stepdown = stepdown
         self.stepoverFraction = stepoverFraction
@@ -1163,6 +1299,7 @@ public struct RotaryRoughParams: Hashable, Codable, Sendable {
         self.startX = startX
         self.endX = endX
         self.sampleSpacing = sampleSpacing
+        self.cutDirection = cutDirection
     }
 
     /// Radial depth between layers with `tool`, mm.
@@ -1337,9 +1474,14 @@ public struct FlutingParams: Hashable, Codable, Sendable {
     /// where the bit touches the model (the exact drop-cutter), on a flat job or wrapped round a rotary blank, and the
     /// start depth isn't used. nil measures them from the start depth, as in every file before format 25.
     public var surfaceModelID: UUID?
+    /// Cut direction; nil = both ways, the passes back and forth along a flute that's the same both ways. A flute is a
+    /// slot the bit's full width, one wall climbing and the other conventional, so Climb and Conventional cut it the same
+    /// and say why (`directionNote`); they don't raise the file format.
+    public var cutDirection: PassDirection?
 
     public init(startDepth: Double = 0, depth: Double = 0.125.inch, ramp: Ramp = .both, rampLength: Double = 1.inch,
-                rampPercent: Double? = nil, rampShape: RampShape = .linear, passDepth: Double? = nil, surfaceModelID: UUID? = nil) {
+                rampPercent: Double? = nil, rampShape: RampShape = .linear, passDepth: Double? = nil, surfaceModelID: UUID? = nil,
+                cutDirection: PassDirection? = nil) {
         self.startDepth = startDepth
         self.depth = depth
         self.ramp = ramp
@@ -1348,6 +1490,17 @@ public struct FlutingParams: Hashable, Codable, Sendable {
         self.rampShape = rampShape
         self.passDepth = passDepth
         self.surfaceModelID = surfaceModelID
+        self.cutDirection = cutDirection
+    }
+
+    /// The cut direction in use.
+    public var directionInUse: PassDirection { cutDirection ?? .both }
+
+    /// Why the flutes can't hold the direction chosen; nil for both ways.
+    public var directionNote: String? {
+        guard directionInUse != .both else { return nil }
+        return "A flute is a slot the bit's full width, climbing on one wall and conventional on the other, so it can't be cut "
+            + "\(directionInUse.label.lowercased()): the flutes are cut as with Both ways."
     }
 
     /// Flutes that follow a 3D model are format 25: an older build would drop the model and cut them from the start
@@ -1704,9 +1857,9 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         let own: Int
         switch kind {
         case let .pocket(p): own = p.requiredFormatVersion
-        case .rounding: own = 5
-        case .rotaryFinish: own = 7
-        case .rotaryRough: own = 12
+        case let .rounding(p): own = p.directionInUse == .both ? 5 : PassDirection.formatVersion
+        case let .rotaryFinish(p): own = p.directionInUse == .both ? 7 : PassDirection.formatVersion
+        case let .rotaryRough(p): own = p.directionInUse == p.defaultDirection ? 12 : PassDirection.formatVersion
         case let .chamfer(p): own = p.needsFormat19(with: tool) ? 19 : 8
         case let .fluting(p): own = p.surfaceModelID == nil ? 8 : FlutingParams.followsModelFormat
         case .prism: own = 8
@@ -1714,10 +1867,104 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion
         case let .rough3D(p): own = p.requiredFormatVersion
-        case .moulding: own = MouldingParams.formatVersion
+        case let .moulding(p):
+            let turned = p.finish.cutsInChosenDirection || p.roughing.map { $0.rough3D.directionInUse != $0.rough3D.defaultDirection } == true
+            own = turned ? PassDirection.formatVersion : MouldingParams.formatVersion
         default: own = 1
         }
         return max(own, indexAngles == nil ? 1 : 3, bits)
+    }
+}
+
+// MARK: Cut direction
+
+public extension OperationKind {
+    /// The cut directions this toolpath offers for its passes, in the order the inspector lists them; nil for the
+    /// toolpaths that take a `CutDirection` (profiles, pockets, chamfers, prisms, edge profiles) or none (drilling).
+    var passDirectionChoices: [PassDirection]? {
+        switch self {
+        case let .finish3D(p): p.directionChoices
+        case let .rough3D(p): p.directionChoices
+        case let .moulding(p): p.finish.directionChoices
+        case let .vcarve(p): p.directionChoices
+        case let .rotaryRough(p): p.directionChoices
+        case .fluting, .rounding, .rotaryFinish: [.climb, .conventional, .both]
+        default: nil
+        }
+    }
+
+    /// The direction the toolpath cuts when none is chosen: the way it has always cut.
+    var defaultPassDirection: PassDirection? {
+        switch self {
+        case let .finish3D(p): p.defaultDirection
+        case let .rough3D(p): p.defaultDirection
+        case let .moulding(p): p.finish.defaultDirection
+        case let .vcarve(p): p.defaultDirection
+        case let .rotaryRough(p): p.defaultDirection
+        case .fluting, .rounding, .rotaryFinish: .both
+        default: nil
+        }
+    }
+
+    /// The cut direction in use (a moulding's is its finish's; its roughing has its own). Setting the default stores
+    /// nil, so the file saves as it did.
+    var passDirection: PassDirection? {
+        get {
+            switch self {
+            case let .finish3D(p): p.directionInUse
+            case let .rough3D(p): p.directionInUse
+            case let .moulding(p): p.finish.directionInUse
+            case let .vcarve(p): p.directionInUse
+            case let .rotaryRough(p): p.directionInUse
+            case let .fluting(p): p.directionInUse
+            case let .rounding(p): p.directionInUse
+            case let .rotaryFinish(p): p.directionInUse
+            default: nil
+            }
+        }
+        set {
+            let stored = newValue == defaultPassDirection ? nil : newValue
+            switch self {
+            case var .finish3D(p): p.cutDirection = stored; self = .finish3D(p)
+            case var .rough3D(p): p.cutDirection = stored; self = .rough3D(p)
+            case var .moulding(p): p.finish.cutDirection = stored; self = .moulding(p)
+            case var .vcarve(p): p.cutDirection = stored; self = .vcarve(p)
+            case var .rotaryRough(p): p.cutDirection = stored; self = .rotaryRough(p)
+            case var .fluting(p): p.cutDirection = stored; self = .fluting(p)
+            case var .rounding(p): p.cutDirection = stored; self = .rounding(p)
+            case var .rotaryFinish(p): p.cutDirection = stored; self = .rotaryFinish(p)
+            default: break
+            }
+        }
+    }
+
+    /// Why the toolpath's passes can't all hold the direction chosen (the inspector shows it, and Checks warns); nil
+    /// when they can.
+    var passDirectionNote: String? {
+        switch self {
+        case let .finish3D(p): p.directionNote
+        case let .moulding(p): p.finish.directionNote
+        case let .fluting(p): p.directionNote
+        default: nil
+        }
+    }
+
+    /// Whether the direction chosen makes passes that would zig-zag go one way, linking back from each pass's end to
+    /// the next one's start: what the inspector times against Both ways.
+    var cutsOneWay: Bool {
+        guard let d = passDirection, d != .both, defaultPassDirection == .both else { return false }
+        if case let .finish3D(p) = self { return p.strategy != .pencil }
+        if case let .moulding(p) = self { return p.finish.strategy != .pencil }
+        if case .fluting = self { return false }
+        return true
+    }
+
+    /// The same toolpath cut both ways, as it has always been, for timing against; nil where it has no both-ways cut.
+    var cutBothWays: OperationKind? {
+        guard cutsOneWay else { return nil }
+        var k = self
+        k.passDirection = .both
+        return k
     }
 }
 

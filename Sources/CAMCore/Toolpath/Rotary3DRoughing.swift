@@ -197,7 +197,7 @@ enum Rotary3DRoughing {
                 let area = remaining.remove(at: i)
                 let (strategy, angle) = Self.strategy(p.pattern, area: area, around: around)
                 PocketGenerator.clearCentres([area], strategy: strategy, rasterAngle: angle, stepover: stepover, tool: tool,
-                                             z: rho - above, zAbove: 0, context: ctx, builder: &b)
+                                             z: rho - above, zAbove: 0, passes: p.directionInUse, context: ctx, builder: &b)
                 from = b.position.xy
             }
 

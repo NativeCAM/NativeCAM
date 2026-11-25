@@ -100,6 +100,21 @@ public extension Motion {
     }
 }
 
+/// The planner's estimate for a toolpath cut one way and for the same toolpath cut both ways (`Toolpath.directionTime`),
+/// seconds, linked as the job links them, before arc fitting.
+public struct DirectionTime: Hashable, Codable, Sendable {
+    public var seconds: Double
+    public var bothWaysSeconds: Double
+
+    public init(seconds: Double, bothWaysSeconds: Double) {
+        self.seconds = seconds
+        self.bothWaysSeconds = bothWaysSeconds
+    }
+
+    /// How much longer one way takes, seconds (negative when it's quicker).
+    public var extraSeconds: Double { seconds - bothWaysSeconds }
+}
+
 /// The ordered motions for one operation, cut with one tool.
 public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     public var id: UUID
@@ -155,6 +170,9 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// Spindle ▸ Automatic: the speed picked for this toolpath (`spindleRPM` is set to it) and why; nil when it runs
     /// at its tool's RPM.
     public var automaticSpindle: AutomaticSpindle?
+    /// A toolpath whose passes would zig-zag, cut one way (Climb or Conventional): the planner's time for it against
+    /// the same cut both ways, for the inspector. nil otherwise.
+    public var directionTime: DirectionTime?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {

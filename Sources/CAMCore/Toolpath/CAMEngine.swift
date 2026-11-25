@@ -252,6 +252,9 @@ public enum CAMEngine {
             var wrap: Double?
             var angles: [Double?]
             var perAngle: [[(tp: Toolpath, clearing: Bool)]]
+            /// A toolpath cut one way: the same cut both ways, as it has always been, to time it against
+            /// (`Toolpath.directionTime`), by angle and index as `perAngle`.
+            var bothWays: [[Toolpath?]] = []
         }
         // The stock as the last 3D rotary roughing left it, for the toolpaths after it (see `GenerationContext.rotaryMaterial`).
         var roughed: RadialGrid?
@@ -269,6 +272,7 @@ public enum CAMEngine {
             // at every angle, then its V-bit at every angle, so the job changes tools once rather than at every face.
             let angles: [Double?] = stock.rotary == nil || wrap != nil ? [nil] : op.rotaryAngles
             var perAngle: [[(tp: Toolpath, clearing: Bool)]] = []
+            var bothWays: [[Toolpath?]] = []
             for (position, angle) in angles.enumerated() {
                 let face = faceKey(angle)
                 if models[face] == nil { models[face] = newModel() }
@@ -293,19 +297,35 @@ public enum CAMEngine {
                     breakLeads[op.id] = ProfileGenerator.breakLeads(op: op, params: p, shapes: shapes, context: opContext)
                 }
                 var generated: [Toolpath]
+                var twins: [Toolpath?] = []
                 if let refused = refusal(op, context: opContext) {
                     generated = [refused]
                 } else if case let .rotaryRough(p) = op.kind {
                     let result = Rotary3DRoughing.generate(op: op, params: p, shapes: shapes, context: opContext)
                     generated = [result.toolpath]
+                    if case let .rotaryRough(q)? = op.kind.cutBothWays {
+                        twins = [Rotary3DRoughing.generate(op: op, params: q, shapes: shapes, context: opContext).toolpath]
+                    }
                     if let left = result.left { roughed = left }
                 } else {
                     generated = generate(op, shapes: shapes, context: opContext)
+                    if let kind = op.kind.cutBothWays {
+                        var twin = op
+                        twin.kind = kind
+                        let made = generate(twin, shapes: shapes, context: opContext)
+                        twins = generated.map { tp in made.first { $0.id == tp.id } }
+                    }
                 }
+                generated = generated.map { withDirectionNote($0, operation: op) }
                 // Spindle ▸ Automatic: one speed per toolpath, set before anything reads it (feeds that follow the
                 // load hold their chip floor at it; tiles and sheets copy it).
                 if op.usesAutomaticSpindle {
                     generated = generated.map { applyAutomaticSpindle($0, operation: op, project: project) }
+                    twins = twins.map { $0.map { applyAutomaticSpindle($0, operation: op, project: project) } }
+                }
+                // Only a toolpath the direction changed is timed against its twin.
+                twins = generated.indices.map { i in
+                    i < twins.count && twins[i].map { $0.motions != generated[i].motions } == true ? twins[i] : nil
                 }
                 let clearing = generated.map { $0.id != op.id }
                 if let angle {
@@ -320,8 +340,9 @@ public enum CAMEngine {
                     }
                 }
                 perAngle.append(Array(zip(generated, clearing)).map { (tp: $0.0, clearing: $0.1) })
+                bothWays.append(twins)
             }
-            return Generated(op: op, wrap: wrap, angles: angles, perAngle: perAngle)
+            return Generated(op: op, wrap: wrap, angles: angles, perAngle: perAngle, bothWays: bothWays)
         }
         func emit(_ g: Generated, clearing: Bool) {
             let op = g.op, wrap = g.wrap
@@ -329,6 +350,7 @@ public enum CAMEngine {
                 for (position, angle) in g.angles.enumerated() where index < g.perAngle[position].count {
                     guard g.perAngle[position][index].clearing == clearing else { continue }
                     var tp = g.perAngle[position][index].tp
+                    var twin = position < g.bothWays.count && index < g.bothWays[position].count ? g.bothWays[position][index] : nil
                     if layout != nil {
                         sources.append(TileSplitter.Source(toolpath: tp, operation: op, leads: tp.id == op.id ? breakLeads[op.id] : nil))
                     }
@@ -345,6 +367,11 @@ public enum CAMEngine {
                         let settings = LinkOptimizer.Settings(safeDistance: stock.safeDistance, clearanceZ: clearanceZ,
                                                               stayDownLimit: max(3 * tp.tool.diameter, 10), floorZ: -stock.thickness,
                                                               keepOuts: keepOuts)
+                        if let t = twin {
+                            // Linked over the same material, which the twin doesn't cut into the job's model.
+                            var scratch = model
+                            twin = LinkOptimizer.optimize(t, model: &scratch, settings: settings)
+                        }
                         tp = LinkOptimizer.optimize(tp, model: &model, settings: settings)
                     } else {
                         tp.forEachMotion { s, m in model.apply(m, from: s, tool: tp.tool) }
@@ -367,9 +394,17 @@ public enum CAMEngine {
                         if case let .fluting(f) = op.kind, f.surfaceModelID != nil { followsModel = true }
                         tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !own,
                                                 mergeTolerance: followsModel ? 1e-6 : nil)
+                        twin = twin.map { RotaryWrap.prepare($0, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: false,
+                                                             mergeTolerance: followsModel ? 1e-6 : nil) }
                     } else if project.machine.outputArcs, op.kind.fitsArcs {
                         // 3D finishing keeps only the arcs that stay on its drop-cutter surface.
                         tp = ArcFitter.fit(tp, for: op, project: project)
+                    }
+                    if let twin {
+                        // The planner's times, as the links will be, before arc fitting (which the twin doesn't get).
+                        let mine = CycleTimeEstimator.estimate([tp], project: project).toolpathSeconds.first ?? 0
+                        let both = CycleTimeEstimator.estimate([twin], project: project).toolpathSeconds.first ?? 0
+                        tp.directionTime = DirectionTime(seconds: mine, bothWaysSeconds: both)
                     }
                     // After arc fitting, so an arc keeps one feed.
                     let (scheduled, notes) = FeedScheduler.apply(tp, operation: op, uncut: uncut, wrapped: wrap != nil, project: project)
@@ -696,6 +731,15 @@ public enum CAMEngine {
         guard let why = op.toolRefusal else { return nil }
         return ToolpathBuilder(stock: context.stock, tool: op.tool, startXY: nil)
             .build(id: op.id, name: op.name, tool: op.tool, rpm: op.tool.cutting.spindleRPM, warnings: [why])
+    }
+
+    /// The operation's own toolpath (the last, after any clearing) with the warning, for Checks, that its passes can't
+    /// all hold the cut direction chosen (`OperationKind.passDirectionNote`).
+    static func withDirectionNote(_ tp: Toolpath, operation op: CAMOperation) -> Toolpath {
+        guard tp.id == op.id, let note = op.kind.passDirectionNote, tp.cuttingExtents != nil else { return tp }
+        var t = tp
+        t.warnings.append(note)
+        return t
     }
 
     public static func generate(_ op: CAMOperation, shapes: [DesignShape], context: GenerationContext) -> [Toolpath] {

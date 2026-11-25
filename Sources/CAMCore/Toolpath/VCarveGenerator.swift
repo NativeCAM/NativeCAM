@@ -12,6 +12,10 @@ import Foundation
 /// S deeper, and the flat depth and pass depths count down from S. Above S the cone still cuts, S·tan(halfAngle)
 /// past the outline at the surface (inside an existing pocket that's air). An inlay plug carves the area around its
 /// design instead, mirrored (see `plugRegions` and `VCarveInlay`).
+///
+/// Cut direction (`VCarveParams.directionInUse`): each carve path runs with the outline it traces on the tool's right
+/// (outer loops counter-clockwise, holes clockwise), climbing; going conventional, each runs the other way. The flats'
+/// rings and edge passes go the same way, and raster lines are cut one way (`PocketGenerator.cutRaster`) or zig-zag.
 enum VCarveGenerator {
     /// Tallest ridge the V-bit may leave between its passes when it clears a flat bottom itself, mm. In the middle of
     /// a flat, past its last ring, a ridge can be up to twice this (plus tipRadius / tan(halfAngle)).
@@ -41,6 +45,8 @@ enum VCarveGenerator {
         let depthCap = min(flatDepth ?? .infinity, reach)
         let rCap = tip + depthCap * t
         let spacing = max(0.05, params.sampleSpacing)
+        let direction = params.directionInUse
+        let walls: CutDirection = direction == .conventional ? .conventional : .climb
 
         let regions: [Region]
         if let inlay = params.inlay, inlay.role == .plug {
@@ -82,6 +88,7 @@ enum VCarveGenerator {
             for loop in region.loops {
                 var pts = carvePath(loop: loop, segments: segs, grid: grid, spacing: spacing, rCap: rCap, tip: tip, t: t)
                 if start > 0 { pts = pts.map { Vec3($0.x, $0.y, $0.z - start) } }
+                if walls == .conventional { pts.reverse() }
                 if pts.count > 1 { paths.append(pts) }
             }
         }
@@ -98,7 +105,7 @@ enum VCarveGenerator {
                cleared > 0.05, cleared < depth.cutDepth - 0.05 {
                 depth.startDepth = cleared
             }
-            let pp = PocketParams(strategy: .offset, direction: .climb, depth: depth)
+            let pp = PocketParams(strategy: .offset, direction: walls, depth: depth)
             let w = PocketGenerator.generate(regions: flatRegions, tool: clear, params: pp, context: context, builder: &cb)
             cb.retract()
             var tp = cb.build(id: UUID(), name: "\(op.name) – flat clearing", tool: clear, rpm: clear.cutting.spindleRPM,
@@ -127,10 +134,10 @@ enum VCarveGenerator {
                             + "automatic stepover (\(u.format(params.vBitRasterSpacing(tool))) \(u.symbol)) keeps to.")
                     }
                     clearFlatRaster(rest, tool: tool, start: start, flat: flat, passDepth: params.passDepth, stepover: stepover,
-                                    angle: raster.angle, context: context, builder: &b)
+                                    angle: raster.angle, direction: direction, context: context, builder: &b)
                 } else {
                     clearFlat(rest, tool: tool, start: start, flat: flat, passDepth: params.passDepth,
-                              spacing: params.vBitClearingSpacing(tool), context: context, builder: &b)
+                              spacing: params.vBitClearingSpacing(tool), direction: walls, context: context, builder: &b)
                 }
             }
         }
@@ -153,14 +160,14 @@ enum VCarveGenerator {
     /// the carve's own path along the edge, leave ridges no taller than the limit. The first ring is half a spacing in,
     /// so even a sliver of flat gets one.
     static func clearFlat(_ regions: [Region], tool: Tool, start: Double, flat: Double, passDepth: Double?, spacing: Double,
-                          context: GenerationContext, builder b: inout ToolpathBuilder) {
+                          direction: CutDirection = .climb, context: GenerationContext, builder b: inout ToolpathBuilder) {
         // PocketGenerator sees a "tool" whose radius is the ring spacing and keeps its centre that far in, less the
         // negative allowance; the real bit's feeds come from the builder.
         var footprint = tool
         footprint.diameter = 2 * spacing
         footprint.cutting.stepoverFraction = 0.5
         let depth = DepthSettings(startDepth: start, cutDepth: start + flat, passDepth: passDepth ?? flat)
-        let pp = PocketParams(strategy: .offset, direction: .climb, depth: depth, allowance: -spacing / 2, stepoverFraction: 0.5)
+        let pp = PocketParams(strategy: .offset, direction: direction, depth: depth, allowance: -spacing / 2, stepoverFraction: 0.5)
         // Its warnings don't apply: a flat too narrow for a ring is already covered by the carve's own path.
         _ = PocketGenerator.generate(regions: regions, tool: footprint, params: pp, context: context, builder: &b)
         b.retract()
@@ -170,13 +177,16 @@ enum VCarveGenerator {
     /// each flat's edge. Like the first ring, the edge pass (and the ends of the lines) is half a stepover in, so the
     /// cones never reach the V walls. Each flat is cleared on its own, all its depths, nearest first; its lines go in
     /// zig-zag runs up (or down) the flat, linked at depth inside it, so a design's separate flats, or the two sides of an
-    /// island, don't each cost a retract on every line.
+    /// island, don't each cost a retract on every line. Climbing or conventional, the lines are cut one way instead
+    /// (`PocketGenerator.cutRaster`), and the edge pass goes the same way.
     static func clearFlatRaster(_ regions: [Region], tool: Tool, start: Double, flat: Double, passDepth: Double?, stepover: Double,
-                                angle: Double, context: GenerationContext, builder b: inout ToolpathBuilder) {
+                                angle: Double, direction: PassDirection = .both, context: GenerationContext,
+                                builder b: inout ToolpathBuilder) {
         let s = max(0.02, stepover)
         let depth = DepthSettings(startDepth: start, cutDepth: start + flat, passDepth: passDepth ?? flat)
         let levels = depth.passLevels(toolStepdown: passDepth ?? flat, firstPassMinimum: tool.firstPassMinimum)
-        let pp = PocketParams(strategy: .raster, direction: .climb, depth: depth, rasterAngle: angle)
+        let pp = PocketParams(strategy: .raster, direction: direction == .conventional ? .conventional : .climb, depth: depth,
+                              rasterAngle: angle)
         // Where the bit's centre goes: half a stepover in from the flat's edge (a flat too narrow for that is already
         // covered by the carve's own path).
         var areas = regions.flatMap { $0.offset(by: -s / 2, arcTolerance: context.arcTolerance) }
@@ -189,9 +199,15 @@ enum VCarveGenerator {
             var zAbove = -start
             for z in levels {
                 var first = true
-                rasterRuns(lines, z: z, safe: safe, first: &first, builder: &b)
+                if direction == .both {
+                    rasterRuns(lines, z: z, safe: safe, first: &first, builder: &b)
+                } else {
+                    PocketGenerator.cutRaster(lines, z: z, zAbove: zAbove, stepover: s, safe: safe, params: pp, passes: direction,
+                                              first: &first, builder: &b)
+                }
                 for loop in area.loops {
-                    PocketGenerator.cutLoop(loop, z: z, zAbove: zAbove, params: pp, stepover: s, safe: safe, first: &first, builder: &b)
+                    let oriented = direction == .conventional ? loop.reversed : loop
+                    PocketGenerator.cutLoop(oriented, z: z, zAbove: zAbove, params: pp, stepover: s, safe: safe, first: &first, builder: &b)
                 }
                 zAbove = z
             }

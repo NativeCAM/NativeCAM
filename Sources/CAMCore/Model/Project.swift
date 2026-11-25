@@ -26,8 +26,10 @@ public struct Project: Hashable, Sendable {
     /// of the kind the next time it looks. Format 21 adds constant scallop, spiral and radial 3D finishing, which an older
     /// build can't read. Format 22 adds mouldings (a profile swept along rails), which an older build can't read. Format 25 adds flutes that
     /// follow a 3D model's surface, which an older build would cut from the start depth instead. Format 26 adds adaptive
-    /// clearing for 3D roughing's layers, which an older build would ignore and cut each layer in offset rings.
-    public static let currentFormatVersion = 26
+    /// clearing for 3D roughing's layers, which an older build would ignore and cut each layer in offset rings. Format 27 adds a
+    /// cut direction on the toolpaths whose passes run in rows or a pattern (`PassDirection`), which an older build would
+    /// ignore and cut its own way. The default direction, each toolpath's old one, doesn't raise it.
+    public static let currentFormatVersion = 27
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {

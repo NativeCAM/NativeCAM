@@ -23,6 +23,12 @@ import Foundation
 /// 3D rotary roughing (`Rotary3DRoughing`) it starts from what that left, and needs no layers unless some of it is
 /// thicker than the pass depth.
 ///
+/// Cut direction (`RotaryFinishParams.directionInUse`), judged on the unrolled blank (`PassDirection`): turning
+/// forward, a spiral or rings that step +X along the blank climb, and coming back −X go conventional; lines along X,
+/// stepping round the blank, climb travelling −X. Both ways, the layers and the finish alternate along the blank and
+/// lines zig-zag, as they always have; climbing or conventional, every pass starts from the same end (back along the
+/// blank at safe Z between them) and every line runs the same way.
+///
 /// The toolpath is laid out on the unrolled sheet like every wrapped one (`RoundingGenerator`): X along the blank,
 /// sheet Y = centre + angle × the sheet's radius, Z from that radius. The angle only ever increases, so the rotary
 /// turns one way throughout. Feeds are lowered where the rotary axis couldn't otherwise keep up near the axis (see
@@ -171,15 +177,18 @@ enum Rotary3DGenerator {
             return q.indices.map { r[$0].isFinite ? max(0, r[$0]) : material(q[$0].x, q[$0].angle) }
         }
 
-        // The layers, then the finish, each pass the other way along the blank from the last.
+        // The layers, then the finish, each pass the other way along the blank from the last (both ways), or each from
+        // the same end: +X climbs, −X is conventional. Lines one way all run −X (climb) or +X.
+        let direction = p.directionInUse
+        let lineTravel: Double? = direction == .both ? nil : (direction == .climb ? -1 : 1)
         var passes: [(strokes: [Stroke], layer: Double?)] = []
-        var forward = true
+        var forward = direction != .conventional
         for k in 0..<layerCount {
             let rho = stockTop - Double(k + 1) * pass
             let above = k == 0 ? Double.infinity : stockTop - Double(k) * pass
             let (a, b) = forward ? (x0, x1) : (x1, x0)
             var strokes = pattern(p.pattern, from: a, to: b, stepover: p.layerStepover(tool), perTurn: perTurn, spacing: spacing,
-                                  outer: surfaceMax)
+                                  outer: surfaceMax, lineTravel: lineTravel)
             evaluate(&strokes, cutter: cutter, material: material)
             if flatBottom { fillShoulders(&strokes, pattern: p.pattern, threshold: pass, floor: rho, spacing: spacing, drop: drop) }
             // Where this layer would only cut air (the model, or the layer before, is already there), leave it out.
@@ -191,11 +200,11 @@ enum Rotary3DGenerator {
                 if strokes[i].lead != nil { for j in strokes[i].lead!.indices { strokes[i].lead![j].r = max(strokes[i].lead![j].r, rho) } }
             }
             passes.append((strokes, rho))
-            forward.toggle()
+            if direction == .both { forward.toggle() }
         }
         let lastLayer = passes.last?.layer
         var finish = pattern(p.pattern, from: forward ? x0 : x1, to: forward ? x1 : x0, stepover: stepover, perTurn: perTurn,
-                             spacing: spacing, outer: surfaceMax)
+                             spacing: spacing, outer: surfaceMax, lineTravel: lineTravel)
         evaluate(&finish, cutter: cutter, material: material)
         if flatBottom { fillShoulders(&finish, pattern: p.pattern, threshold: pass, floor: nil, spacing: spacing, drop: drop) }
         // The most the finish takes in one go: what the last layer left above the model.
@@ -313,8 +322,9 @@ enum Rotary3DGenerator {
     // MARK: Patterns
 
     /// The points of one pass of `kind` from station `a` to `b` (either way along the blank), starting at angle 0.
+    /// `lineTravel` (lines): every line runs that way along X (+1 or −1), each from safe Z, instead of zig-zag.
     static func pattern(_ kind: RotaryFinishParams.Pattern, from a: Double, to b: Double, stepover s: Double, perTurn n: Int,
-                        spacing h: Double, outer: Double) -> [Stroke] {
+                        spacing h: Double, outer: Double, lineTravel: Double? = nil) -> [Stroke] {
         let d = 2 * Double.pi / Double(n)
         let span = b - a
         switch kind {
@@ -352,10 +362,11 @@ enum Rotary3DGenerator {
             var strokes: [Stroke] = []
             for j in 0..<count {
                 let angle = Double(j) * turn
-                let (p, q) = j % 2 == 0 ? (a, b) : (b, a)
+                var (p, q) = j % 2 == 0 ? (a, b) : (b, a)
+                if let travel = lineTravel { (p, q) = travel > 0 ? (min(a, b), max(a, b)) : (max(a, b), min(a, b)) }
                 let line = (0...m).map { Point(x: p + (q - p) * Double($0) / Double(m), angle: angle) }
                 var lead: [Point]?
-                if j > 0 {
+                if j > 0, lineTravel == nil {
                     let k = max(1, Int((turn / d).rounded(.up)))
                     lead = (1..<k).map { Point(x: p, angle: angle - turn + turn * Double($0) / Double(k)) }
                 }

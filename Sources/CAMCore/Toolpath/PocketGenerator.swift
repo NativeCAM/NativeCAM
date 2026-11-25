@@ -221,9 +221,11 @@ enum PocketGenerator {
     /// Shared by pockets and V-carve flat-area clearing. Appends to `b`, returns warnings.
     /// `smoothBoundary` also rounds the outermost rings' corners (for roughing that leaves an allowance; a pocket's
     /// walls stay exact). Inner rings are always smoothed within the machine's roughing smoothing budget.
+    /// `rasterPasses`: how raster lines are cut (`cutRaster`); the walls' pass follows `params.direction`.
     static func generate(regions: [Region], tool: Tool, params: PocketParams, context: GenerationContext,
-                         smoothBoundary: Bool = false, builder b: inout ToolpathBuilder) -> [String] {
-        clear(regions: regions, tool: tool, params: params, context: context, smoothBoundary: smoothBoundary, shapes: [], builder: &b).warnings
+                         smoothBoundary: Bool = false, rasterPasses: PassDirection = .both, builder b: inout ToolpathBuilder) -> [String] {
+        clear(regions: regions, tool: tool, params: params, context: context, smoothBoundary: smoothBoundary, shapes: [],
+              rasterPasses: rasterPasses, builder: &b).warnings
     }
 
     /// The clearing itself. `shapes` are the drawn shapes the regions came from, so corner choices can find their
@@ -231,7 +233,7 @@ enum PocketGenerator {
     /// clearance tool already cut), only the rest is cleared, with offset rings whatever the strategy, then the walls.
     /// `wallZone` (with `reached`): the wall pass is cut only inside it, in pieces (`cutRest`).
     static func clear(regions: [Region], tool: Tool, params: PocketParams, context: GenerationContext, smoothBoundary: Bool = false,
-                      shapes: [DesignShape], reached: [Region]? = nil, wallZone: [Region]? = nil,
+                      shapes: [DesignShape], reached: [Region]? = nil, wallZone: [Region]? = nil, rasterPasses: PassDirection = .both,
                       builder b: inout ToolpathBuilder) -> (warnings: [String], corners: [ReliefCorner]?) {
         var warnings: [String] = []
         if regions.isEmpty {
@@ -328,7 +330,8 @@ enum PocketGenerator {
             var zAbove = -params.depth.startDepth
             for z in levels {
                 var first = true
-                cutRaster(lines, z: z, zAbove: zAbove, stepover: stepover, safe: safe, params: params, first: &first, builder: &b)
+                cutRaster(lines, z: z, zAbove: zAbove, stepover: stepover, safe: safe, params: params, passes: rasterPasses,
+                          first: &first, builder: &b)
                 // Clean-up pass around the boundary (and islands) to remove raster scallops.
                 for region in boundary {
                     for loop in region.loops {
@@ -573,8 +576,28 @@ enum PocketGenerator {
         return out
     }
 
-    private static func cutRaster(_ lines: [RasterLine], z: Double, zAbove: Double, stepover: Double, safe: [Region], params: PocketParams,
-                                  first: inout Bool, builder b: inout ToolpathBuilder) {
+    /// Cuts raster lines at `z`. Both ways, they zig-zag: the nearest end on the lowest rows next, linked at depth when
+    /// it's close. Climbing or conventional, the rows are cut in order up the raster (+90° from the raster angle), each
+    /// the one way that keeps the next row's material on the tool's right (climb, travelling at the raster angle + 180°)
+    /// or left (conventional, at the raster angle), and each line is entered from above: the link back is left to the
+    /// job's link optimiser, which lowers it to just over the material where that's safe.
+    static func cutRaster(_ lines: [RasterLine], z: Double, zAbove: Double, stepover: Double, safe: [Region], params: PocketParams,
+                          passes: PassDirection = .both, first: inout Bool, builder b: inout ToolpathBuilder) {
+        if passes != .both {
+            let dir = Vec2.fromAngle(params.rasterAngle.radians)
+            // Rows up the raster; along each, in the direction it's cut.
+            let travel = passes == .climb ? -1.0 : 1.0
+            let ordered = lines.sorted { l, m in
+                l.row != m.row ? l.row < m.row : travel * l.a.dot(dir) < travel * m.a.dot(dir)
+            }
+            for line in ordered {
+                let (s, e) = passes == .climb ? (line.b, line.a) : (line.a, line.b)
+                b.enter(at: Vec3(s, z))
+                b.feed(Vec3(e, z))
+                first = false
+            }
+            return
+        }
         var remaining = lines
         while !remaining.isEmpty {
             // Pick the nearest endpoint among segments on the lowest remaining row (keeps the zig-zag orderly).
@@ -609,11 +632,12 @@ extension PocketGenerator {
     /// raster lines at `rasterAngle` (degrees) and a pass round each area's edge. One level, `z`; links stay down
     /// inside the areas as a pocket's do, and the tool is back at safe Z at the end.
     static func clearCentres(_ boundary: [Region], strategy: PocketStrategy, rasterAngle: Double, stepover: Double, tool: Tool,
-                             z: Double, zAbove: Double, context: GenerationContext, builder b: inout ToolpathBuilder) {
+                             z: Double, zAbove: Double, passes: PassDirection = .both, context: GenerationContext,
+                             builder b: inout ToolpathBuilder) {
         guard !boundary.isEmpty else { return }
         let entry = strategy == .offset ? EntrySettings(kind: .ramp, rampLength: 2 * tool.diameter) : EntrySettings()
-        let params = PocketParams(strategy: strategy, direction: .climb, depth: DepthSettings(startDepth: -zAbove, cutDepth: -z),
-                                  rasterAngle: rasterAngle, entry: entry)
+        let params = PocketParams(strategy: strategy, direction: passes == .conventional ? .conventional : .climb,
+                                  depth: DepthSettings(startDepth: -zAbove, cutDepth: -z), rasterAngle: rasterAngle, entry: entry)
         let safe = boundary.flatMap { $0.offset(by: 0.01, arcTolerance: context.arcTolerance) }
         var first = true
         switch strategy {
@@ -625,10 +649,12 @@ extension PocketGenerator {
             cutTree(tree, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
         case .raster:
             let lines = rasterLines(boundary, stepover: stepover, angle: rasterAngle)
-            cutRaster(lines, z: z, zAbove: zAbove, stepover: stepover, safe: safe, params: params, first: &first, builder: &b)
+            cutRaster(lines, z: z, zAbove: zAbove, stepover: stepover, safe: safe, params: params, passes: passes, first: &first, builder: &b)
             for region in boundary {
                 for loop in region.loops {
-                    cutLoop(loop, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
+                    // The edge pass climbs (outer loops counter-clockwise, holes clockwise) unless conventional is asked for.
+                    let oriented = passes == .conventional ? loop.reversed : loop
+                    cutLoop(oriented, z: z, zAbove: zAbove, params: params, stepover: stepover, safe: safe, first: &first, builder: &b)
                 }
             }
         }
