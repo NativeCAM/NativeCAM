@@ -370,9 +370,12 @@ public enum Surfacing {
         func point(_ s: Double, _ t: Double, _ z: Double) -> Vec3 {
             options.along == .x ? Vec3(s, t, z) : Vec3(t, s, z)
         }
-        // Climb cutting with an M3 (clockwise) spindle and the uncut board on the side the lines step towards: along X
-        // the lines step +Y, so they cut towards +X; along Y they step +X, so they cut towards −Y.
+        // The lines step +Y along X and +X along Y, so the board still to cut is always on the stepping side. Climb with an
+        // M3 (clockwise) spindle keeps the material the bit engages on its right, as OperationInspector's help says:
+        // along X that means cutting towards −X, along Y towards +Y.
+        // (Zig-zag only picks which way its first line goes; it alternates, so it keeps its old start.)
         let climbForward = options.along == .x
+        let oneWayForward = options.along == .y
         var out: [Motion] = []
         func enter(at start: Double, towards end: Double, across t: Double) {
             out.append(.rapid(point(start, t, clear)))
@@ -399,7 +402,7 @@ public enum Surfacing {
                 forward.toggle()
             }
         case .oneWay:
-            let (a, b) = climbForward ? (lo, hi) : (hi, lo)
+            let (a, b) = oneWayForward ? (lo, hi) : (hi, lo)
             for t in plan.lines {
                 enter(at: a, towards: b, across: t)
                 out.append(.feed(point(b, t, z), plan.feed))

@@ -180,6 +180,23 @@ struct FinishingPassCatalogTests {
     @Test func eachDepthGolden() throws { try Self.checkGolden(Self.eachDepthProject(), "finishing-pass-each-depth-mm") }
     @Test func springGolden() throws { try Self.checkGolden(Self.springProject(), "finishing-pass-spring-mm") }
 
+    /// The setup sheet only says the finish lifts over tabs when the profile has some (#162).
+    @Test func setupSheetMentionsTabsOnlyWhenThereAreSome() throws {
+        let sentence = "It lifts over the same tabs as the roughing."
+        let plain = try Self.edgeCase("no-tabs-finish") { Self.outsideProject() }
+        let plainHTML = SetupSheet.html(project: plain, job: CAMEngine.generate(plain), date: GoldenPostTests.date)
+        #expect(plainHTML.contains("finishing pass"), "the finishing line is missing")
+        #expect(!plainHTML.contains(sentence))
+        let tabbed = Self.tabsLeadsProject()
+        let tabbedHTML = SetupSheet.html(project: tabbed, job: CAMEngine.generate(tabbed), date: GoldenPostTests.date)
+        #expect(tabbedHTML.contains(sentence))
+        var zero = tabbed
+        guard case var .profile(params) = zero.operations[0].kind else { Issue.record(); return }
+        params.tabs.count = 0
+        zero.operations[0].kind = .profile(params)
+        #expect(!SetupSheet.html(project: zero, job: CAMEngine.generate(zero), date: GoldenPostTests.date).contains(sentence))
+    }
+
     // MARK: File format
 
     @Test func aFinishingPassIsFormatTwentyEightAndNoneKeepsTheFormat() throws {

@@ -175,7 +175,7 @@ func postRestart(_ project: Project, job: JobResult, airCut: Double?) {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] | sim <project|tap> [--png out.png] [--cell mm]"
+    print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] [--restart-*] | surface [project] [-o file] | sim <project|tap> [--png out.png] [--cell mm]"
           + " | tools <library> [-o out.json]")
     exit(0)
 }
@@ -197,7 +197,9 @@ case "demo", "demo3d", "demonest", "demosheets", "new":
     }
 
 case "post":
-    guard args.count >= 2 else { fail("usage: nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]") }
+    guard args.count >= 2 else { fail("usage: nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]\n"
+                                         + "       nativecam-cli post <project.nativecam> --restart-toolpath n [--restart-pass p] | --restart-line N "
+                                         + "[--restart-exact] [--restart-no-stop] [--restart-file n] [--restart-from running.tap]") }
     let project = loadProject(args[1])
     let start = Date()
     let job = CAMEngine.generate(project)

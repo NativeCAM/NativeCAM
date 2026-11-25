@@ -488,10 +488,11 @@ public enum SetupSheet {
             for (op, f) in finishing {
                 let depth = f.depth == .fullDepth ? "at full depth" : "at each pass depth"
                 let rate = op.tool.cutting.feedRate * f.feedPercent
+                let tabbed: Bool = { if case let .profile(p) = op.kind { return p.tabs.enabled && p.tabs.count > 0 } else { return false } }()
                 let spring = f.springPass ? ", then a spring pass round it again" : ""
                 h += "<li><b>\(esc(op.name))</b>: the roughing passes stop \(len(f.allowance)) off the wall, then a "
                     + "<b>\(f.direction.rawValue)</b> finishing pass \(depth) cuts it to size at \(Int((f.feedPercent * 100).rounded()))% feed "
-                    + "(\(feed(rate)))\(spring). It lifts over the same tabs as the roughing.</li>\n"
+                    + "(\(feed(rate)))\(spring).\(tabbed ? " It lifts over the same tabs as the roughing." : "")</li>\n"
             }
             h += "</ul>\n"
         }

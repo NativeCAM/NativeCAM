@@ -334,7 +334,8 @@ public enum Restart {
         }
 
         var suffix = request.airCut == nil ? "" : " (air cut)"
-        suffix += " (restart at toolpath \(i + 1)" + (point.atToolpathStart ? "" : " pass \(pass)") + ")"
+        suffix += " (restart at toolpath \(i + 1)" + (point.atToolpathStart ? "" : " pass \(pass)")
+            + (point.exact ? ", exact " + (point.line.map { "line \($0)" } ?? "move \(point.motion + 1)") : "") + ")"
         suffix += full.suffix ?? ""
         let file = JobExport.File(suffix: suffix, gcode: gcode, toolpaths: checkPaths, project: postProject, tile: full.tile, sheet: full.sheet)
         let remaining = CycleTimeEstimator.estimate(restart, project: full.project).total

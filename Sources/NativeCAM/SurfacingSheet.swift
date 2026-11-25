@@ -165,7 +165,7 @@ struct SurfacingSheet: View {
                                 help: "Refused when less than \(len(Surfacing.minimumBoard(units))) would be left")
         } footer: {
             note("Feed \(Calibration.feed(tool.cutting.feedRate, units)) and \(Int(machine.clampRPM(tool.cutting.spindleRPM))) RPM from the "
-                 + "tool library. One way cuts every line climb, for reading the spindle's tram: ridges between lines mean it's out of tram.",
+                 + "tool library. One way cuts every line climb (the uncut board on the bit's right), for reading the spindle's tram: ridges between lines mean it's out of tram.",
                  problem: false)
         }
     }

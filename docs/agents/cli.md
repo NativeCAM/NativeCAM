@@ -166,7 +166,7 @@ Writes a restart: the rest of the job from part way through, for after a broken 
 | `--air-cut h` | off | An air cut of the restart |
 | `--sheet` | | Not allowed with a restart. Post the full job for its setup sheet |
 
-**File.** `<stem> (restart at toolpath n pass p)<the full file's suffix>.<ext>`, for example `sign (restart at toolpath 2 pass 2).tap`.
+**File.** `<stem> (restart at toolpath n pass p)<the full file's suffix>.<ext>`, for example `sign (restart at toolpath 2 pass 2).tap`. An exact restart adds where it resumes, `<stem> (restart at toolpath n pass p, exact line L)…` (pass 1 shows as `pass 1` here, though a snapped restart of pass 1 is just `(restart at toolpath n)`) (`move M`, the toolpath's move from 1, when you gave a toolpath and pass rather than a line), so it never overwrites the snapped restart of the same pass.
 
 **Stdout.** The restart's header lines, indented, then the checks, then:
 

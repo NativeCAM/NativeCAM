@@ -137,7 +137,8 @@ enum ProfileGenerator {
             }
         }
 
-        // Climb keeps the finished wall on the tool's right, so the waste is on its left.
+        // Climb keeps the material the bit is engaging, the finished wall, on the tool's right (clockwise spindle, M3).
+        // The waste being cleared is then on its left; that is why `wasteOnLeft` is what the leads need.
         let wasteOnLeft = params.direction == .climb
         // The parts other toolpaths cut nearby, less what this one cuts away itself (a rough's allowance, say), for
         // the leads and reliefs to keep clear of.
