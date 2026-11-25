@@ -124,6 +124,16 @@ Removed 82.8 cm³ of material; job time 0:01:02
 Wrote bracket.png
 ```
 
+To keep the tabs off a detail, place them yourself instead of `count`: add `"placed"` to `tabs`, a list of marks on the outline in the shape's own coordinates, and `"shape": "triangular"` for ramped tabs with an end mill. To start the cut on a particular edge, add `"startPoints"` to the profile. For the bracket, two tabs on its bottom edge, one on its right side, and the cut starting on the bottom edge (it's then format 29):
+
+```python
+cut = p["operations"][-1]["kind"]["profile"]["_0"]
+cut["tabs"]["placed"] = [{"shapeID": part["id"], "point": {"x": x, "y": y}} for x, y in [(-50, -60), (50, -60), (100, 0)]]
+cut["startPoints"] = [{"shapeID": part["id"], "point": {"x": 0, "y": -60}}]
+```
+
+`post` warns about a mark that's no longer on its shape (more than 1 mm, or the bit's radius, off its outline) and leaves it off; with no tabs left, it warns the cut frees the part. Read those warnings before handing the file over.
+
 **Check:** exit 0; three toolpaths generated; no warnings; `Cuts through the material` on the drill and the cut-out; no `[error]` from `sim`; and the PNG shows the recess, three holes and the outline. A drill's holes are bored with the end mill here, plunging at each circle's centre; for holes bigger than the bit, pocket or profile them instead.
 
 ## 2. V-carve a sign

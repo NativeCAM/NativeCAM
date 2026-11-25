@@ -1,0 +1,119 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 29,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Ball nose",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "167AB000-0000-4000-8000-000000000001",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 19.549999999999997,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : true,
+              "shape" : "triangular",
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Cut out",
+      "shapeIDs" : [
+        "167AB000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 6350,
+          "plungeRate" : 1016,
+          "spindleRPM" : 15000,
+          "stepdown" : 3.175,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 19.049999999999997,
+        "id" : "4E415449-5645-4341-4D00-000000000007",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Ball Nose",
+        "notes" : "",
+        "number" : 7,
+        "shankDiameter" : 6.35,
+        "shape" : "ballNose",
+        "stickout" : 31.749999999999996,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "167AB000-0000-4000-8000-000000000001",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 80,
+          "width" : 120
+        }
+      },
+      "layer" : "Default",
+      "name" : "Part",
+      "position" : {
+        "x" : 100,
+        "y" : 75
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 10,
+    "height" : 150,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialKind" : "plywood",
+    "materialName" : "Plywood",
+    "plungeHeight" : 2,
+    "thickness" : 19.049999999999997,
+    "width" : 200,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}
