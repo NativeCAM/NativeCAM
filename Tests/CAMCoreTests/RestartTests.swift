@@ -324,6 +324,23 @@ struct RestartTests {
         try Self.golden(r, "restart-by-hand-grbl")
     }
 
+    /// A snapped and an exact restart of the same pass get different file names, so one doesn't overwrite the other (#162).
+    /// `restart-file-names.txt` holds the two expected names, one per line.
+    @Test func snappedAndExactRestartsHaveDifferentFileNames() throws {
+        let expected = try String(contentsOf: Self.fixtures.appendingPathComponent("restart-file-names.txt"), encoding: .utf8)
+            .split(separator: "\n").map(String.init)
+        #expect(expected.count == 2 && expected[0] != expected[1])
+        let dir = try CommandLineTests.folder()
+        let project = Self.fixtures.appendingPathComponent("pocket-ramp.nativecam").path
+        let out = dir.appendingPathComponent("Pocket.tap").path
+        let snapped = try CommandLineTests.run(["post", project, "-o", out, "--restart-line", "100"])
+        let exact = try CommandLineTests.run(["post", project, "-o", out, "--restart-line", "100", "--restart-exact"])
+        #expect(snapped.status == 0 && exact.status == 0, "\(snapped.output)\(exact.output)")
+        for name in expected {
+            #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent(name).path), "\(name) in \((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])")
+        }
+    }
+
     @Test func wrappedRestartsOnTheGenericPost() throws {
         for (name, family, units) in [("linuxcnc", ControllerFamily.linuxCNC, LengthUnit.mm), ("grblhal", .grblHAL, .inch)] {
             let p = try Self.fixture("wrapped-rectangle", ControllerPostTests.controller(family, units: units))

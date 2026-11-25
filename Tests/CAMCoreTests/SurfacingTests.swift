@@ -231,6 +231,27 @@ struct SurfacingTests {
         }
     }
 
+    /// One way is climb: with a clockwise (M3) spindle the material the bit engages, the board still to cut, is on its
+    /// right. Lines step +Y along X and +X along Y, so that is the right of every cutting move.
+    @Test func oneWayKeepsTheUncutBoardOnTheBitsRight() throws {
+        for along in Surfacing.Along.allCases {
+            let program = try Self.program { $0.area = .custom(Vec2(12.inch, 12.inch)); $0.direction = .oneWay; $0.along = along }
+            let step = along == .x ? Vec2(0, 1) : Vec2(1, 0)   // towards the lines still to be cut
+            var p = program.toolpaths[0].start
+            var cuts = 0
+            for m in program.toolpaths[0].motions {
+                if m.kind == .feed, abs(m.end.z - p.z) < 1e-9, abs(m.end.x - p.x) + abs(m.end.y - p.y) > 1 {
+                    let d = Vec2(m.end.x - p.x, m.end.y - p.y)
+                    let right = Vec2(d.y, -d.x)
+                    #expect(right.x * step.x + right.y * step.y > 0, "\(along): uncut board is on the left")
+                    cuts += 1
+                }
+                p = m.end
+            }
+            #expect(cuts > 1, "\(along)")
+        }
+    }
+
     @Test func starterLibraryHasTheSurfacingBit() {
         let bit = Surfacing.starterBit
         #expect(bit.shape == .surfacing)
