@@ -355,7 +355,11 @@ public enum CAMEngine {
                     if let wrap {
                         // 3D rotary roughing and finishing have already lowered their feeds for the rotary axis, and said so.
                         let own = op.kind.is3D && op.kind.turnsWholeBlank
-                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !own)
+                        // Flutes that follow a model are joined only where they stay on or above their depth below it.
+                        var followsModel = false
+                        if case let .fluting(f) = op.kind, f.surfaceModelID != nil { followsModel = true }
+                        tp = RotaryWrap.prepare(tp, diameter: wrap, clearanceZ: clearanceZ, context: ctx, warns: !own,
+                                                mergeTolerance: followsModel ? 1e-6 : nil)
                     } else if project.machine.outputArcs, op.kind.fitsArcs {
                         // 3D finishing keeps only the arcs that stay on its drop-cutter surface.
                         tp = ArcFitter.fit(tp, for: op, project: project)

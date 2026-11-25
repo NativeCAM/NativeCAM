@@ -19,12 +19,18 @@ public enum ArcFitter {
     /// The surface a 3D finishing pass promises not to cut below: the tool-tip height the exact drop-cutter gives.
     final class Surface {
         let cutter: TriangleDropCutter
+        /// How far below the drop-cutter surface moves may go, mm: 0 for a 3D finish, a flute's depth for flutes that
+        /// follow a model.
+        let lowered: Double
         var hint: Int32 = -1
-        init(_ cutter: TriangleDropCutter) { self.cutter = cutter }
+        init(_ cutter: TriangleDropCutter, lowered: Double = 0) {
+            self.cutter = cutter
+            self.lowered = lowered
+        }
 
-        /// Whether `q` is no more than `surfaceEpsilon` below the surface.
+        /// Whether `q` is no more than `surfaceEpsilon` below the surface (lowered by `lowered`).
         func allows(_ q: Vec3) -> Bool {
-            let z = cutter.z(at: q.xy, hint: &hint)
+            let z = cutter.z(at: q.xy, hint: &hint) - lowered
             return !(z.isFinite && z - q.z > ArcFitter.surfaceEpsilon)
         }
 
@@ -82,6 +88,12 @@ public enum ArcFitter {
             guard let cutter = TriangleDropCutter(tool: tool, allowance: allowance, triangles: Model3DGenerator.triangles(of: [s.shape]))
             else { return nil }
             return Surface(cutter)
+        }
+        // Flutes that follow a model: no move deeper than the flute's depth below the model's surface.
+        if case let .fluting(f) = operation.kind, let id = f.surfaceModelID {
+            guard case let .success(s) = FlutingGenerator.Surface.make(modelID: id, tool: tool, project: project, stock: project.stock),
+                  let cutter = s.flat else { return nil }
+            return Surface(cutter, lowered: max(0, f.depth))
         }
         guard case let .finish3D(p) = operation.kind else { return nil }
         let models = project.shapes(for: operation).filter { !$0.isKeepOut && $0.modelSpec != nil }

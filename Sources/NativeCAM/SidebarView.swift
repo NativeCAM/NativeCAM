@@ -392,7 +392,11 @@ enum ShapeFactory {
             return CAMOperation(name: "Chamfer", kind: .chamfer(params), shapeIDs: shapes, tool: bit)
         case .fluting:
             let ball = pick({ $0.shape == .ballNose }, 7)
-            return CAMOperation(name: "Fluting", kind: .fluting(FlutingParams(depth: min(0.125.inch, t / 2))), shapeIDs: shapes, tool: ball)
+            // With a 3D model among the selected shapes, the flutes follow its surface and the other shapes are the flutes.
+            let model = project.shapes.first { shapes.contains($0.id) && $0.modelSpec != nil && !$0.isKeepOut }
+            var params = FlutingParams(depth: min(0.125.inch, t / 2))
+            params.surfaceModelID = model?.id
+            return CAMOperation(name: "Fluting", kind: .fluting(params), shapeIDs: shapes.filter { $0 != model?.id }, tool: ball)
         case .prism:
             let bit = pick({ $0.shape == .vBit && abs($0.includedAngle - 90) < 0.5 }, 6)
             return CAMOperation(name: "Prism", kind: .prism(PrismParams()), shapeIDs: shapes, tool: bit)

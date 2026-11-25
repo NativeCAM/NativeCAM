@@ -234,10 +234,12 @@ public enum RotaryIndex {
                 + "one is \(fmt(project.stock.height)), so its turns won't meet. Set the blank again to refit it."))
         }
         // A wrapped design is true to size only at the wrap diameter; deeper in, the same angle spans less.
-        // A radial hole is a hole at any depth, so drilling is left out, and rounding cuts to its own diameter.
+        // A radial hole is a hole at any depth, so drilling is left out, and rounding cuts to its own diameter. Flutes
+        // that follow a model are as deep as the model is, and spaced round it by angle, as a turning's flutes are.
         let radius = blank.topRadius
         var reported = Set(project.operations.filter { op in
             if case .drill = op.kind { return true }
+            if case let .fluting(f) = op.kind, f.surfaceModelID != nil { return true }
             return op.kind.turnsWholeBlank
         }.map(\.id))
         for tp in toolpaths where tp.wrapDiameter != nil && !reported.contains(tp.sourceOperationID) {

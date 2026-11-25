@@ -1333,9 +1333,13 @@ public struct FlutingParams: Hashable, Codable, Sendable {
     /// Max depth per pass; nil uses the tool's stepdown. Each pass follows the whole flute, its ramps scaled to its
     /// depth, so the last pass cuts the full length.
     public var passDepth: Double?
+    /// The 3D model (its shape's ID) whose surface the flutes follow: each flute's depth is then measured down from
+    /// where the bit touches the model (the exact drop-cutter), on a flat job or wrapped round a rotary blank, and the
+    /// start depth isn't used. nil measures them from the start depth, as in every file before format 25.
+    public var surfaceModelID: UUID?
 
     public init(startDepth: Double = 0, depth: Double = 0.125.inch, ramp: Ramp = .both, rampLength: Double = 1.inch,
-                rampPercent: Double? = nil, rampShape: RampShape = .linear, passDepth: Double? = nil) {
+                rampPercent: Double? = nil, rampShape: RampShape = .linear, passDepth: Double? = nil, surfaceModelID: UUID? = nil) {
         self.startDepth = startDepth
         self.depth = depth
         self.ramp = ramp
@@ -1343,6 +1347,30 @@ public struct FlutingParams: Hashable, Codable, Sendable {
         self.rampPercent = rampPercent
         self.rampShape = rampShape
         self.passDepth = passDepth
+        self.surfaceModelID = surfaceModelID
+    }
+
+    /// Flutes that follow a 3D model are format 25: an older build would drop the model and cut them from the start
+    /// depth, in the air above a finished model or into it.
+    public static let followsModelFormat = 25
+
+    /// What the flutes' depth is measured from.
+    public enum Follow: String, CaseIterable, Identifiable, Sendable {
+        case materialTop, startDepth, model
+        public var id: String { rawValue }
+        public var label: String {
+            switch self {
+            case .materialTop: "Material top"
+            case .startDepth: "Start depth"
+            case .model: "3D model"
+            }
+        }
+    }
+
+    /// What the flutes follow: a 3D model when one is set, else the material top (start depth 0) or the start depth.
+    public var follow: Follow {
+        if surfaceModelID != nil { return .model }
+        return startDepth > 1e-9 ? .startDepth : .materialTop
     }
 
     /// Tool shapes that leave a rounded or V-shaped flute (a core box bit is a ball nose in the tool library).
@@ -1664,7 +1692,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// operation's tool or its clearance tool, is format 15 (see `ToolShape.requiredFormatVersion`). 3D rest finishing
     /// is format 17. A pocket resting from earlier toolpaths needs no new format (`PocketParams.restFromEarlier`). Edge
     /// profiles are format 18. A chamfer with an overcut or a form bit is format 19. Constant scallop, spiral and radial
-    /// 3D finishing are format 21. Mouldings are format 22.
+    /// 3D finishing are format 21. Mouldings are format 22. Flutes that follow a 3D model are format 25.
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {
@@ -1680,7 +1708,8 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case .rotaryFinish: own = 7
         case .rotaryRough: own = 12
         case let .chamfer(p): own = p.needsFormat19(with: tool) ? 19 : 8
-        case .fluting, .prism: own = 8
+        case let .fluting(p): own = p.surfaceModelID == nil ? 8 : FlutingParams.followsModelFormat
+        case .prism: own = 8
         case .edgeProfile: own = 18
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion
