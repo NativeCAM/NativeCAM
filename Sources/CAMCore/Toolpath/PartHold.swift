@@ -72,7 +72,23 @@ public enum PartHold {
     /// is above the tabs anyway).
     public static func hold(for op: CAMOperation, in project: Project) -> Hold? {
         let stock = project.stock
-        guard stock.rotary == nil, op.enabled, let b = boundary(of: op), let floor = unheldFloor(op, in: project) else { return nil }
+        guard stock.rotary == nil, op.enabled, boundary(of: op) != nil, let floor = unheldFloor(op, in: project) else { return nil }
+        var best: (thickness: Double, name: String)?
+        for cutOut in cutOutsReached(by: op, in: project) {
+            guard let p = isTabbedCutOut(cutOut, in: project) else { continue }
+            // Tabs whose tops are deeper than the material's bottom less their thickness (a cut-out into the
+            // spoilboard) leave less, but a floor a whole tab thickness up holds at least as much as they do.
+            if best.map({ p.tabs.thickness > $0.thickness }) ?? true { best = (p.tabs.thickness, cutOut.name) }
+        }
+        guard let best else { return nil }
+        let z = min(0, -(stock.thickness - best.thickness))
+        guard floor < z - 1e-6 else { return nil }
+        return Hold(z: z, tabThickness: best.thickness, cutOut: best.name)
+    }
+
+    /// The tabbed cut-outs through the material whose parts a flat 3D roughing or finishing reaches, in run order.
+    static func cutOutsReached(by op: CAMOperation, in project: Project) -> [CAMOperation] {
+        guard project.stock.rotary == nil, let b = boundary(of: op) else { return [] }
         let shapes = project.shapes(for: op).filter { !$0.isKeepOut }
         // Where the toolpath can cut, per sheet: the whole sheet with Whole material, else its shapes' boxes grown by
         // how far past them it may go.
@@ -88,31 +104,23 @@ public enum PartHold {
                 if !r.isEmpty { reach.append((sheet, r.insetBy(-grow))) }
             }
         }
-        var best: (thickness: Double, name: String)?
-        for cutOut in project.operations {
-            guard cutOut.id != op.id, let p = isTabbedCutOut(cutOut, in: project) else { continue }
-            let near = project.shapes(for: cutOut).contains { s in
+        return project.operations.filter { cutOut in
+            guard cutOut.id != op.id, isTabbedCutOut(cutOut, in: project) != nil else { return false }
+            return project.shapes(for: cutOut).contains { s in
                 let r = s.bounds
                 let sheet = project.sheetIndex(of: s)
                 return !r.isEmpty && reach.contains { $0.sheet == sheet && $0.rect.intersects(r) }
             }
-            guard near else { continue }
-            // Tabs whose tops are deeper than the material's bottom less their thickness (a cut-out into the
-            // spoilboard) leave less, but a floor a whole tab thickness up holds at least as much as they do.
-            if best.map({ p.tabs.thickness > $0.thickness }) ?? true { best = (p.tabs.thickness, cutOut.name) }
         }
-        guard let best else { return nil }
-        let z = min(0, -(stock.thickness - best.thickness))
-        guard floor < z - 1e-6 else { return nil }
-        return Hold(z: z, tabThickness: best.thickness, cutOut: best.name)
     }
 
     /// The Checks note for a held floor.
-    static func note(_ hold: Hold, stock: Stock, units: LengthUnit) -> String {
+    static func note(_ hold: Hold, stock: Stock, units: LengthUnit, why: String? = nil) -> String {
         func fmt(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
+        let strips = why.map { " It holds the whole floor rather than leaving strips under the tabs: \($0)" } ?? ""
         return "Holds its floor at \(fmt(-hold.z)) deep, \(fmt(hold.tabThickness)) above the material's bottom (the tab thickness "
             + "of “\(hold.cutOut)”), so it doesn't cut the part free before its tabs hold it. Below that the model is left for the "
-            + "cut-out to finish."
+            + "cut-out to finish." + strips
     }
 
     /// The Checks error when the floor can't be held.

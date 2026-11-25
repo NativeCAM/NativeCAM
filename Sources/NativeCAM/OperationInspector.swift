@@ -108,7 +108,7 @@ struct OperationInspector: View {
                                   cutDepth: p.depth.cutDepth, units: units)
             }
             TabsSection(params: Binding(get: { p }, set: { set($0) }), tool: op.tool, stock: project.stock, units: units,
-                        shapes: project.shapes(for: op))
+                        shapes: project.shapes(for: op), leftBy: p.tabs.enabled ? HoldingTabs.leftBy(op, in: project) : [])
         case let .pocket(p):
             let set: (PocketParams) -> Void = { op.kind = .pocket($0) }
             Section("Pocket") {
@@ -174,6 +174,7 @@ struct OperationInspector: View {
                                 help: "How far past the selected vectors roughing clears. Automatic: tool diameter + 1 mm")
                     BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
                 }
+                HoldingTabsLine(op: op, project: project)
                 LengthField(title: "Allowance", mm: Binding(get: { p.allowance }, set: { var q = p; q.allowance = max(0, $0); set(q) }), units: units,
                             help: "Material left on the model for the finishing pass")
                 LengthField(title: "Layer depth", mm: Binding(get: { p.passDepth ?? op.tool.cutting.stepdown }, set: { var q = p; q.passDepth = max(0.05, $0); set(q) }),
@@ -364,6 +365,7 @@ struct Finish3DSection: View {
                             help: "How far past the selected vectors the tool centre may go. Automatic: tool radius + 0.5 mm")
                 BoundaryNote(automatic: p.boundaryMargin == nil) { var q = p; q.boundaryMargin = nil; set(q) }
             }
+            if showsBoundary { HoldingTabsLine(op: op, project: project) }
             if p.strategy.usesScallopTarget {
                 Picker("Spacing", selection: Binding(get: { p.scallopHeight != nil }, set: { byScallop in
                     var q = p
@@ -1284,6 +1286,22 @@ struct PartnerRow: View {
     }
 }
 
+/// A flat 3D roughing or finishing's read-only Tabs line: the cut-out whose tabs it leaves strips under, or why it holds
+/// its whole floor instead (`HoldingTabs.summary`). Nothing when it has nothing to hold.
+struct HoldingTabsLine: View {
+    let op: CAMOperation
+    let project: Project
+
+    var body: some View {
+        if let line = HoldingTabs.summary(for: op, in: project) {
+            LabeledContent("Tabs") {
+                Text(line).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 /// Explains the "Selected vectors" boundary and offers a way back to the automatic margin.
 struct BoundaryNote: View {
     let automatic: Bool
@@ -2072,6 +2090,8 @@ struct TabsSection: View {
     let stock: Stock
     let units: LengthUnit
     let shapes: [DesignShape]
+    /// The models whose 3D toolpaths leave strips under these tabs (`HoldingTabs`).
+    var leftBy: [String] = []
 
     private func fmt(_ mm: Double) -> String { "\(units.format(mm)) \(units.symbol)" }
 
@@ -2121,6 +2141,10 @@ struct TabsSection: View {
                 let below = p.depth.cutDepth - stock.thickness
                 if stock.rotary == nil, below > 1e-6 {
                     Text("Leaves \(fmt(max(0, p.tabs.thickness - below))) above the material's bottom (the cut goes \(fmt(below)) into the spoilboard).")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                if !leftBy.isEmpty {
+                    Text("Also left by 3D toolpaths on \(leftBy.map { "'\($0)'" }.joined(separator: ", ")), as strips under each tab.")
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Text(p.tabs.isPlaced

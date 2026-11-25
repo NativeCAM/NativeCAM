@@ -32,8 +32,10 @@ public struct Project: Hashable, Sendable {
     /// profile's separate finishing pass (`ProfileFinishPass`), which an older build would ignore and cut the part to the
     /// roughing's size. Format 29 adds a profile's triangular tabs, tabs placed by hand and chosen start points
     /// (`TabSettings.formatVersion`), which an older build would ignore and cut its own evenly spaced rectangular tabs,
-    /// starting each loop elsewhere.
-    public static let currentFormatVersion = 29
+    /// starting each loop elsewhere. Format 30 adds strips under a cut-out's tabs in flat 3D roughing and finishing
+    /// (`CAMOperation.holdsTabsFormatVersion`), which an older build would ignore, holding the whole floor or cutting it
+    /// through, with the cut-out's tabs elsewhere on the wall.
+    public static let currentFormatVersion = 30
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
@@ -43,7 +45,8 @@ public struct Project: Hashable, Sendable {
         // Only tiling that splits the job: one tile is the same file a format-8 build writes.
         let tiled = tiling?.enabled == true && TileLayout(self) != nil ? 9 : 1
         let sheets = sheetCount > 1 ? 16 : 1
-        return parts.reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion, byHand, tiled, sheets), max)
+        let strips = HoldingTabs.Job(self).hasStrips ? CAMOperation.holdsTabsFormatVersion : 1
+        return parts.reduce(max(machine.requiredFormatVersion, stock.requiredFormatVersion, byHand, tiled, sheets, strips), max)
     }
 
     /// Keeps every spiral climbing exactly once around the blank per pitch: on a wrapped job, a spiral's turn is the
@@ -205,10 +208,27 @@ extension Project: Codable {
         try c.encode(stock, forKey: .stock)
         try c.encode(machine, forKey: .machine)
         try c.encode(shapes, forKey: .shapes)
-        try c.encode(operations, forKey: .operations)
+        // Flat 3D toolpaths that leave strips under a cut-out's tabs are marked so (format 30).
+        let holding = HoldingTabs.Job(self)
+        try c.encode(operations.map { StampedOperation(op: $0, holdsTabs: holding.decisions[$0.id]?.strips != nil) }, forKey: .operations)
         try c.encode(notes, forKey: .notes)
         try c.encodeIfPresent(tiling, forKey: .tiling)
         if !additionalSheets.isEmpty { try c.encode(additionalSheets, forKey: .additionalSheets) }
         if !namedLayers.isEmpty { try c.encode(namedLayers, forKey: .namedLayers) }
+    }
+}
+
+/// An operation as saved, with `"holdsTabs": true` when it's a flat 3D toolpath that leaves strips under a cut-out's
+/// tabs (`CAMOperation.holdsTabsFormatVersion`). Read back, the key is ignored: the strips are worked out from the job.
+private struct StampedOperation: Encodable {
+    var op: CAMOperation
+    var holdsTabs: Bool
+    private enum CodingKeys: String, CodingKey { case holdsTabs }
+
+    func encode(to encoder: Encoder) throws {
+        try op.encode(to: encoder)
+        guard holdsTabs else { return }
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(true, forKey: .holdsTabs)
     }
 }

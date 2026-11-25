@@ -50,8 +50,36 @@ struct PartHoldTests {
         #expect(PartHold.holdsPart(c))
     }
 
-    @Test func floorIsHeldAboveTheTabsWithANote() throws {
+    /// The repro with Whole material: strips under the tabs would join nothing (#173), so the whole floor is held.
+    static func wholeMaterial() throws -> Project {
+        var p = try deepRelief()
+        for i in p.operations.indices {
+            switch p.operations[i].kind {
+            case var .rough3D(r): r.boundary = .material; p.operations[i].kind = .rough3D(r)
+            case var .finish3D(f): f.boundary = .material; p.operations[i].kind = .finish3D(f)
+            default: break
+            }
+        }
+        return p
+    }
+
+    /// With Selected vectors, as the issue reproduced it, the 3D toolpaths now leave strips under the cut-out's tabs
+    /// instead of holding the whole floor (#173), and cut the rest to the board's bottom.
+    @Test func reproNowLeavesStripsUnderTheTabs() throws {
         let p = try Self.deepRelief()
+        let job = CAMEngine.generate(p)
+        #expect(!job.hasErrors, "\(job.issues.filter { $0.severity == .error }.map(\.message))")
+        for name in ["Rough relief", "Finish relief"] {
+            #expect(HoldingTabs.decide(Self.op(p, name), in: p).strips?.strips.count == 4)
+            #expect(job.issues.contains { $0.severity == .info && $0.operation == name && $0.message.hasPrefix("Leaves a strip under each of the 4 tabs") })
+            #expect(!job.issues.contains { $0.operation == name && $0.message.hasPrefix("Holds its floor") })
+        }
+        let finish = try #require(job.toolpaths.first { $0.name == "Finish relief" })
+        #expect(abs(Self.deepest(finish) + p.stock.thickness) < 0.01)
+    }
+
+    @Test func floorIsHeldAboveTheTabsWithANote() throws {
+        let p = try Self.wholeMaterial()
         guard case let .profile(c) = Self.op(p, "Cut out medallion").kind else { Issue.record("no cut-out"); return }
         let held = -(p.stock.thickness - c.tabs.thickness)
         let tabTop = -OperationScheduler.tabTop(c)
@@ -63,7 +91,8 @@ struct PartHoldTests {
             // Never below the held floor, which stands above the tabs' tops; the finish reaches it.
             #expect(low >= held - 1e-6, "\(name) cuts to \(low)")
             #expect(low > tabTop)
-            #expect(job.issues.contains { $0.severity == .info && $0.operation == name && $0.message.hasPrefix("Holds its floor") })
+            #expect(job.issues.contains { $0.severity == .info && $0.operation == name && $0.message.hasPrefix("Holds its floor")
+                && $0.message.contains("Whole material") })
             #expect(!job.issues.contains { $0.operation == name && $0.message.contains("material's bottom, and 3D") })
         }
         let finish = try #require(job.toolpaths.first { $0.name == "Finish relief" })
