@@ -1,0 +1,117 @@
+(Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board})
+(XY ZERO: the front-left corner of the 24 x 36 in board.)
+(NATIVECAM SPOILBOARD SURFACING: 24 x 36 in, 1 pass of 0.02 in {0.02 in in all} with 1-1/4in)
+(Surfacing Bit, 40 lines along Y 0.615 in apart, both ways.)
+(BED CLEAR: remove every clamp. Every screw head and T-nut must sit at least 0.125 in below the cut.)
+(Set the dust shoe high enough for the surfacing bit's collet and the 0.5 in clearance.)
+(Re-zero Z on the board before every run: each run takes 0.02 in off the surface it is zeroed on.)
+(Runs about 10 min.)
+(NativeCAM spoilboard surfacing)
+(Post: Avid CNC Mach4 - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: PRO6060 {5 x 5 ft}, spindle, Manual {M6})
+(Material: Spoilboard X=24.0000 Y=36.0000 Z=0.7500 in)
+(Z zero: Material top   XY zero: Lower left)
+(Program extents: X0.0000 to X24.0000  Y-0.7500 to Y36.7500  Z-0.0200 to Z0.5000)
+(Safe Z = 0.5000)
+(Tools used:)
+(  T8 1-1/4in Surfacing Bit - D1.2500 Surfacing)
+(Toolpaths:)
+(  1. Surface spoilboard - T8)
+G00 G94 G20 G17 G90 G40 G49 G80
+G91.1
+G64
+(Change to Tool: T8 1-1/4in Surfacing Bit)
+T8M6
+M07
+S12000 M03
+G04 P3.00
+(Toolpath: Surface spoilboard  Tool: T8 1-1/4in Surfacing Bit)
+G00 Z0.5000
+G00 X0.0000 Y36.7500
+G01 Z-0.0200 F20.0
+G01 Y-0.7500 F150.0
+G01 X0.6154
+G01 Y36.7500
+G01 X1.2308
+G01 Y-0.7500
+G01 X1.8462
+G01 Y36.7500
+G01 X2.4615
+G01 Y-0.7500
+G01 X3.0769
+G01 Y36.7500
+G01 X3.6923
+G01 Y-0.7500
+G01 X4.3077
+G01 Y36.7500
+G01 X4.9231
+G01 Y-0.7500
+G01 X5.5385
+G01 Y36.7500
+G01 X6.1538
+G01 Y-0.7500
+G01 X6.7692
+G01 Y36.7500
+G01 X7.3846
+G01 Y-0.7500
+G01 X8.0000
+G01 Y36.7500
+G01 X8.6154
+G01 Y-0.7500
+G01 X9.2308
+G01 Y36.7500
+G01 X9.8462
+G01 Y-0.7500
+G01 X10.4615
+G01 Y36.7500
+G01 X11.0769
+G01 Y-0.7500
+G01 X11.6923
+G01 Y36.7500
+G01 X12.3077
+G01 Y-0.7500
+G01 X12.9231
+G01 Y36.7500
+G01 X13.5385
+G01 Y-0.7500
+G01 X14.1538
+G01 Y36.7500
+G01 X14.7692
+G01 Y-0.7500
+G01 X15.3846
+G01 Y36.7500
+G01 X16.0000
+G01 Y-0.7500
+G01 X16.6154
+G01 Y36.7500
+G01 X17.2308
+G01 Y-0.7500
+G01 X17.8462
+G01 Y36.7500
+G01 X18.4615
+G01 Y-0.7500
+G01 X19.0769
+G01 Y36.7500
+G01 X19.6923
+G01 Y-0.7500
+G01 X20.3077
+G01 Y36.7500
+G01 X20.9231
+G01 Y-0.7500
+G01 X21.5385
+G01 Y36.7500
+G01 X22.1538
+G01 Y-0.7500
+G01 X22.7692
+G01 Y36.7500
+G01 X23.3846
+G01 Y-0.7500
+G01 X24.0000
+G01 Y36.7500
+G00 Z0.5000
+G00 Z1.0000
+G00 X0.0000 Y0.0000
+M05
+M09
+M30

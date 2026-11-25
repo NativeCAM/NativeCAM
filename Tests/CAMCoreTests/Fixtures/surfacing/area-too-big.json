@@ -1,0 +1,1 @@
+{"note":"A custom area whose overshoot runs past the travel is refused, with the length it would need to shorten to.","area":[61,24],"expect":"refused","text":"more than the machine's 61.375 in of travel. Shorten the overshoot to 0.188 in"}

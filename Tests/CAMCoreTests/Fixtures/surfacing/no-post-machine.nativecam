@@ -1,0 +1,50 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 2,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "controller" : {
+      "family" : "planetCNC"
+    },
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "custom",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1219.1999999999998,
+      "y" : 1219.1999999999998,
+      "z" : 203.2
+    }
+  },
+  "name" : "PlanetCNC machine (no NativeCAM post)",
+  "notes" : "",
+  "operations" : [
+
+  ],
+  "shapes" : [
+
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 457.2,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 609.5999999999999,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

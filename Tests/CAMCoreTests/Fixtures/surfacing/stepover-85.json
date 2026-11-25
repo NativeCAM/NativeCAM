@@ -1,0 +1,1 @@
+{"note":"Stepover above 80% is cut with a warning.","stepover":0.85,"expect":"warning","text":"A stepover of 85% is above 80%"}

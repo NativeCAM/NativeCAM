@@ -322,6 +322,50 @@ Fitted Timing suite times for PRO6060 (5 × 5 ft), Avid Mach4:
 Applied x/y acceleration, z acceleration, z rapid rate, corner tolerance (junction deviation) to shop-fitted.nativecam
 ```
 
+## surface
+
+```text
+nativecam-cli surface [project.nativecam] [--area bed|WxH] [--inset x] [--bit n] [--stepover 50] [--depth d] [--passes n]
+    [--along x|y] [--one-way] [--overshoot x] [--clamp-overshoot] [--clearance z] [--board t]
+    [--controller c] [--sender s] [--units inch|mm] [-o file] [--no-air-cut]
+```
+
+Writes a spoilboard surfacing program for the project's machine, or for the default Avid PRO6060 on Mach4 without a project, plus an air-cut copy raised 1 in (25 mm). It's the counterpart of **File ▸ Surface Spoilboard…** ([Surfacing the spoilboard](../using-nativecam.md#surfacing-the-spoilboard)). **The human runs it, air cut first.** The project only lends its machine and tools and isn't changed. `--controller`, `--sender` and `--units` work as for [`acceptance`](#acceptance). Lengths are in the G-code's units.
+
+| Option | Default | Rules |
+|---|---|---|
+| `--area` | `bed`: the travel less `--inset` (1/4 in or 6 mm) on each side | `WxH` is a board. The area, or a board's lines with their overshoot, past the travel is refused |
+| `--bit n` | the starter surfacing bit, T8 (1-1/4") | a surfacing bit or flat end mill from the project's toolpaths or the starter library. Its feed and RPM are used; a feed above the machine's highest is refused |
+| `--stepover` | 50 (percent of the bit) | 10 to 90; a warning above 80 |
+| `--depth` | 0.02 in or 0.5 mm per pass | at most min(flute length, 1/8 in or 3 mm); a warning above 1/16 in or 1.5 mm |
+| `--passes` | 1 | 1 to 20; the total no deeper than the flutes, a warning above 1/8 in |
+| `--along` | `x` | lines along X or Y |
+| `--one-way` | zig-zag | every line climb, with a retract between: for reading tram |
+| `--overshoot` | the bit's radius + 1/8 in (3 mm) | the whole bed's is cut to the inset. `--clamp-overshoot` shortens a board's to fit the travel, with a warning, instead of refusing |
+| `--clearance` | 0.5 in or 12 mm | every rapid stays at or above it |
+| `--board t` | none | the spoilboard's thickness: refused when less than 1/2 in (12 mm) would be left |
+
+The program's first line is `(Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board})`. XY zero is the area's front-left corner (for the whole bed, the inset in from the front-left limits of travel). The spindle dwells at least 3 s before the first contact, whatever the machine's spin-up dwell. A custom board plunges in free air past its edge; the whole bed ramps in over at least twice the bit's diameter. The file is checked with the same read-back as `post`, plus its own: every cut at exactly −k × the depth, the lowest point at the total depth, no rapid below the clearance, the lines inside the travel. Both files must pass, or nothing is written.
+
+```text
+$ nativecam-cli surface
+Avid Mach4 spoilboard surfacing -> surface-spoilboard-61x61in.tap
+Air cut (Z raised 1 in) -> surface-spoilboard-61x61in-air.tap
+  60.875 × 60.875 in, 99 lines along X 0.621 in apart, both ways (zig-zag), 1 x 0.02 in = 0.02 in deep
+  1-1/4" Surfacing Bit: 150 in/min, 12000 RPM; overshoot 0.25 in, entry: ramp of 2.5 in
+  Z ZERO: TOP OF THE SPOILBOARD (touch plate on the board)
+  XY ZERO: the front-left corner of the area, 0.25 in in from the front-left limits of travel: …
+Estimated run time: 0:41:13
+$ nativecam-cli surface --area 61x24
+Not written: With the 0.75 in overshoot at each end, the lines run 62.5 in in X, more than the machine's 61.375 in of travel. Shorten the overshoot to 0.188 in or make the area smaller.
+$ nativecam-cli surface --area 12x12 --one-way --stepover 90 --depth 0.01
+[warning] A stepover of 90% is above 80%: fine for reading tram, but it can leave ridges.
+Avid Mach4 spoilboard surfacing -> surface-spoilboard-12x12in.tap
+…
+```
+
+Warnings print as `[warning] …` and the file is still written: report them with it. The human must clear the bed (every clamp off, every screw head below the cut), zero Z on the board's top and run the air cut first, watching both far corners for a soft-limit stop. Where the PRO6060 homes and where its soft limits sit hasn't been checked, and no surfacing program has run on a real machine yet: say so when you hand the files over.
+
 ## machine
 
 ```text

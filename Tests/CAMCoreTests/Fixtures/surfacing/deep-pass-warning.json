@@ -1,0 +1,1 @@
+{"note":"A pass deeper than 1/16 in (but within 1/8 in) is cut with a warning.","depth":0.1,"expect":"warning","text":"deeper than the usual 0.062 in or less"}

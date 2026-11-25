@@ -111,6 +111,9 @@ struct AppCommands: Commands {
             Button("Calibration Programs…") { actions?.calibrate() }
                 .disabled(actions == nil)
                 .help("Optional programs that time the machine and test its rotary axis and feeds, and fit the times into its settings")
+            Button("Surface Spoilboard…") { actions?.surfaceSpoilboard() }
+                .disabled(actions == nil)
+                .help("Save a program that flattens the spoilboard across the whole bed or a board, with an air-cut copy")
         }
         CommandMenu("Toolpaths") {
             Button("Recalculate All") { actions?.regenerate() }
@@ -164,6 +167,7 @@ struct WorkspaceActions {
     var exportRestart: () -> Void
     var exportSetupSheet: () -> Void
     var calibrate: () -> Void
+    var surfaceSpoilboard: () -> Void
     var regenerate: () -> Void
     var simulate: () -> Void
     var stopSimulation: () -> Void

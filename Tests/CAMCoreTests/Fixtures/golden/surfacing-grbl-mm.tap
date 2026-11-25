@@ -1,0 +1,75 @@
+(Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board})
+(XY ZERO: the front-left corner of the 300 x 300 mm board.)
+(NATIVECAM SPOILBOARD SURFACING: 300 x 300 mm, 1 pass of 0.5 mm {0.5 mm in)
+(all} with 1-1/4in Surfacing Bit, 20 lines along X 15.789 mm apart, both ways.)
+(BED CLEAR: remove every clamp. Every screw head and T-nut must sit at least 3)
+(mm below the cut.)
+(Set the dust shoe high enough for the surfacing bit's collet and the 12 mm)
+(clearance.)
+(Re-zero Z on the board before every run: each run takes 0.5 mm off the)
+(surface it is zeroed on.)
+(Runs about 2 min.)
+(NativeCAM spoilboard surfacing)
+(Post: Grbl - NativeCAM 0.1)
+(Created: 2027-01-15 08:00)
+(Machine: Custom, spindle)
+(Tool changes: M0 pause, change the bit, re-zero Z, resume)
+(Material: Spoilboard X300.000 Y300.000 Z19.000 mm)
+(Z zero: Material top  XY zero: Lower left)
+(Safe Z 12.000)
+(T8 1-1/4in Surfacing Bit D31.750)
+G90 G94 G17
+G21
+(Load T8 1-1/4in Surfacing Bit and zero Z before starting)
+M8
+S12000 M3
+G4 P3.00
+(Surface spoilboard T8)
+G0 Z12.000
+G0 X-18.875 Y0.000
+G1 Z-0.500 F508
+G1 X318.875 F3810
+G1 Y15.789
+G1 X-18.875
+G1 Y31.579
+G1 X318.875
+G1 Y47.368
+G1 X-18.875
+G1 Y63.158
+G1 X318.875
+G1 Y78.947
+G1 X-18.875
+G1 Y94.737
+G1 X318.875
+G1 Y110.526
+G1 X-18.875
+G1 Y126.316
+G1 X318.875
+G1 Y142.105
+G1 X-18.875
+G1 Y157.895
+G1 X318.875
+G1 Y173.684
+G1 X-18.875
+G1 Y189.474
+G1 X318.875
+G1 Y205.263
+G1 X-18.875
+G1 Y221.053
+G1 X318.875
+G1 Y236.842
+G1 X-18.875
+G1 Y252.632
+G1 X318.875
+G1 Y268.421
+G1 X-18.875
+G1 Y284.211
+G1 X318.875
+G1 Y300.000
+G1 X-18.875
+G0 Z12.000
+G0 Z25.000
+G0 X0.000 Y0.000
+M5
+M9
+M30

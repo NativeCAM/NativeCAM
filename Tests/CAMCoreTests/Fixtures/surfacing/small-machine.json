@@ -1,0 +1,1 @@
+{"note":"A desktop machine (small-machine.nativecam, 24 × 24 in travel) refuses a 36 × 36 in area.","project":"small-machine","area":[36,36],"expect":"refused","text":"The 36 × 36 in area is bigger than the machine's 24 × 24 in travel."}

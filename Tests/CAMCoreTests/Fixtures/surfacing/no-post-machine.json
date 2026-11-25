@@ -1,0 +1,1 @@
+{"note":"A controller NativeCAM has no post for (no-post-machine.nativecam, PlanetCNC) is refused.","project":"no-post-machine","expect":"refused","text":"NativeCAM can't write G-code for"}

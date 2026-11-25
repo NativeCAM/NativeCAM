@@ -1,0 +1,1 @@
+{"note":"An end mill with short flutes: the pass limit is its flute length, not 1/8 in.","tool":{"diameter":0.5,"fluteLength":0.1,"shape":"flatEndMill"},"depth":0.11,"expect":"refused","text":"at most 0.1 in, the bit's flute length."}

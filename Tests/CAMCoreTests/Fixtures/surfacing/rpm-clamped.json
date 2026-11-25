@@ -1,0 +1,1 @@
+{"note":"A bit RPM above the spindle range is clamped to it, with a warning.","tool":{"diameter":1.25,"fluteLength":0.25,"shape":"surfacing","rpm":30000},"expect":"warning","text":"run at 24000 RPM"}

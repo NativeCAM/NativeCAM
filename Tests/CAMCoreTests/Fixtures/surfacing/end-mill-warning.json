@@ -1,0 +1,1 @@
+{"note":"A flat end mill surfaces, with a note that a surfacing bit is quicker.","tool":{"diameter":0.5,"fluteLength":1,"shape":"flatEndMill"},"area":[12,12],"expect":"warning","text":"is an end mill"}

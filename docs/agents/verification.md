@@ -133,6 +133,7 @@ grep -E 'check (PASS|FAIL)' .build/snap.log
 | `-NativeCAMSnapshotInlay YES` | Makes an inlay pair from every closed vector first, draws the dialog (`inlay-sheet-*.png`) and the plug's inspector (`inspector-inlay-mismatch.png`) |
 | `-NativeCAMSnapshotInlayBoundary margin\|vector\|board`, `-NativeCAMSnapshotInlayRaster YES` | …with that plug boundary, and raster flat clearing |
 | `-NativeCAMSnapshotCalibration YES` | Saves the calibration programs to `calibration/` in the output folder and draws the sheet's tabs (`calibration-programs.png`, `calibration-fit.png`) |
+| `-NativeCAMSnapshotSurfacing YES` | Builds and saves File ▸ Surface Spoilboard…'s programs (the whole bed, a 24 × 36 in board along Y one way) to `surfacing/` in the output folder, logs their checks, and draws the sheet (`surfacing-sheet.png`, `surfacing-sheet-custom.png`) and a refusal (`surfacing-sheet-refused.png`) |
 
 **What it writes:** `window.png` (the whole window as the window server composites it, Metal viewport included), `sim-iso.png` and `sim-top.png` (the finished simulation), `toolpaths-iso.png`, `inspector-*.png` (Job Setup, each toolpath's inspector, the machine setup step), `tool-T*.png` (each bit's editor), `setup-sheet.html`, and, where they apply, `sim-turning.png`, `sim-tile-2.png`, `tiles-top.png`, `corners-op-*.png` and `rest-op-*.png`. The full list is in [Development](../development.md#developer-aids).
 
