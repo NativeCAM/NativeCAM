@@ -280,6 +280,7 @@ cli("import", blank, os.path.join(FIX, "model-outline", "disc-r60-256.stl"), "--
 j.p = load(imported)
 disc = j.p["shapes"][0]
 disc["id"] = uid("3d-model-outline", "shape", "disc")
+disc["kind"]["model"]["_0"]["mesh"]["id"] = uid("3d-model-outline", "mesh")   # import gives a random one
 j.op("Cut out disc", "profile", {"allowance": 0, "depth": depth(0.75 * IN + 0.5, fromBottom=-0.5), "direction": "climb",
                                  "entry": RAMP, "leads": LEADS, "side": "outside", "tabs": tabs(4)}, [disc], MDF_END_MILL)
 j.save()
