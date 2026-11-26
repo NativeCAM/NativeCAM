@@ -117,11 +117,11 @@ enum VCarveGenerator {
         let ordered = TourOptimizer.order(count: paths.count, from: context.stock.homePosition.xy,
                                           start: { paths[$0][0].xy }, end: { paths[$0][paths[$0].count - 1].xy }).map { paths[$0] }
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: ordered.first?.first?.xy)
-        // The flat bottom the V-bit clears itself: all of it without a clearance tool (as Vectric does), and on an inlay,
-        // the corners and narrow places the clearance tool can't reach, so nothing stands proud of the floor.
+        // The flat bottom the V-bit clears itself: all of it without a clearance tool (as Vectric does), and with one, the
+        // corners and narrow places the clearance tool can't reach, so nothing stands proud of the floor. Every ring is
+        // inside the flat (rCap in from the outline), so its cone at the flat depth stays inside the carve's own walls.
         if let flat = flatDepth, flat > 0, tool.shape.isTapered, !flatRegions.isEmpty {
-            let rest = clearanceTool.map { params.inlay == nil ? [] : unreached(flatRegions, by: $0, arcTolerance: context.arcTolerance) }
-                ?? flatRegions
+            let rest = clearanceTool.map { unreached(flatRegions, by: $0, arcTolerance: context.arcTolerance) } ?? flatRegions
             if !rest.isEmpty {
                 // Raster lines only where the V-bit clears the whole flat; the corners a clearance tool leaves are slivers.
                 if clearanceTool == nil, let raster = params.flatRaster {
