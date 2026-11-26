@@ -684,7 +684,7 @@ struct ViewportOverlay: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Picker("View", selection: Binding(get: { workspace.viewPreset ?? .iso }, set: { workspace.viewPreset = $0 })) {
+            Picker("View", selection: Binding(get: { workspace.shownView }, set: { workspace.viewPreset = $0 })) {
                 ForEach(ViewPreset.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)

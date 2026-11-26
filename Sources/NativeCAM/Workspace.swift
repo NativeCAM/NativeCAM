@@ -29,7 +29,12 @@ final class Workspace {
     var inlayRequest: InlayRequest?
     /// File ▸ Export Restart… or Restart Here…: the restart sheet, preset to a point.
     var restartPreset: RestartPreset?
-    var viewPreset: ViewPreset? = .iso
+    /// A request to move the camera to a view: the viewport takes it and sets it back to nil.
+    var viewPreset: ViewPreset? = .iso {
+        didSet { if let viewPreset { shownView = viewPreset } }
+    }
+    /// The view last asked for, which the toolbar's picker shows (`viewPreset` is nil again once the camera has moved).
+    var shownView: ViewPreset = .iso
     var fitRequest = 0
     var showVectors = true
     var showToolpaths = true

@@ -471,7 +471,7 @@ $ nativecam-cli template apply Sign.nativecamtemplate sign.nativecam -o applied.
   T5 60° V-Bit 1/2": in the library
   T1 1/4" Upcut End Mill: in the library
 Material 0.7500 in; 2 toolpaths found no vectors
-Wrote applied.nativecam
+Wrote applied.nativecam (format 1)
 ```
 
 Without `-o` the `Wrote` line prints the absolute path. Toolpaths that found no vectors are still added. `post` then warns about each one (`No vectors on layer “Pocket”…`) and cuts nothing for it, so read the `found no vectors` count.
