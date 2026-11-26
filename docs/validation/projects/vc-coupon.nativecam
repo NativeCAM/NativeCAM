@@ -1,0 +1,242 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 1,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "V-carve coupon",
+  "notes": "",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "ED453BFF-6AC2-5E9A-9CF3-490269A34B63",
+      "kind": {
+        "vcarve": {
+          "_0": {
+            "sampleSpacing": 0.25
+          }
+        }
+      },
+      "name": "V-carve lettering",
+      "shapeIDs": [
+        "A269A5F1-B170-53F2-B4A4-0AB5C1E0E3B4"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 2032,
+          "plungeRate": 762,
+          "spindleRPM": 18000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 12.7,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 10.998199999999999,
+        "id": "4E415449-5645-4341-4D00-000000000005",
+        "includedAngle": 60,
+        "name": "60\u00b0 V-Bit 1/2\"",
+        "notes": "",
+        "number": 5,
+        "shankDiameter": 6.35,
+        "shape": "vBit",
+        "stickout": 23.6982,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "111D3FF0-D1E1-5865-8BB1-27DBB63DD7B3",
+      "kind": {
+        "vcarve": {
+          "_0": {
+            "clearanceTool": {
+              "cornerRadius": 0,
+              "cutting": {
+                "feedRate": 3048,
+                "plungeRate": 635,
+                "spindleRPM": 18000,
+                "stepdown": 1.5875,
+                "stepoverFraction": 0.4
+              },
+              "diameter": 3.175,
+              "fluteCount": 2,
+              "fluteDirection": "upcut",
+              "fluteLength": 12.7,
+              "id": "4E415449-5645-4341-4D00-000000000002",
+              "includedAngle": 90,
+              "name": "1/8\" Upcut End Mill",
+              "notes": "",
+              "number": 2,
+              "shankDiameter": 3.175,
+              "shape": "flatEndMill",
+              "stickout": 25.4,
+              "tipDiameter": 0
+            },
+            "flatDepth": 3.175,
+            "sampleSpacing": 0.25
+          }
+        }
+      },
+      "name": "Flat-bottom V-carve",
+      "shapeIDs": [
+        "EE02DF71-B607-535F-9076-9CB8B97AE68E"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 2032,
+          "plungeRate": 762,
+          "spindleRPM": 18000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 12.7,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 10.998199999999999,
+        "id": "4E415449-5645-4341-4D00-000000000005",
+        "includedAngle": 60,
+        "name": "60\u00b0 V-Bit 1/2\"",
+        "notes": "",
+        "number": 5,
+        "shankDiameter": 6.35,
+        "shape": "vBit",
+        "stickout": 23.6982,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "45EDB332-B39F-5056-8DFC-C936AB21D127",
+      "kind": {
+        "vcarve": {
+          "_0": {
+            "flatDepth": 1.5875,
+            "sampleSpacing": 0.25
+          }
+        }
+      },
+      "name": "V-bit flat clearing",
+      "shapeIDs": [
+        "BED92C38-1032-577C-B96B-6456CDCF93E1"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 2032,
+          "plungeRate": 762,
+          "spindleRPM": 18000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 12.7,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 10.998199999999999,
+        "id": "4E415449-5645-4341-4D00-000000000005",
+        "includedAngle": 60,
+        "name": "60\u00b0 V-Bit 1/2\"",
+        "notes": "",
+        "number": 5,
+        "shankDiameter": 6.35,
+        "shape": "vBit",
+        "stickout": 23.6982,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "A269A5F1-B170-53F2-B4A4-0AB5C1E0E3B4",
+      "kind": {
+        "text": {
+          "_0": {
+            "capHeight": 38.099999999999994,
+            "fontName": "Helvetica-Bold",
+            "letterSpacing": 0,
+            "string": "NC"
+          }
+        }
+      },
+      "layer": "Default",
+      "name": "Lettering",
+      "position": {
+        "x": 66.03999999999999,
+        "y": 86.36
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "EE02DF71-B607-535F-9076-9CB8B97AE68E",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 38.099999999999994,
+          "width": 63.5
+        }
+      },
+      "layer": "Default",
+      "name": "Flat-bottom rectangle",
+      "position": {
+        "x": 147.32,
+        "y": 86.36
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "BED92C38-1032-577C-B96B-6456CDCF93E1",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 19.049999999999997,
+          "width": 152.39999999999998
+        }
+      },
+      "layer": "Default",
+      "name": "V-bit flat clearing",
+      "position": {
+        "x": 101.6,
+        "y": 27.94
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 127.0,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialKind": "hardwood",
+    "materialName": "Hardwood",
+    "plungeHeight": 2.54,
+    "thickness": 19.049999999999997,
+    "width": 203.2,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}

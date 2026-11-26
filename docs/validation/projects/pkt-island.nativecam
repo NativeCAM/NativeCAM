@@ -1,0 +1,247 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 1,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Pocket coupon",
+  "notes": "",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "05E7B298-810E-50BC-844F-06B4BF80729D",
+      "kind": {
+        "pocket": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 6.35,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "rasterAngle": 0,
+            "strategy": "offset"
+          }
+        }
+      },
+      "name": "Pocket with island",
+      "shapeIDs": [
+        "5751BF4C-498F-5444-BE1A-146E7CC58597",
+        "1AC8C2EB-176F-5FD5-B194-79F43A329CA3"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "69D4761A-4534-5CA9-8370-416713F6BCAE",
+      "kind": {
+        "pocket": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 6.35,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "rasterAngle": 0,
+            "strategy": "offset"
+          }
+        }
+      },
+      "name": "Slot 1/4 in",
+      "shapeIDs": [
+        "34444003-8412-57CE-92C3-76CF4167D7BC"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "60F31858-C944-594E-A08A-BA7F326D38AD",
+      "kind": {
+        "pocket": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 6.35,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "rasterAngle": 0,
+            "restFromEarlier": true,
+            "strategy": "offset"
+          }
+        }
+      },
+      "name": "Slot corners 1/8 in (rest)",
+      "shapeIDs": [
+        "34444003-8412-57CE-92C3-76CF4167D7BC"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 4343.4,
+          "plungeRate": 635,
+          "spindleRPM": 18000,
+          "stepdown": 1.5875,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 3.175,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 12.7,
+        "id": "4E415449-5645-4341-4D00-000000000002",
+        "includedAngle": 90,
+        "name": "1/8\" Upcut End Mill",
+        "notes": "",
+        "number": 2,
+        "shankDiameter": 3.175,
+        "shape": "flatEndMill",
+        "stickout": 25.4,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "5751BF4C-498F-5444-BE1A-146E7CC58597",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 6.3500000000000005,
+          "height": 69.85,
+          "width": 127.0
+        }
+      },
+      "layer": "Default",
+      "name": "Pocket",
+      "position": {
+        "x": 101.6,
+        "y": 88.39199999999998
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "1AC8C2EB-176F-5FD5-B194-79F43A329CA3",
+      "kind": {
+        "circle": {
+          "radius": 12.7
+        }
+      },
+      "layer": "Default",
+      "name": "Island",
+      "position": {
+        "x": 101.6,
+        "y": 88.39199999999998
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "34444003-8412-57CE-92C3-76CF4167D7BC",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 9.524999999999999,
+          "width": 127.0
+        }
+      },
+      "layer": "Default",
+      "name": "Square-cornered slot",
+      "position": {
+        "x": 101.6,
+        "y": 22.859999999999996
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 152.39999999999998,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialKind": "mdf",
+    "materialName": "MDF",
+    "plungeHeight": 2.54,
+    "thickness": 19.049999999999997,
+    "width": 203.2,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}

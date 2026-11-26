@@ -84,13 +84,14 @@ This builds a release `build/NativeCAM.app` for arm64, ad-hoc signs it and launc
 | [Command line](docs/command-line.md) | `nativecam-cli` for scripting and checking files |
 | [Development](docs/development.md) | Project layout, tests, golden G-code and developer tools |
 | [AGENTS.md](AGENTS.md) | For AI agents: driving NativeCAM headlessly with the CLI and project files, and the safety rules |
+| [Validation Handbook](docs/validation/NativeCAM-Validation-Handbook.pdf) (PDF) | Real-machine tests anyone can run to check NativeCAM's files on their own machine and controller, with the test projects ([source and kit](docs/validation/)) |
 | [Known limits and roadmap](docs/known-limits.md) | What doesn't work yet |
 
 ## How NativeCAM was built
 
 NativeCAM was written almost entirely by an AI coding assistant (Anthropic's Claude, using Claude Code), working from my requirements and design decisions. I chose the scope, file formats, machine defaults and G-code conventions, and I checked the results with the test suite and the simulator. I haven't reviewed every line by hand.
 
-**It's a work in progress.** Testing on actual machines is ongoing, and some features are incomplete (see [Known limits and roadmap](docs/known-limits.md)). Until it has more hours on real routers, treat every program it makes as unproven: check the toolpaths in the simulator, read the G-code, and air-cut before cutting material. Bug reports, results from your own machine, and code reviews are all very welcome.
+**It's a work in progress.** Testing on actual machines is ongoing, and some features are incomplete (see [Known limits and roadmap](docs/known-limits.md)). Until it has more hours on real routers, treat every program it makes as unproven: check the toolpaths in the simulator, read the G-code, and air-cut before cutting material. Bug reports, results from your own machine (the [Validation Handbook](docs/validation/NativeCAM-Validation-Handbook.pdf) lists the tests and how to report them), and code reviews are all very welcome.
 
 ## Acknowledgements
 

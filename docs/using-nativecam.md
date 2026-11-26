@@ -25,6 +25,7 @@
 - [Toolpath groups](#toolpath-groups)
 - [Calibrating your machine](#calibrating-your-machine)
 - [Restarting a job partway through](#restarting-a-job-partway-through)
+- [Validating on your machine](#validating-on-your-machine)
 
 ## Workflow
 
@@ -705,3 +706,7 @@ On a rotary job, the header gives the A reading the restart expects over the res
 - an approach the simulation shows rapiding through material.
 
 A restart covers one file. It doesn't check that the file that was running came from the project as it is now; the command line does that with `--restart-from`. Restarts haven't been run on a real machine yet (see [Known limits](known-limits.md)).
+
+## Validating on your machine
+
+The [Validation Handbook](validation/NativeCAM-Validation-Handbook.pdf) ([A4 edition](validation/NativeCAM-Validation-Handbook-A4.pdf)) is a printable test manual for checking that the files NativeCAM writes cut correctly on your own machine and controller. It starts with your controller's acceptance test, then works through every kind of toolpath in four levels: read the file, air-cut it, cut it shallow in foam or MDF, then cut it for real, measuring each result against a tolerance. Each test has its project in [`docs/validation/projects/`](validation/projects/), the commands that make its program, a results box and what to report. Only Avid Mach4 output has run on a real machine so far, so results from other controllers are especially welcome.

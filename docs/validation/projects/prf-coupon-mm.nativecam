@@ -1,0 +1,278 @@
+{
+  "displayUnits": "mm",
+  "formatVersion": 1,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "mm",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Profile coupon (mm)",
+  "notes": "",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "686306BB-8519-5CB1-B4BE-B3D92DB4195A",
+      "kind": {
+        "profile": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 2.5,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "plunge",
+              "rampLength": 25.4
+            },
+            "side": "on",
+            "tabs": {
+              "count": 0,
+              "enabled": false,
+              "thickness": 3.175,
+              "width": 9.525
+            }
+          }
+        }
+      },
+      "name": "On-line groove",
+      "shapeIDs": [
+        "D9FBFCA1-C688-55A8-B6B2-1A139352FBE6"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "0530855D-8F84-5CF3-B2E3-D0A4235966C9",
+      "kind": {
+        "profile": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 18.5,
+              "fromBottom": -0.5,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "leads": {
+              "angle": 45,
+              "kind": "arc",
+              "leadOut": true,
+              "length": 6.35,
+              "overlap": 0,
+              "radius": 6.35,
+              "sweep": 90
+            },
+            "side": "inside",
+            "tabs": {
+              "count": 0,
+              "enabled": false,
+              "thickness": 3.175,
+              "width": 9.525
+            }
+          }
+        }
+      },
+      "name": "Inside circle",
+      "shapeIDs": [
+        "BBD9B4B3-3B31-599B-AC11-06F6CF6DB611"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "EC78F45B-3213-5EFB-B434-D26AE7816435",
+      "kind": {
+        "profile": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 18.5,
+              "fromBottom": -0.5,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "leads": {
+              "angle": 45,
+              "kind": "arc",
+              "leadOut": true,
+              "length": 6.35,
+              "overlap": 0,
+              "radius": 6.35,
+              "sweep": 90
+            },
+            "side": "outside",
+            "tabs": {
+              "count": 4,
+              "enabled": true,
+              "thickness": 3.175,
+              "width": 9.525
+            }
+          }
+        }
+      },
+      "name": "Outside square",
+      "shapeIDs": [
+        "6137A5EB-A748-5336-9563-28BF072FF2F6"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "6137A5EB-A748-5336-9563-28BF072FF2F6",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 75,
+          "width": 75
+        }
+      },
+      "layer": "Default",
+      "name": "Outside square",
+      "position": {
+        "x": 70.0,
+        "y": 100.0
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "BBD9B4B3-3B31-599B-AC11-06F6CF6DB611",
+      "kind": {
+        "circle": {
+          "radius": 25.0
+        }
+      },
+      "layer": "Default",
+      "name": "Inside circle",
+      "position": {
+        "x": 180.0,
+        "y": 136.0
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "D9FBFCA1-C688-55A8-B6B2-1A139352FBE6",
+      "kind": {
+        "circle": {
+          "radius": 30.0
+        }
+      },
+      "layer": "Default",
+      "name": "On-line circle",
+      "position": {
+        "x": 180.0,
+        "y": 54.0
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 200,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialKind": "mdf",
+    "materialName": "MDF",
+    "plungeHeight": 2.54,
+    "thickness": 18,
+    "width": 250,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}

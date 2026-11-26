@@ -1,0 +1,129 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 3,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "rotary": {
+      "alignment": "x",
+      "letter": "A",
+      "reversed": false
+    },
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Indexed square bar",
+  "notes": "",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "06383ADD-55CA-5DFE-8B52-0E13AC41ADF7",
+      "indexAngles": [
+        0,
+        90,
+        180,
+        270
+      ],
+      "kind": {
+        "pocket": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 6.35,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "rasterAngle": 0,
+            "strategy": "offset"
+          }
+        }
+      },
+      "name": "Mortise",
+      "shapeIDs": [
+        "DEF8A98E-3183-5A39-99E5-B5B1E18B63A2"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6934.2,
+          "plungeRate": 1270,
+          "spindleRPM": 13000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "DEF8A98E-3183-5A39-99E5-B5B1E18B63A2",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 12.7,
+          "width": 63.5
+        }
+      },
+      "layer": "Default",
+      "name": "Mortise",
+      "position": {
+        "x": 152.39999999999998,
+        "y": 25.4
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 15.601024484276616,
+    "height": 50.8,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialKind": "softwood",
+    "materialName": "Softwood",
+    "plungeHeight": 2.54,
+    "rotary": {
+      "diameter": 50.8,
+      "length": 304.79999999999995,
+      "shape": "squareBar"
+    },
+    "thickness": 25.4,
+    "width": 304.79999999999995,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}

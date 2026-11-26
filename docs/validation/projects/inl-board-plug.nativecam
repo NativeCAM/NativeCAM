@@ -1,0 +1,208 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 14,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Whole-board inlay plug",
+  "notes": "Saved by format 14: Add Toolpath \u25b8 Inlay\u2026 with a whole-board plug and raster flat clearing; the plug is the side included.",
+  "operations": [
+    {
+      "enabled": false,
+      "id": "1A1A0000-0000-0000-0000-000000000011",
+      "kind": {
+        "vcarve": {
+          "_0": {
+            "flatDepth": 3.8099999999999996,
+            "flatRaster": {
+              "angle": 0
+            },
+            "inlay": {
+              "boundary": "margin",
+              "boundaryMargin": 6.35,
+              "glueGap": 0.508,
+              "pocketDepth": 5.08,
+              "role": "pocket",
+              "surfaceClearance": 1.5875
+            },
+            "sampleSpacing": 0.25
+          }
+        }
+      },
+      "name": "Inlay pocket",
+      "shapeIDs": [
+        "1A1A0000-0000-0000-0000-000000000001",
+        "1A1A0000-0000-0000-0000-000000000002"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 2032,
+          "plungeRate": 762,
+          "spindleRPM": 18000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 12.7,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 10.998199999999999,
+        "id": "4E415449-5645-4341-4D00-000000000005",
+        "includedAngle": 60,
+        "name": "60\u00b0 V-Bit 1/2\"",
+        "notes": "",
+        "number": 5,
+        "shankDiameter": 6.35,
+        "shape": "vBit",
+        "stickout": 23.6982,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "1A1A0000-0000-0000-0000-000000000012",
+      "kind": {
+        "vcarve": {
+          "_0": {
+            "flatRaster": {
+              "angle": 0
+            },
+            "inlay": {
+              "boundary": "board",
+              "boundaryMargin": 6.35,
+              "glueGap": 0.508,
+              "pocketDepth": 3.8099999999999996,
+              "role": "plug",
+              "surfaceClearance": 1.5875
+            },
+            "sampleSpacing": 0.25
+          }
+        }
+      },
+      "name": "Inlay plug",
+      "shapeIDs": [
+        "1A1A0000-0000-0000-0000-000000000001",
+        "1A1A0000-0000-0000-0000-000000000002"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 2032,
+          "plungeRate": 762,
+          "spindleRPM": 18000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 12.7,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 10.998199999999999,
+        "id": "4E415449-5645-4341-4D00-000000000005",
+        "includedAngle": 60,
+        "name": "60\u00b0 V-Bit 1/2\"",
+        "notes": "",
+        "number": 5,
+        "shankDiameter": 6.35,
+        "shape": "vBit",
+        "stickout": 23.6982,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "1A1A0000-0000-0000-0000-000000000001",
+      "kind": {
+        "paths": {
+          "_0": [
+            {
+              "isClosed": true,
+              "points": [
+                {
+                  "x": -20,
+                  "y": -15
+                },
+                {
+                  "x": 20,
+                  "y": -15
+                },
+                {
+                  "x": 20,
+                  "y": -1
+                },
+                {
+                  "x": -14,
+                  "y": -1
+                },
+                {
+                  "x": -14,
+                  "y": 15
+                },
+                {
+                  "x": -20,
+                  "y": 15
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer": "Default",
+      "name": "L",
+      "position": {
+        "x": 50.8,
+        "y": 38.099999999999994
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "1A1A0000-0000-0000-0000-000000000002",
+      "kind": {
+        "circle": {
+          "radius": 3
+        }
+      },
+      "layer": "Default",
+      "name": "Hole",
+      "position": {
+        "x": 58.8,
+        "y": 30.099999999999994
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 76.19999999999999,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialName": "Maple",
+    "plungeHeight": 2.54,
+    "thickness": 12.7,
+    "width": 101.6,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}
