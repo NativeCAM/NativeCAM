@@ -15,9 +15,10 @@ its own outside profile, its left edge `gap` from the hole's wall:
 
 A 3 in groove cut on the line, `gap` from the edge of a pocket another toolpath cuts:
 
-- `line-into-pocket.nativecam`: 0.115 in, inside the bit's radius. The groove is refused, the pocket isn't.
+- `line-into-pocket.nativecam`: 0.115 in, inside the bit's radius. The groove is refused, the pocket isn't. The
+  refusal states the gap less the pocket's 0.1 mm band: 0.1111 in (#194, `GapAndDrillMessageTests`).
 - `line-at-bit-radius-from-pocket.nativecam`: 0.125 in. The bit only touches the pocket's wall, but the check keeps
-  0.1 mm clear of a part from the material side, so it's refused.
+  0.1 mm clear of a part from the material side, so it's refused, stating 0.1211 in.
 - `line-clear-of-pocket.nativecam`: 0.135 in. Cut.
 
 Two 3 × 2 in rectangles cut on the line by one profile, `gap` apart:

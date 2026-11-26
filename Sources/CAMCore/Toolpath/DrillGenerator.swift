@@ -9,7 +9,7 @@ enum DrillGenerator {
         var warnings: [String] = []
         for shape in shapes {
             if case let .circle(radius) = shape.kind, radius * shape.scale > tool.radius * 1.05 {
-                warnings.append("\(shape.name): hole is larger than the tool; use a pocket or inside profile to size it.")
+                warnings.append("\(shape.name): hole is larger than the tool; choose Drill ▸ Method ▸ Helical bore, or use a pocket or inside profile, to size it.")
             }
         }
         let points = holeCentres(shapes, tolerance: context.flattenTolerance)
@@ -106,7 +106,7 @@ enum DrillGenerator {
         }
         if helix.allowanceInUse > 0, bores.contains(where: \.bored) {
             if helix.allowanceInUse < 0.05 || helix.allowanceInUse > 0.5 {
-                warnings.append("The finishing allowance (\(fmt(helix.allowanceInUse))) is outside 0.05–0.5 mm: too little rubs, "
+                warnings.append("The finishing allowance (\(fmt(helix.allowanceInUse))) is outside \(u.format(0.05))–\(u.format(0.5)) \(u.symbol): too little rubs, "
                     + "too much loads the finishing lap.")
             }
         }
