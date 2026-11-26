@@ -204,7 +204,8 @@ public struct OrientedMesh: Sendable {
     public let indices: [UInt32]
     /// Width (X), height (Y), thickness (Z).
     public let size: SIMD3<Float>
-    /// Outline of the model seen from above, in the same local coordinates.
+    /// Outline of the model seen from above, in the same local coordinates: the union of its triangles' shadows, so
+    /// every point of the mesh lies inside or on it (`ModelSections.outline`).
     public let silhouette: [Polyline]
 }
 
@@ -277,20 +278,8 @@ public enum ModelGeometry {
         let shift = SIMD3<Float>((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, lo.z)
         for i in pts.indices { pts[i] -= shift }
         let size = hi - lo
-        // Silhouette: rasterise the footprint at ~400 cells across and trace it.
-        var silhouette: [Polyline] = []
-        let maxDim = Double(max(size.x, size.y))
-        if maxDim > 0 {
-            let cell = maxDim / 400
-            let area = Rect2(min: Vec2(Double(-size.x / 2) - cell * 2, Double(-size.y / 2) - cell * 2),
-                             max: Vec2(Double(size.x / 2) + cell * 2, Double(size.y / 2) + cell * 2))
-            var grid = SurfaceGrid(area: area, cellSize: cell)
-            grid.rasterize(positions: pts, indices: m.indices) { $0 }
-            silhouette = GridContours.loops(mask: grid.covered, columns: grid.columns, rows: grid.rows,
-                                            origin: grid.origin, cellSize: cell)
-                .map { $0.simplified(tolerance: cell * 0.6) }
-                .filter { $0.count >= 3 }
-        }
+        // The exact footprint from above: every triangle's shadow, unioned (`ModelSections.outline`).
+        let silhouette = ModelSections.outline(positions: pts, indices: m.indices)
         return OrientedMesh(positions: pts, indices: m.indices, size: size, silhouette: silhouette)
     }
 }
@@ -332,9 +321,8 @@ public extension DesignShape {
         }
     }
 
-    /// A model's footprint from its mesh, design XY: what its toolpaths cut to. `bounds` is its outline's, traced from a
-    /// grid of cells about 1/400 of the model across, so up to a cell larger. On a rotary blank, the outline's bounds
-    /// (along the axis); nil for other shapes.
+    /// A model's footprint from its mesh, design XY: what its toolpaths cut to. The same box as its outline's `bounds`
+    /// (to Clipper's 0.1 µm grid). On a rotary blank, the outline's bounds (along the axis); nil for other shapes.
     var modelBounds: Rect2? {
         guard let spec = modelSpec else { return nil }
         guard spec.rotary == nil else { return bounds }
