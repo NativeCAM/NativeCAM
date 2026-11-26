@@ -66,6 +66,8 @@ struct KerfsTouchTabsTests {
         let p = try Catalog.edgeCase(name) { Self.project(gap: gap) }
         let job = CAMEngine.generate(p)
         let tp = try #require(job.toolpaths.first)
+        #expect((tp.errors ?? []).allSatisfy { $0.contains("cuts into the other") } && (tp.errors != nil) == (gap < 2 * Self.bit.radius),
+                "\(name): \(tp.errors ?? [])")
         let level = -Catalog.through.cutDepth
         // No loop is left without tabs, so no "frees its part" warning.
         #expect(!tp.warnings.contains { $0.contains("no tabs") }, "\(name): \(tp.warnings)")
@@ -134,7 +136,9 @@ struct KerfsTouchTabsTests {
         let (name, gap, moved) = Self.evenCases[k]
         let p = try Catalog.edgeCase(name) { Self.evenProject(gap: gap) }
         let tp = try #require(CAMEngine.generate(p).toolpaths.first)
-        #expect(tp.errors == nil, "\(name): \(tp.errors ?? [])")
+        // Closer than the bit's width, the cut round each part cuts into the other (#186): refused.
+        #expect((tp.errors ?? []).allSatisfy { $0.contains("cuts into the other") } && (tp.errors != nil) == (gap < 2 * Self.bit.radius),
+                "\(name): \(tp.errors ?? [])")
         #expect((tp.notes ?? []).contains { $0.contains("evenly spaced tabs") } == moved, "\(name): \(tp.notes ?? [])")
         let marks = try #require(tp.tabMarks)
         #expect(marks.filter { $0.shapeID == Catalog.id(1) }.count == 4 && marks.filter { $0.shapeID == Catalog.id(2) }.count == 4, "\(name)")

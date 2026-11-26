@@ -65,11 +65,13 @@ public struct ProtectedRegions: Sendable {
 
     var parts: [Part]
 
-    /// Whether any operation in the project has leads or corner reliefs, which are what keep clear of other parts.
+    /// Whether any operation in the project has leads or corner reliefs, which are what keep clear of other parts, or is
+    /// an outside profile, which is checked against them. Only with another toolpath to keep clear of.
     static func needed(_ project: Project) -> Bool {
-        project.operations.contains { op in
+        project.operations.count > 1 && project.operations.contains { op in
             switch op.kind {
-            case let .profile(p): p.side != .on && (p.leads != nil || p.cornerRelief != nil)
+            // An outside cut is checked against the other toolpaths' parts too, for a bit that reaches into one.
+            case let .profile(p): p.side == .outside || p.side != .on && (p.leads != nil || p.cornerRelief != nil)
             case let .pocket(p): p.cornerRelief != nil
             case let .edgeProfile(p): p.leads != nil
             default: false

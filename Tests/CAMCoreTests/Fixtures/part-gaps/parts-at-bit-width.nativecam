@@ -1,0 +1,137 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 1,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Two parts 0.25 in apart",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "167AB000-0000-4000-8000-000000000001",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 19.549999999999997,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 4,
+              "enabled" : false,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Cut out",
+      "shapeIDs" : [
+        "167AB000-0000-4000-8000-000000000001",
+        "167AB000-0000-4000-8000-000000000002"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "167AB000-0000-4000-8000-000000000001",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 50.8,
+          "width" : 76.19999999999999
+        }
+      },
+      "layer" : "Default",
+      "name" : "Left",
+      "position" : {
+        "x" : 100,
+        "y" : 100
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "167AB000-0000-4000-8000-000000000002",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 0,
+          "height" : 50.8,
+          "width" : 76.19999999999999
+        }
+      },
+      "layer" : "Default",
+      "name" : "Right",
+      "position" : {
+        "x" : 182.54999999999998,
+        "y" : 100
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 10,
+    "height" : 200,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialKind" : "plywood",
+    "materialName" : "Plywood",
+    "plungeHeight" : 2,
+    "thickness" : 19.049999999999997,
+    "width" : 300,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

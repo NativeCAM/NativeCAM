@@ -42,6 +42,55 @@ enum ProfileGenerator {
                           chordTolerance: context.arcTolerance)
     }
 
+    /// Each drawn region's name, for messages: its shapes' names, found from a point on each one's outline.
+    static func regionNames(_ regions: [Region], shapes: [DesignShape], context: GenerationContext) -> [String] {
+        var names = [[String]](repeating: [], count: regions.count)
+        for shape in shapes where !shape.isKeepOut {
+            guard let p = shape.polylines(tolerance: context.flattenTolerance).first(where: { $0.isClosed })?.points.first else { continue }
+            var best: (Int, Double)?
+            for (i, region) in regions.enumerated() {
+                for loop in region.loops {
+                    let d = loop.closestPoint(to: p).distance
+                    if d < (best?.1 ?? .infinity) { best = (i, d) }
+                }
+            }
+            if let best, !names[best.0].contains(shape.name) { names[best.0].append(shape.name) }
+        }
+        return names.map { $0.isEmpty ? "a part" : $0.joined(separator: "” + “") }
+    }
+
+    /// The two parts of an outside cut closest together, when they're nearer than `reach` (how far the cut reaches from
+    /// a wall: the bit's width plus any allowance), and the gap between them: the cut round each would cut into the
+    /// other. Parts are the drawn regions, named by their shapes. nil when every pair is at least `reach` apart.
+    static func closestParts(_ regions: [Region], shapes: [DesignShape], within reach: Double,
+                             context: GenerationContext) -> (a: String, b: String, gap: Double)? {
+        guard regions.count > 1 else { return nil }
+        let bounds = regions.map(\.bounds)
+        let names = regionNames(regions, shapes: shapes, context: context)
+        func name(_ i: Int) -> String { names[i] }
+        /// The gap between two disjoint sets of loops: the nearest any vertex of one comes to the other (exact for
+        /// polylines that don't cross).
+        func gap(_ a: [Polyline], _ b: [Polyline], under limit: Double) -> Double {
+            var g = Double.infinity
+            for (from, to) in [(a, b), (b, a)] {
+                for p in from.flatMap(\.points) {
+                    for loop in to where loop.bounds.contains(p, tolerance: min(g, limit)) {
+                        g = min(g, loop.closestPoint(to: p).distance)
+                    }
+                }
+            }
+            return g
+        }
+        var closest: (a: Int, b: Int, gap: Double)?
+        for i in regions.indices {
+            for j in regions.indices where j > i && bounds[i].insetBy(-reach).intersects(bounds[j]) {
+                let g = gap(regions[i].loops, regions[j].loops, under: reach)
+                if g < reach - 0.01, g < (closest?.gap ?? .infinity) { closest = (i, j, g) }
+            }
+        }
+        return closest.map { (name($0.a), name($0.b), $0.gap) }
+    }
+
     static func generate(op: CAMOperation, params: ProfileParams, shapes: [DesignShape], context: GenerationContext) -> Toolpath {
         let tool = op.tool
         var warnings: [String] = []
@@ -141,6 +190,11 @@ enum ProfileGenerator {
                 warnings.append("\(open.count) open vector(s) can only be cut 'On'; they were skipped. Join them into closed shapes to cut inside/outside.")
             }
             regions = Region.build(from: closed, fill: .evenOdd)
+            if params.side == .outside, let crowded = closestParts(regions, shapes: shapes, within: roughOffset + r, context: context) {
+                errors.append("Refused: “\(crowded.a)” and “\(crowded.b)” are \(context.length(crowded.gap)) apart, closer than the cut's "
+                    + "\(context.length(roughOffset + r)) reach from each wall (the bit's width\(abs(roughOffset - r) > 1e-6 ? " and the allowance" : "")), so the cut round each "
+                    + "one cuts into the other. Move them further apart (nest them with more spacing), or cut them with a smaller bit.")
+            }
             let delta = params.side == .outside ? roughOffset : -roughOffset
             let offsetSourced = regions.enumerated().flatMap { i, region in
                 region.offset(by: delta, arcTolerance: context.arcTolerance).map { (i, $0) }
@@ -173,6 +227,40 @@ enum ProfileGenerator {
             }
         }
 
+        // An outside cut whose bit reaches the part another toolpath cuts (a pocket, a hole, another cut-out) gouges that
+        // part: refused, naming both and the gap (#186). Not checked: what lies on its own walls, and a part that
+        // encloses this one (the same shapes cut again at a larger allowance, or a pocket round it).
+        if params.side == .outside, let parts = context.protectedRegions, !regions.isEmpty {
+            let reach = regions.reduce(Rect2.empty) { $0.union($1.bounds) }.insetBy(-(roughOffset + r + 1))
+            let zones = parts.zones(toolRadius: r, cut: [], walls: regions.flatMap(\.loops), near: reach, arcTolerance: context.arcTolerance)
+            let inside = regions.map { $0.outer.interiorPoint() ?? $0.outer.points[0] }
+            var names: [String]?
+            var reported = Set<String>()
+            for zone in zones {
+                for contour in contours where contour.closed && contour.source >= 0 {
+                    let near = zone.regions.filter { !$0.outer.contains(inside[contour.source]) }
+                    guard !near.isEmpty else { continue }
+                    let walker = LoopWalker(contour.loop)
+                    let n = max(8, Int(walker.length / 0.5))
+                    let hits = (0..<n).contains { k in
+                        let q = walker.point(at: walker.length * Double(k) / Double(n))
+                        return near.contains { $0.bounds.contains(q) && $0.contains(q) }
+                    }
+                    guard hits else { continue }
+                    names = names ?? regionNames(regions, shapes: shapes, context: context)
+                    let part = names?[contour.source] ?? "a part"
+                    guard reported.insert("\(part)|\(zone.name)").inserted else { continue }
+                    // From the part's wall to the other part: the zone is that part grown by the bit's radius.
+                    let wall = regions[contour.source].loops.flatMap(\.points)
+                    let edge = wall.map { q in near.contains { $0.contains(q) } ? 0
+                        : near.flatMap(\.loops).map { $0.closestPoint(to: q).distance }.min() ?? .infinity }.min() ?? 0
+                    let gap = min(roughOffset + r, edge + max(0, r - ProtectedRegions.tolerance))
+                    errors.append("Refused: the cut round “\(part)” comes within \(context.length(gap)) of the part “\(zone.name)” "
+                        + "cuts, closer than its \(context.length(roughOffset + r)) reach from the wall, so it cuts into that part. Move "
+                        + "them further apart, or cut them with a smaller bit.")
+                }
+            }
+        }
         // Climb keeps the material the bit is engaging, the finished wall, on the tool's right (clockwise spindle, M3).
         // The waste being cleared is then on its left; that is why `wasteOnLeft` is what the leads need.
         let wasteOnLeft = params.direction == .climb
