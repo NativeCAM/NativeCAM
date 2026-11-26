@@ -67,10 +67,16 @@ public extension AirCut {
     /// extension). An air cut's files always carry " (air cut)", even a single file, as `post --air-cut` names them,
     /// so an air cut and the real cut never share a name. A real cut's single file is `stem.ext`.
     static func paths(_ files: [JobExport.File], stem: String, airCut: Bool, fileExtension: String) -> [String] {
+        paths(suffixes: files.map(\.suffix), stem: stem, airCut: airCut, fileExtension: fileExtension)
+    }
+
+    /// `paths(_:stem:airCut:fileExtension:)` from the files' suffixes alone, for a program that isn't a job's export
+    /// (spoilboard surfacing's, `Surfacing.paths`).
+    static func paths(suffixes: [String?], stem: String, airCut: Bool, fileExtension: String) -> [String] {
         let base = airCut ? unmarked(stem) : stem
-        if files.count == 1, !airCut { return [base + "." + fileExtension] }
-        return files.map { f in
-            var suffix = f.suffix ?? ""
+        if suffixes.count == 1, !airCut { return [base + "." + fileExtension] }
+        return suffixes.map { s in
+            var suffix = s ?? ""
             if airCut, !suffix.hasPrefix(marker) { suffix = marker + suffix }
             return base + suffix + "." + fileExtension
         }
@@ -113,11 +119,14 @@ public extension AirCut {
 
     /// `namingProblem` against the files on disk.
     static func namingProblemOnDisk(_ paths: [String], airCut: Bool) -> String? {
-        namingProblem(paths, airCut: airCut) { path in
-            guard FileManager.default.fileExists(atPath: path) else { return nil }
-            // A file that can't be read is taken as not an air cut.
-            guard let data = FileManager.default.contents(atPath: path) else { return "" }
-            return String(decoding: data.prefix(16_384), as: UTF8.self)
-        }
+        namingProblem(paths, airCut: airCut, existing: onDisk)
+    }
+
+    /// The start of the file at `path`, for `namingProblem`'s `existing`: nil when there's none, and "" (not an air cut)
+    /// when it can't be read.
+    static func onDisk(_ path: String) -> String? {
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        guard let data = FileManager.default.contents(atPath: path) else { return "" }
+        return String(decoding: data.prefix(16_384), as: UTF8.self)
     }
 }

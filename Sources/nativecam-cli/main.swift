@@ -38,10 +38,12 @@ import Foundation
 //                                                       Float64 cell, origin x, origin y, then Float32 heights)
 //                                                      simulate material removal, print stats (a G-code file's
 //                                                      tapping and boring cycles are read as Avid Mach4 runs them)
-//   nativecam-cli acceptance [machine.nativecam] [--controller grbl|grblHAL|fluidNC|carbideMotion] [--sender gSender]
+//   nativecam-cli acceptance [machine.nativecam] [--controller mach4|grbl|grblHAL|fluidNC|carbideMotion|…] [--sender gSender]
 //                     [--units inch|mm] [--tool-change m6|pause|atc] [-o out]
 //                                                      write the acceptance test program for a controller: run it in
-//                                                      check mode, then as an air cut, then 0.5 mm deep in scrap
+//                                                      check mode, then as an air cut, then 0.5 mm deep in scrap.
+//                                                      --controller (here, in calibrate and in surface) sets the model
+//                                                      to Custom, except mach4: Avid's Mach4 profile, the model kept
 //   nativecam-cli calibrate timing|rotary|ladder [project.nativecam] [--controller c] [--sender s] [--units inch|mm] [-o stem]
 //                     timing: [--window WxH] [--air height]; ladder: [--tool n] [--material kind] [--depth d] [--rungs n] [--step-rpm]
 //                                                      write a calibration program for the project's machine (Avid's
@@ -61,9 +63,10 @@ import Foundation
 //                                                      inset) or a WxH board, with the starter surfacing bit unless --bit
 //                                                      names a tool in the project or the starter library. Z zero is the
 //                                                      top of the spoilboard, XY zero the area's front-left corner. Also
-//                                                      writes an air-cut copy (file-air.tap) unless --no-air-cut. Lengths
-//                                                      are in the G-code's units; stepover in percent. A refusal or a
-//                                                      failed check exits 1 and writes nothing
+//                                                      writes an air-cut copy ("file (air cut).tap") unless --no-air-cut.
+//                                                      Lengths are in the G-code's units; stepover in percent. A refusal,
+//                                                      a failed check or a name an air cut can't take exits 1 and writes
+//                                                      nothing
 //   nativecam-cli machine <settings> [--apply project.nativecam [-o out.nativecam]]
 //                                                      read machine limits from Grbl $$, Mach4 Machine.ini, LinuxCNC
 //                                                      INI, FluidNC YAML or Fusion .mch; optionally apply to a project
@@ -453,10 +456,8 @@ case "post":
 case "acceptance":
     // A short program exercising everything a post writes, for trying a controller: check mode, air cut, then scrap.
     var machine = args.count >= 2 && !args[1].hasPrefix("-") ? loadProject(args[1]).machine : MachineProfile()
-    if let family = option("--controller", in: args) {
-        machine.controller = ControllerProfile(family: ControllerFamily(rawValue: family), sender: option("--sender", in: args))
-        machine.model = .custom
-    }
+    // `mach4` keeps the machine's model and is Avid's Mach4 profile; any other family sets the model to Custom (#207).
+    if let family = option("--controller", in: args) { machine = machine.onController(family, sender: option("--sender", in: args)) }
     if let units = option("--units", in: args) { machine.outputUnits = units == "mm" ? .mm : .inch }
     switch option("--tool-change", in: args) {
     case "pause": machine.toolChange = .manualPause
@@ -522,10 +523,8 @@ case "calibrate":
     }
     guard let kind = Calibration.Kind(rawValue: sub) else { fail(usage) }
     var machine = loaded?.machine ?? MachineProfile()
-    if let family = option("--controller", in: args) {
-        machine.controller = ControllerProfile(family: ControllerFamily(rawValue: family), sender: option("--sender", in: args))
-        machine.model = .custom
-    }
+    // `mach4` keeps the machine's model and is Avid's Mach4 profile; any other family sets the model to Custom (#207).
+    if let family = option("--controller", in: args) { machine = machine.onController(family, sender: option("--sender", in: args)) }
     if let units = option("--units", in: args) { machine.outputUnits = units == "mm" ? .mm : .inch }
     let u = machine.outputUnits
     func length(_ name: String) -> Double? {
@@ -596,10 +595,8 @@ case "surface":
     let rest = Array(args.dropFirst())
     let loaded = rest.first { $0.hasSuffix(".nativecam") }.map(loadProject)
     var machine = loaded?.machine ?? MachineProfile()
-    if let family = option("--controller", in: args) {
-        machine.controller = ControllerProfile(family: ControllerFamily(rawValue: family), sender: option("--sender", in: args))
-        machine.model = .custom
-    }
+    // `mach4` keeps the machine's model and is Avid's Mach4 profile; any other family sets the model to Custom (#207).
+    if let family = option("--controller", in: args) { machine = machine.onController(family, sender: option("--sender", in: args)) }
     if let units = option("--units", in: args) { machine.outputUnits = units == "mm" ? .mm : .inch }
     let u = machine.outputUnits
     func length(_ name: String) -> Double? {
@@ -650,11 +647,10 @@ case "surface":
     for issue in program.issues { print("[\(issue.severity.rawValue)] \(issue.text)") }
     for issue in program.airIssues { print("[\(issue.severity.rawValue)] Air cut: \(issue.text)") }
     if !program.passedChecks { fail("Not written: the surfacing program failed its checks.") }
-    let path = option("-o", in: args) ?? program.fileName
-    let stem = (path as NSString).deletingPathExtension
-    let ext = (path as NSString).pathExtension.isEmpty ? program.fileExtension : (path as NSString).pathExtension
-    let gcodePath = stem + "." + ext, airPath = stem + "-air." + ext
+    // "board.tap" and "board (air cut).tap", as every air cut is named (#200); refused before anything is written.
+    let (gcodePath, airPath) = Surfacing.paths(option("-o", in: args) ?? program.fileName, fileExtension: program.fileExtension)
     let air = !args.contains("--no-air-cut")
+    if let problem = Surfacing.namingProblemOnDisk((gcodePath, airPath), airCut: air) { fail("Not written: \(problem)") }
     do {
         try program.gcode.write(toFile: gcodePath, atomically: true, encoding: .ascii)
         if air { try program.airGCode.write(toFile: airPath, atomically: true, encoding: .ascii) }

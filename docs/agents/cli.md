@@ -299,7 +299,7 @@ Writes the acceptance test program for a controller: a square, circles from 1 to
 | Argument | Default | Meaning |
 |---|---|---|
 | `machine.nativecam` | the default machine (Avid PRO6060, Mach4, inches) | Use this project's machine. Only the machine is read |
-| `--controller f` | the machine's | `mach4`, `grbl`, `grblHAL`, `fluidNC`, `carbideMotion`, `linuxCNC`, `masso`, `centroid`, `buildbotics`, `openSBP`, `richAuto` (and `mach3`, `uccnc`, `planetCNC`, `winCNC`, which have no post, so it exits 1). It also sets the machine model to Custom |
+| `--controller f` | the machine's | `mach4`, `grbl`, `grblHAL`, `fluidNC`, `carbideMotion`, `linuxCNC`, `masso`, `centroid`, `buildbotics`, `openSBP`, `richAuto` (and `mach3`, `uccnc`, `planetCNC`, `winCNC`, which have no post, so it exits 1). `mach4` is Avid's Mach4 profile: it keeps the machine's model, so on an Avid machine it writes exactly what leaving `--controller` out writes, and over a project on another controller it writes the Avid Mach4 program. Every other name also sets the machine model to Custom. Names are case-sensitive |
 | `--sender s` | none | The program that sends files to a Grbl-family controller, such as `gSender`. It decides whether `M6` can stop for a tool change |
 | `--units u` | the machine's | `mm`; **any other value means inches** |
 | `--tool-change t` | the machine's | `m6`, `pause` (M0) or `atc`; other values are ignored |
@@ -385,7 +385,7 @@ nativecam-cli surface [project.nativecam] [--area bed|WxH] [--inset x] [--bit n]
     [--controller c] [--sender s] [--units inch|mm] [-o file] [--no-air-cut]
 ```
 
-Writes a spoilboard surfacing program for the project's machine, or for the default Avid PRO6060 on Mach4 without a project, plus an air-cut copy raised 1 in (25 mm). It's the counterpart of **File ▸ Surface Spoilboard…** ([Surfacing the spoilboard](../using-nativecam.md#surfacing-the-spoilboard)). **The human runs it, air cut first.** The project only lends its machine and tools and isn't changed. `--controller`, `--sender` and `--units` work as for [`acceptance`](#acceptance). Lengths are in the G-code's units.
+Writes a spoilboard surfacing program for the project's machine, or for the default Avid PRO6060 on Mach4 without a project, plus an air-cut copy raised 1 in (25 mm), named `<file> (air cut).<ext>` as every air cut is (`board (air cut).tap` with `-o board.tap`). It's the counterpart of **File ▸ Surface Spoilboard…** ([Surfacing the spoilboard](../using-nativecam.md#surfacing-the-spoilboard)). **The human runs it, air cut first.** The project only lends its machine and tools and isn't changed. `--controller`, `--sender` and `--units` work as for [`acceptance`](#acceptance). Lengths are in the G-code's units.
 
 | Option | Default | Rules |
 |---|---|---|
@@ -400,12 +400,12 @@ Writes a spoilboard surfacing program for the project's machine, or for the defa
 | `--clearance` | 0.5 in or 12 mm | every rapid stays at or above it |
 | `--board t` | none | the spoilboard's thickness: refused when less than 1/2 in (12 mm) would be left |
 
-The program's first line is `(Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board})`. XY zero is the area's front-left corner (for the whole bed, the inset in from the front-left limits of travel). The spindle dwells at least 3 s before the first contact, whatever the machine's spin-up dwell. A custom board plunges in free air past its edge; the whole bed ramps in over at least twice the bit's diameter. The file is checked with the same read-back as `post`, plus its own: every cut at exactly −k × the depth, the lowest point at the total depth, no rapid below the clearance, the program's whole extent at least the inset inside the travel (by span on a board; by position on the whole bed, zeroed the inset in from the front-left limits). Both files must pass, or nothing is written.
+The program's first line is `(Z ZERO: TOP OF THE SPOILBOARD {touch plate on the board})`. XY zero is the area's front-left corner (for the whole bed, the inset in from the front-left limits of travel). The spindle dwells at least 3 s before the first contact, whatever the machine's spin-up dwell. A custom board plunges in free air past its edge; the whole bed ramps in over at least twice the bit's diameter. The file is checked with the same read-back as `post`, plus its own: every cut at exactly −k × the depth, the lowest point at the total depth, no rapid below the clearance, the program's whole extent at least the inset inside the travel (by span on a board; by position on the whole bed, zeroed the inset in from the front-left limits). Both files must pass, or nothing is written. The names are checked before anything is written, as `post --air-cut`'s are: a program whose name says “air cut” (`-o "board (air cut).tap"`, with or without `--no-air-cut`) is refused, and so is an air cut that would replace a file without an `AIR CUT` line at the top, which may be a real cut. Both exit 1 with `Not written: …`. An earlier air cut is replaced.
 
 ```text
 $ nativecam-cli surface
 Avid Mach4 spoilboard surfacing -> surface-spoilboard-61x61in.tap
-Air cut (Z raised 1 in) -> surface-spoilboard-61x61in-air.tap
+Air cut (Z raised 1 in) -> surface-spoilboard-61x61in (air cut).tap
   60.875 × 60.875 in, 99 lines along X 0.621 in apart, both ways (zig-zag), 1 x 0.02 in = 0.02 in deep
   1-1/4" Surfacing Bit: 150 in/min, 12000 RPM; overshoot 0 in, entry: ramp of 2.5 in
   Z ZERO: TOP OF THE SPOILBOARD (touch plate on the board)

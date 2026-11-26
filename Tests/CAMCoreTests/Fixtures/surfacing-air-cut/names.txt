@@ -1,0 +1,5 @@
+default: surface-spoilboard-61x61in.tap | surface-spoilboard-61x61in (air cut).tap
+-o board.tap: board.tap | board (air cut).tap
+-o board: board.tap | board (air cut).tap
+-o board.nc: board.nc | board (air cut).nc
+grbl -o grbl: grbl.nc | grbl (air cut).nc
