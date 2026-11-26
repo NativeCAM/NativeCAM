@@ -560,15 +560,85 @@ public struct DrillParams: Hashable, Codable, Sendable {
     /// A hole depth tied to the material thickness, as `DepthSettings.fromBottom`: the hole stops this far above the
     /// material's bottom (negative goes through it). nil = `depth` is a plain depth. No new file format.
     public var fromBottom: Double?
+    /// Drill ▸ Method ▸ Helical bore: holes larger than 1.05 × the bit are bored on a helix to their drawn size
+    /// (`HelixBore`), and the rest are plunged as before. nil = Plunge, every hole plunged at the bit's size. Format 31
+    /// when set: an older build would ignore it and plunge every hole at the bit's size.
+    public var helix: HelixBore?
 
-    public init(depth: Double, peckDepth: Double = 0, fullRetract: Bool = true, dwell: Double = 0, fromBottom: Double? = nil) {
+    public init(depth: Double, peckDepth: Double = 0, fullRetract: Bool = true, dwell: Double = 0, fromBottom: Double? = nil,
+                helix: HelixBore? = nil) {
         self.depth = depth
         self.peckDepth = peckDepth
         self.fullRetract = fullRetract
         self.dwell = dwell
         self.fromBottom = fromBottom
+        self.helix = helix
     }
 
+    /// The project file format these settings need: a helical bore is format 31 (`HelixBore.formatVersion`).
+    public var requiredFormatVersion: Int { helix == nil ? 1 : HelixBore.formatVersion }
+}
+
+/// How a Drill toolpath cuts its holes (Drill ▸ Method).
+public enum DrillMethod: String, CaseIterable, Identifiable, Sendable {
+    /// Every hole plunged at the bit's size, in pecks if asked.
+    case plunge
+    /// Holes larger than the bit bored on a helix to their drawn size; the rest plunged.
+    case helicalBore
+    public var id: String { rawValue }
+    public var label: String { self == .plunge ? "Plunge" : "Helical bore" }
+}
+
+public extension DrillParams {
+    var method: DrillMethod { helix == nil ? .plunge : .helicalBore }
+}
+
+/// A Drill toolpath's helical bore (`DrillParams.helix`): each hole larger than 1.05 × the bit is cut by a helix on the
+/// bit-centre radius ρ = (D_hole − D_bit)/2, down to depth at a pitch no more than the bit's stepdown and no steeper
+/// than `rampAngle`, then a full lap at depth so the floor is flat, then a feed to the hole's centre and straight up.
+/// A hole wider than twice the bit is bored in rings out from the middle, so no core is left. The feeds are slowed on
+/// the small circle (`FeedScheduler.insideArcFactor`) so the wall sees the bit's feed.
+public struct HelixBore: Hashable, Codable, Sendable {
+    /// The helix's ramp angle, degrees (`rampRange`).
+    public var rampAngle: Double
+    /// Climb (counter-clockwise, G3, inside a hole with an M3 spindle: the uncut wall on the bit's right) or
+    /// conventional (clockwise, G2).
+    public var direction: CutDirection
+    /// Material the helix leaves on the wall for a finishing lap at full depth, mm radial; 0 = no finishing lap.
+    public var finishAllowance: Double
+    /// The finishing lap's feed as a share of the bit's feed (1 = 100%), before the small-circle slowdown.
+    public var finishFeedPercent: Double
+
+    public static let formatVersion = 31
+    /// The ramp angles allowed, degrees.
+    public static let rampRange: ClosedRange<Double> = 0.5...5
+    /// The finishing-lap feed shares the inspector allows.
+    public static let finishFeedRange: ClosedRange<Double> = 0.25...1.5
+    /// Holes no larger than this times the bit's diameter are plunged, not bored.
+    public static let plungeRatio = 1.05
+    /// Holes larger than this times the bit's diameter get a note that a pocket would be faster.
+    public static let pocketRatio = 8.0
+
+    public init(rampAngle: Double = 2, direction: CutDirection = .climb, finishAllowance: Double = 0, finishFeedPercent: Double = 1) {
+        self.rampAngle = rampAngle
+        self.direction = direction
+        self.finishAllowance = finishAllowance
+        self.finishFeedPercent = finishFeedPercent
+    }
+
+    /// The ramp angle in use, held to `rampRange`.
+    public var rampInUse: Double { min(Self.rampRange.upperBound, max(Self.rampRange.lowerBound, rampAngle.isFinite ? rampAngle : 2)) }
+
+    /// Whether the helix turns counter-clockwise (G3), seen from above.
+    public var counterClockwise: Bool { direction == .climb }
+
+    /// The finishing allowance in use (none below a micron).
+    public var allowanceInUse: Double { finishAllowance.isFinite && finishAllowance > 1e-3 ? finishAllowance : 0 }
+
+    /// The finishing feed share in use, held to `finishFeedRange`.
+    public var finishFeedInUse: Double {
+        min(Self.finishFeedRange.upperBound, max(Self.finishFeedRange.lowerBound, finishFeedPercent.isFinite ? finishFeedPercent : 1))
+    }
 }
 
 public struct VCarveParams: Hashable, Sendable {
@@ -2002,7 +2072,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// profiles are format 18. A chamfer with an overcut or a form bit is format 19. Constant scallop, spiral and radial
     /// 3D finishing are format 21. Mouldings are format 22. Flutes that follow a 3D model are format 25. A profile's
     /// separate finishing pass is format 28, and its triangular or hand-placed tabs and chosen start points are format 29
-    /// (`ProfileParams.requiredFormatVersion`).
+    /// (`ProfileParams.requiredFormatVersion`). A drill's helical bore is format 31 (`HelixBore.formatVersion`).
     public var requiredFormatVersion: Int {
         var bits = tool.shape.requiredFormatVersion
         switch kind {
@@ -2025,6 +2095,7 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
         case let .vcarve(p): own = p.requiredFormatVersion
         case let .finish3D(p): own = p.requiredFormatVersion
         case let .rough3D(p): own = p.requiredFormatVersion
+        case let .drill(p): own = p.requiredFormatVersion
         case let .moulding(p):
             let turned = p.finish.cutsInChosenDirection || p.roughing.map { $0.rough3D.directionInUse != $0.rough3D.defaultDirection } == true
             own = turned ? PassDirection.formatVersion : MouldingParams.formatVersion

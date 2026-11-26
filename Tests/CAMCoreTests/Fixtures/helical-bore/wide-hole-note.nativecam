@@ -1,0 +1,109 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 31,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Helical bore, a hole 9 × the bit",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "171B0000-0000-4000-8000-000000000011",
+      "kind" : {
+        "drill" : {
+          "_0" : {
+            "depth" : 6.35,
+            "dwell" : 0,
+            "fullRetract" : true,
+            "helix" : {
+              "direction" : "climb",
+              "finishAllowance" : 0,
+              "finishFeedPercent" : 1,
+              "rampAngle" : 2
+            },
+            "peckDepth" : 0
+          }
+        }
+      },
+      "name" : "Grommet",
+      "shapeIDs" : [
+        "171B0000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "171B0000-0000-4000-8000-000000000001",
+      "kind" : {
+        "circle" : {
+          "radius" : 28.575
+        }
+      },
+      "layer" : "Default",
+      "name" : "Cable grommet",
+      "position" : {
+        "x" : 100,
+        "y" : 100
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 10,
+    "height" : 200,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialKind" : "plywood",
+    "materialName" : "Baltic birch plywood",
+    "plungeHeight" : 2,
+    "thickness" : 19.049999999999997,
+    "width" : 300,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

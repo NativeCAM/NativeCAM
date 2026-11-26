@@ -157,10 +157,54 @@ struct OperationInspector: View {
                                   value: Binding(get: { MaterialDepthValue(depth: p.depth, fromBottom: p.fromBottom) },
                                                  set: { var q = p; q.depth = max(0.01, $0.depth); q.fromBottom = $0.fromBottom; set(q) }),
                                   stock: project.stock, units: units)
+                Picker("Method", selection: Binding(get: { p.method }, set: { m in
+                    var q = p
+                    q.helix = m == .plunge ? nil : (p.helix ?? HelixBore())
+                    set(q)
+                })) {
+                    ForEach(DrillMethod.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
                 LengthField(title: "Peck depth", mm: Binding(get: { p.peckDepth }, set: { var q = p; q.peckDepth = max(0, $0); set(q) }), units: units,
-                            help: "0 = single plunge")
+                            help: p.helix == nil ? "0 = single plunge" : "For the holes that are plunged. 0 = single plunge")
                 Toggle("Full retract between pecks", isOn: Binding(get: { p.fullRetract }, set: { var q = p; q.fullRetract = $0; set(q) }))
                 NumberField(title: "Dwell at bottom", value: Binding(get: { p.dwell }, set: { var q = p; q.dwell = max(0, $0); set(q) }), suffix: "s", decimals: 1)
+            }
+            if let helix = p.helix {
+                let setHelix: (HelixBore) -> Void = { h in var q = p; q.helix = h; set(q) }
+                Section("Helical Bore") {
+                    Text("Holes larger than \(String(format: "%.2f", HelixBore.plungeRatio)) × the bit are bored on a helix to their drawn "
+                        + "size, with a full lap at the bottom; smaller ones are plunged. Holes wider than twice the bit are bored in "
+                        + "rings out from the middle.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    NumberField(title: "Ramp angle", value: Binding(get: { helix.rampAngle }, set: { v in
+                        var h = helix
+                        h.rampAngle = min(HelixBore.rampRange.upperBound, max(HelixBore.rampRange.lowerBound, v))
+                        setHelix(h)
+                    }), suffix: "°", decimals: 1)
+                    Picker("Direction", selection: Binding(get: { helix.direction }, set: { var h = helix; h.direction = $0; setHelix(h) })) {
+                        ForEach(CutDirection.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    LengthField(title: "Finishing allowance", mm: Binding(get: { helix.finishAllowance },
+                                                                          set: { var h = helix; h.finishAllowance = max(0, $0); setHelix(h) }),
+                                units: units, help: "0 = no finishing lap. Otherwise the helix stops this far off the wall and a lap at full depth cuts it to size")
+                    if helix.allowanceInUse > 0 {
+                        PercentField(title: "Finishing feed", fraction: Binding(get: { helix.finishFeedPercent }, set: { v in
+                            var h = helix
+                            h.finishFeedPercent = min(HelixBore.finishFeedRange.upperBound, max(HelixBore.finishFeedRange.lowerBound, v))
+                            setHelix(h)
+                        }))
+                    }
+                    Text(helix.direction == .climb ? "Climb: counter-clockwise (G3), the uncut wall on the bit's right."
+                         : "Conventional: clockwise (G2).")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if project.stock.rotary != nil {
+                        Label("Helical boring isn't available on rotary jobs, so this toolpath isn't cut. Choose Plunge.",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
             }
         case let .rough3D(p):
             let set: (Rough3DParams) -> Void = { op.kind = .rough3D($0) }

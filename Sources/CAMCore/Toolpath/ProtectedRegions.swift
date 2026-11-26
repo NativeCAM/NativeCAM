@@ -184,10 +184,10 @@ public struct ProtectedRegions: Sendable {
                 regions = closedRegions()
             }
             return outside(regions.flatMap(\.loops))
-        case .drill:
-            let r = op.tool.radius
-            guard r > 1e-6 else { return [] }
-            return DrillGenerator.holeCentres(shapes, tolerance: flattenTolerance).flatMap { c -> [Polyline] in
+        case let .drill(p):
+            // A bored hole's band is round its drawn size (Helical bore), a plunged one's round the bit.
+            guard op.tool.radius > 1e-6 else { return [] }
+            return DrillGenerator.cutHoles(shapes, params: p, tool: op.tool, tolerance: flattenTolerance).flatMap { c, r -> [Polyline] in
                 let outer = circle(c, radius: r + w, tolerance: tol), hole = circle(c, radius: r, tolerance: tol)
                 return [outer.oriented(counterClockwise: true), hole.oriented(counterClockwise: false)]
             }

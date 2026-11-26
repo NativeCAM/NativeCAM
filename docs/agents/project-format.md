@@ -58,7 +58,7 @@ The demo files show binary rounding (`19.049999999999997` for 0.75 in). That's n
 
 ## Format versions
 
-`Project.currentFormatVersion` (29 on `main`) is the newest format this build reads. Reading a file:
+`Project.currentFormatVersion` (31 on `main`) is the newest format this build reads. Reading a file:
 
 - a `formatVersion` above it is refused: `This project was saved by a newer version of NativeCAM (format 99).`
 - a `formatVersion` at or below it is read. **The number isn't otherwise used on reading.** A file marked `1` that holds an adaptive pocket loads and posts like one marked `13`.
@@ -97,6 +97,7 @@ What raises it, from the code:
 | 28 | A profile's `finishPass` |
 | 29 | A profile's triangular tabs (`"shape": "triangular"`), tabs placed by hand (`placed`) or `startPoints`, on an inside or outside cut |
 | 30 | A flat 3D roughing or finishing that leaves strips under a tabbed cut-out's tabs (saved with `"holdsTabs": true`, below) |
+| 31 | A drill's `helix` (Drill ▸ Method ▸ Helical bore) |
 
 The code names no feature for formats 11, 23 or 24. Settings that change nothing for an older build don't raise the format (`fromBottom`, `restFromEarlier`, `flatRaster`, `adjustFeedsForLoad`, `spindleSpeed`, the `layers` list).
 
@@ -330,6 +331,17 @@ An adaptive pocket's pass depth defaults to the bit's flute length.
 ### drill
 
 Plunges at the centre of each shape (circles, usually). `depth`, `peckDepth` (0 = one plunge), `fullRetract` and `dwell` (s) are required. `fromBottom` is optional, as in `depth`.
+
+`helix` is optional: without it every hole is plunged at the bit's size (Method ▸ Plunge). With it (Method ▸ Helical bore, format 31), each round hole larger than 1.05 × the bit is bored to its drawn size on a helix, and the rest are plunged with `peckDepth`, `fullRetract` and `dwell`. See [Helical boring](../using-nativecam.md#helical-boring).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `rampAngle` | 2 | The helix's ramp, degrees, held to 0.5–5. The drop per turn is also never more than the bit's stepdown |
+| `direction` | `climb` | `climb` (counter-clockwise, G3) or `conventional` (clockwise, G2) |
+| `finishAllowance` | 0 | mm left on the wall for one finishing lap at full depth; 0 = no lap |
+| `finishFeedPercent` | 1 | The finishing lap's feed as a share of the bit's feed (0.25–1.5) |
+
+All four keys are required inside `helix`; `{"rampAngle": 2, "direction": "climb", "finishAllowance": 0, "finishFeedPercent": 1}` is the default bore. Rotary jobs refuse it.
 
 ### vcarve
 

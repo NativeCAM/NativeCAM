@@ -357,6 +357,32 @@ public enum SetupSheet {
             h += "</ul>\n"
         }
 
+        // Helical bores: each hole's method, size and direction.
+        let bored = job.toolpaths.filter { $0.bores?.isEmpty == false }
+        if !bored.isEmpty {
+            h += "<h2>Holes</h2>\n<ul>\n"
+            var seen = Set<UUID>()
+            for tp in bored where seen.insert(tp.sourceOperationID).inserted {
+                var groups: [(text: String, count: Int)] = []
+                for hole in tp.bores ?? [] {
+                    let size = hole.diameter.map { "Ø\(len($0))" } ?? "a shape that isn't round"
+                    let text: String
+                    if hole.bored {
+                        let rings = hole.rings > 1 ? " in \(hole.rings) rings" : ""
+                        let lap = hole.finishLap ? ", then a finishing lap" : ""
+                        text = "\(size) helical bore\(rings) at \(hole.pitch.map { "\(u.format($0, decimals: u == .inch ? 4 : 2)) \(u.symbol)" } ?? "–") per turn, "
+                            + "\(hole.counterClockwise ? "climb (G3)" : "conventional (G2)")\(lap)"
+                    } else {
+                        text = "\(size) plunged at the bit's size (\(len(tp.tool.diameter)))"
+                    }
+                    if let k = groups.firstIndex(where: { $0.text == text }) { groups[k].count += 1 } else { groups.append((text, 1)) }
+                }
+                let list = groups.map { "\($0.count) × \($0.text)" }.joined(separator: "; ")
+                h += "<li>\(esc(tp.name)): \(esc(list)).</li>\n"
+            }
+            h += "</ul>\n"
+        }
+
         // 3D rotary roughing and finishing: the model each one works on, how it sits on the blank and how it's cut.
         let rotary3D = project.operations.filter { op in
             guard op.enabled, op.kind.is3D, op.kind.turnsWholeBlank else { return false }

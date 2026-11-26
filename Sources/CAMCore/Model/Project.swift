@@ -35,8 +35,9 @@ public struct Project: Hashable, Sendable {
     /// starting each loop elsewhere. Format 30 adds strips under a cut-out's tabs in flat 3D roughing and finishing
     /// (`CAMOperation.holdsTabsFormatVersion`), which an older build would ignore, holding the whole floor or cutting it
     /// through, with the cut-out's tabs elsewhere on the wall. Toolpath groups and hiding a toolpath in the view
-    /// (`toolpathGroups`, `CAMOperation.groupID`, `CAMOperation.hidden`) change no cut and don't raise it.
-    public static let currentFormatVersion = 30
+    /// (`toolpathGroups`, `CAMOperation.groupID`, `CAMOperation.hidden`) change no cut and don't raise it. Format 31 adds a
+    /// drill's helical bore (`DrillParams.helix`), which an older build would ignore and plunge every hole at the bit's size.
+    public static let currentFormatVersion = 31
 
     /// The format this project is written as: the oldest one that can hold it.
     public var formatVersion: Int {
