@@ -22,6 +22,7 @@ A 3 in groove cut on the line, `gap` from the edge of a pocket another toolpath 
 
 Two 3 × 2 in rectangles cut on the line by one profile, `gap` apart:
 
-- `lines-under-bit-width.nativecam`: 0.24 in. Refused, naming both and the gap.
-- `lines-at-bit-width.nativecam`: 0.25 in. Cut.
-- `lines-over-bit-width.nativecam`: 0.26 in. Cut.
+- `lines-under-bit-width.nativecam`: 0.24 in. Cut, with a warning naming both and the gap: an on-line cut has no
+  finished side, and grooves running together are often meant.
+- `lines-at-bit-width.nativecam`: 0.25 in. The kerfs meet with nothing between them cut. Cut, with no warning.
+- `lines-over-bit-width.nativecam`: 0.26 in. Cut, with no warning.

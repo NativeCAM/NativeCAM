@@ -330,11 +330,12 @@ enum ProfileGenerator {
             }
         }
         // On the line, shapes of the same cut nearer each other than the bit's width (but not touching or crossing,
-        // where they're meant to meet) lose the material between them (#190).
+        // where they're meant to meet) lose the material between them (#190). An on-line cut has no finished side, and
+        // grooves that run together are often meant (small lettering, hatching with a wide bit): a warning, not an error.
         if params.side == .on, let crowded = Self.closestLines(shapes, within: 2 * r, context: context) {
-            errors.append("Refused: the cuts along “\(crowded.a)” and “\(crowded.b)” are \(context.length(crowded.gap)) apart, closer "
-                + "than the bit's \(context.length(2 * r)) width, so each cuts into the material between them. Move them further "
-                + "apart, or cut them with a smaller bit.")
+            warnings.append("The cuts along “\(crowded.a)” and “\(crowded.b)” are \(context.length(crowded.gap)) apart, closer than "
+                + "the bit's \(context.length(2 * r)) width, so the material between them is cut away. If it should stay, move them "
+                + "further apart or cut them with a smaller bit.")
         }
         // Climb keeps the material the bit is engaging, the finished wall, on the tool's right (clockwise spindle, M3).
         // The waste being cleared is then on its left; that is why `wasteOnLeft` is what the leads need.

@@ -99,7 +99,8 @@ struct PartGapInsideTests {
     }
 
     /// Two 3 × 2 in rectangles cut on the line by one profile, `gap` apart: their cuts reach a bit radius each way,
-    /// so closer than the bit's width each cuts into the material the other's line bounds.
+    /// so closer than the bit's width the material between their lines is cut away. An on-line cut has no finished
+    /// side and that's often meant (small lettering, hatching), so it's a warning, not an error.
     static func linesApart(gap: Double) -> Project {
         let left = Gaps.box(1, "Left", width: 3.inch, height: 2.inch, at: Vec2(100, 100))
         let right = Gaps.box(2, "Right", width: 3.inch, height: 2.inch, at: Vec2(100 + 3.inch + gap, 100))
@@ -108,23 +109,26 @@ struct PartGapInsideTests {
         return Catalog.project("Lines \(gap / 25.4) in apart", shapes: [left, right], ops: [op], width: 300, height: 200)
     }
 
-    static let pairCases: [(name: String, gap: Double, refused: Bool)] = [
+    /// 0.24 in apart: warned. Exactly the bit's width, the two kerfs meet with nothing between them cut, so neither 0.25
+    /// nor 0.26 in is warned about.
+    static let pairCases: [(name: String, gap: Double, warned: Bool)] = [
         ("lines-under-bit-width", 0.24.inch, true),
         ("lines-at-bit-width", 0.25.inch, false),
         ("lines-over-bit-width", 0.26.inch, false),
     ]
 
     @Test(arguments: pairCases.indices)
-    func onLineCutsCloserThanTheBitsWidthAreRefused(_ k: Int) throws {
-        let (name, gap, refused) = Self.pairCases[k]
+    func onLineCutsCloserThanTheBitsWidthAreWarnedAbout(_ k: Int) throws {
+        let (name, gap, warned) = Self.pairCases[k]
         let p = try Self.saved(name) { Self.linesApart(gap: gap) }
-        let tp = try #require(CAMEngine.generate(p).toolpaths.first)
-        let errors = tp.errors ?? []
-        #expect(!errors.isEmpty == refused, "\(name): \(errors)")
-        if refused {
-            let e = try #require(errors.first)
-            #expect(errors.count == 1 && e.contains("“Left”") && e.contains("“Right”"), "\(e)")
-            #expect(e.contains(String(format: "%.4f in apart", gap / 25.4)), "\(e)")
+        let job = CAMEngine.generate(p)
+        let tp = try #require(job.toolpaths.first)
+        // Never refused: the file is still written.
+        #expect(tp.errors == nil && !job.hasErrors, "\(name): \(tp.errors ?? [])")
+        let crowded = tp.warnings.filter { $0.contains("the material between them is cut away") }
+        #expect(crowded.count == (warned ? 1 : 0), "\(name): \(tp.warnings)")
+        if let w = crowded.first {
+            #expect(w.contains("“Left”") && w.contains("“Right”") && w.contains(String(format: "%.4f in apart", gap / 25.4)), "\(w)")
         }
     }
 }
