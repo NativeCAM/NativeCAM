@@ -273,7 +273,8 @@ func postRestart(_ project: Project, job: JobResult, airCut: Double?) {
         print("Writing it anyway (--force): \(reason).")
     }
     let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? (args[1] as NSString).deletingPathExtension
-    let path = stem + (restart.file.suffix ?? "") + "." + restart.post.fileExtension
+    let path = (airCut == nil ? stem : AirCut.unmarked(stem)) + (restart.file.suffix ?? "") + "." + restart.post.fileExtension
+    if let problem = AirCut.namingProblemOnDisk([path], airCut: airCut != nil) { fail("Not written: \(problem)") }
     do { try restart.file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
     let lines = restart.file.gcode.components(separatedBy: "\n").count - 1
     print("Restart: \(restart.toolpaths.count) toolpath\(restart.toolpaths.count == 1 ? "" : "s"), \(lines) lines -> \(path)")
@@ -332,7 +333,9 @@ func postSubset(_ project: Project, job: JobResult, airCut: Double?) {
     let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension }
         ?? ((args[1] as NSString).deletingPathExtension + nameSuffix)
     let ext = subset.post.fileExtension
-    let names = JobExport.fileNames(subset.files, base: stem + "." + ext, fileExtension: ext)
+    // An air cut is named as every air cut is, "<stem> (air cut).ext" (#192), never under the real file's name.
+    let names = AirCut.paths(subset.files, stem: stem, airCut: airCut != nil, fileExtension: ext)
+    if let problem = AirCut.namingProblemOnDisk(names, airCut: airCut != nil) { fail("Not written: \(problem)") }
     for (file, path) in zip(subset.files, names) {
         do { try file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
     }
@@ -350,7 +353,7 @@ func postSubset(_ project: Project, job: JobResult, airCut: Double?) {
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] [--restart-*] | surface [project] [-o file] | sim <project|tap> [--png out.png] [--cell mm]"
+    print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] [--air-cut h] [--group name | --toolpaths list] [--full-retract] [--restart-*] | surface [project] [-o file] | sim <project|tap> [--png out.png] [--cell mm]"
           + " | tools <library> [-o out.json] | import <project> <file>… (-o out | --in-place) | rebind <project> (-o out | --in-place)"
           + " | save <project> (-o out | --in-place)")
     exit(0)
@@ -373,7 +376,9 @@ case "demo", "demo3d", "demonest", "demosheets", "new":
     }
 
 case "post":
-    guard args.count >= 2 else { fail("usage: nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--force]\n"
+    guard args.count >= 2 else { fail("usage: nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--rebind] [--force]\n"
+                                         + "       nativecam-cli post <project.nativecam> --group name | --toolpaths 1,3,Name [--full-retract] "
+                                         + "[--air-cut height] [--sheet out.html] [-o out.tap] [--force]\n"
                                          + "       nativecam-cli post <project.nativecam> --restart-toolpath n [--restart-pass p] | --restart-line N "
                                          + "[--restart-exact] [--restart-no-stop] [--restart-file n] [--restart-from running.tap]") }
     // --rebind: toolpaths that find vectors by layer or kind look again first, in memory only (the file isn't saved).
@@ -408,6 +413,8 @@ case "post":
         checks += found
     }
     let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension } ?? (args[1] as NSString).deletingPathExtension
+    let paths = AirCut.paths(output.files, stem: stem, airCut: airCut != nil, fileExtension: post.fileExtension)
+    if let problem = AirCut.namingProblemOnDisk(paths, airCut: airCut != nil) { fail("Not written: \(problem)") }
     if let sheet = option("--sheet", in: args) {
         let html = SetupSheet.html(project: project, job: job, gcodeFile: (stem as NSString).lastPathComponent + "." + post.fileExtension,
                                    checks: checks)
@@ -429,8 +436,7 @@ case "post":
         print("Writing it anyway (--force): \(reason).")
     }
     var outputs: [String] = []
-    for file in output.files {
-        let path = stem + (file.suffix ?? "") + "." + post.fileExtension
+    for (file, path) in zip(output.files, paths) {
         do { try file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
         outputs.append(path)
     }

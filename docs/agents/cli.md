@@ -79,7 +79,7 @@ Generates the toolpaths, runs the job's checks, posts the file for the project's
 |---|---|---|
 | `<project>` | required | The project to post |
 | `-o out` | the project's path | Where to write. Only the stem is used: the extension is always the controller's (`.tap` for Avid Mach4, `.nc`, `.ngc`, `.cnc` or `.sbp`), so `-o job.gcode` writes `job.tap` on Mach4 |
-| `--air-cut h` | off | Raises every Z, safe height and park height by `h`, in the G-code's units, with X and Y unchanged. The file is named `<stem> (air cut).<ext>`. `h` must be above zero, or it exits 1 |
+| `--air-cut h` | off | Raises every Z, safe height and park height by `h`, in the G-code's units, with X and Y unchanged. The file is named `<stem> (air cut).<ext>`, with `-o` too (a stem already ending in ` (air cut)` doesn't get it twice). `h` must be above zero, or it exits 1 |
 | `--rebind` | off | First has every toolpath that finds its vectors by layer or kind (`vectorSelection`) look again, as Recalculate All does, and prints what changed (lines starting `Rebind:`). Only in memory: the project file isn't saved. Without it, `post` cuts exactly the `shapeIDs` the file lists |
 | `--sheet out.html` | none | Also writes the printable setup sheet (see [Workflows](workflows.md#8-read-the-setup-sheet-and-run-time-estimate)). It's written before the error check, so it's written even when the G-code isn't |
 | `--force` | off | Writes the file in spite of errors. **An agent never passes it** (see [AGENTS.md](../../AGENTS.md#hard-safety-rules)) |
@@ -207,9 +207,11 @@ The file is the full job cut down, never the toolpaths generated on their own. L
 | `--group name` | none | The group, by name or id. Exits 1 when no group or more than one has the name, listing the groups |
 | `--toolpaths list` | none | Toolpaths by number, id or name. Not with `--group` |
 | `--full-retract` | off | Generates the whole job again with every link going up to safe Z (`retractMode` `full`) for this file only, then cuts that down, so no link relies on the earlier toolpaths' cuts. The project isn't changed |
-| `--air-cut h` | off | An air cut of the part, as for `post` |
+| `--air-cut h` | off | An air cut of the part, as for `post`: the file is `<stem> (air cut).<ext>` (`Sign - Finish (air cut).tap`, or `part (air cut).tap` with `-o part.tap`) and its first line is the `AIR CUT` comment, above the part's header |
 | `--sheet out.html` | none | The part's own setup sheet: its toolpaths, the tool to load first, and what it assumes was cut |
 | `-o out` | `<project> - <group>` | The stem to write. With `--toolpaths`, the default is `<project> - <toolpath name>` for one toolpath and `<project> - selected` for more |
+
+**Air cuts and real cuts never share a name.** Every `post` path (the whole job, part of it, a restart) exits 1 and writes nothing, not even the setup sheet, when an air cut would replace a file that has no `AIR CUT` line at the top (it may be the real cut), or when a real cut's name says "air cut". Move the old file or pick another `-o`; don't delete the human's files to get past it.
 
 Toolpaths that aren't included in the output (`"enabled": false`) are left out with an info line. Hidden ones (`"hidden": true`) are included: hiding is display only. A tile or sheet with none of the part's toolpaths gets no file. On a tiled job the registration holes stay only when the part starts at the job's first toolpath.
 

@@ -183,7 +183,12 @@ public enum JobSubset {
         // A tile with nothing of the subset to cut gets no file (the others keep their numbers), as a sheet doesn't.
         var files = export.files.filter { $0.toolpaths.contains { !$0.isEmpty } }
         for i in files.indices {
-            files[i].gcode = headerText + files[i].gcode
+            // An air cut keeps its "AIR CUT" line first (`AirCut.files`), above the part's header.
+            if request.airCut != nil, let end = files[i].gcode.range(of: dialect.lineEnding) {
+                files[i].gcode.insert(contentsOf: headerText, at: end.upperBound)
+            } else {
+                files[i].gcode = headerText + files[i].gcode
+            }
             issues += GCodeCheck.run(files[i].gcode, toolpaths: files[i].toolpaths, project: files[i].project, dialect: dialect)
                 .map { issue in
                     var issue = issue
