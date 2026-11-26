@@ -89,7 +89,7 @@ import Foundation
 //                                                      --sheet-size after the first; --no-holes keeps parts out of
 //                                                      other parts' holes)
 //                                                      (lengths in the project's units; spacing and margin default to
-//                                                      the cut-out bit plus 1/8 in or 3 mm); prints the utilization and
+//                                                      twice the cut-out bit plus 1/8 in or 3 mm); prints the utilization and
 //                                                      what didn't fit. Writes "<project> nested.nativecam" beside the
 //                                                      project unless -o or --in-place
 //   nativecam-cli import <project.nativecam> <file>… (-o out.nativecam | --in-place) [--units in|mm] [--layer name]

@@ -405,8 +405,8 @@ struct NestPartsSheet: View {
     private var spacingNote: String {
         guard let job = session.job else { return "" }
         let margin = length(NestJob.spacingMargin(units))
-        var note = job.cutOutTool.map { "Starts at the \($0.name)'s diameter plus \(margin) \(units.symbol)." }
-            ?? "No toolpath cuts these parts out yet: starts at a 1/4\" bit's diameter plus \(margin) \(units.symbol)."
+        var note = job.cutOutTool.map { "Starts at twice the \($0.name)'s diameter plus \(margin) \(units.symbol)." }
+            ?? "No toolpath cuts these parts out yet: starts at twice a 1/4\" bit's diameter plus \(margin) \(units.symbol)."
         let wider = job.parts.filter { $0.reach > session.settings.spacing + 1e-6 }
         if let widest = wider.max(by: { $0.reach < $1.reach }) {
             note += " “\(widest.reachToolpath ?? "A toolpath")” cuts \(length(widest.reach)) \(units.symbol) outside "

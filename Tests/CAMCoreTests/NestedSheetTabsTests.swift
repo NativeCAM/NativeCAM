@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import CAMCore
 
-/// The multi-sheet nesting goldens after #182: nested at the default spacing (the bit's width and 1/8 in, under two bit
-/// widths), evenly spaced tabs on edges facing a neighbour move along their loops instead of being cut away. Every part
+/// The multi-sheet nesting goldens after #182: nested under two bit widths apart (the saved two-sheet shelf, from before
+/// #193 raised the default spacing), evenly spaced tabs on edges facing a neighbour move along their loops instead of
+/// being cut away. Every part
 /// on every sheet keeps its full tab count, and each tab stands at its set thickness in the simulated material.
 struct NestedSheetTabsTests {
     /// Each sheet's files: the saved two-sheet shelf (`projects/nesting-multisheet-v16`) and the frames-and-coasters demo
@@ -24,7 +25,13 @@ struct NestedSheetTabsTests {
     }
 
     @Test func everyNestedPartKeepsEveryTabAtItsThickness() throws {
-        for (name, project) in try Self.jobs() {
+        for (name, project) in try Self.jobs() { try Self.checkEveryTab(name, project) }
+    }
+
+    /// Checks that every part each sheet's file cuts out keeps its full tab count at its set thickness (`NestSpacingTests`
+    /// uses it too).
+    static func checkEveryTab(_ name: String, _ project: Project) throws {
+        do {
             let job = CAMEngine.generate(project)
             #expect(!job.hasErrors, "\(name)")
             let export = try #require(JobExport.files(project, job: job, date: GoldenPostTests.date))

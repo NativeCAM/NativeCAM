@@ -73,7 +73,8 @@ struct CommandLineTests {
         let one = try Self.run(["nest", demo, "--evaluations", "300", "--sheets", "1", "-o", dir.appendingPathComponent("one.nativecam").path])
         #expect(one.status == 0, "\(one.output)")
         #expect(one.output.contains("% of the sheet)"), "\(one.output)")
-        #expect(one.output.contains("8 parts didn't fit on 1 sheet; pass --sheets 2 to use another sheet"), "\(one.output)")
+        // 10 of 19 at the default spacing since #193 (two bit widths plus 1/8 in); 8 before.
+        #expect(one.output.contains("10 parts didn't fit on 1 sheet; pass --sheets 2 to use another sheet"), "\(one.output)")
     }
 
     @Test func cliIsBuilt() {

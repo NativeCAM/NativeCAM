@@ -536,7 +536,7 @@ Nests every part onto the sheet, as **Toolpaths ▸ Nest Parts…** does, and wr
 | Argument | Default | Meaning |
 |---|---|---|
 | `-o out` / `--in-place` | `<project> nested.nativecam` beside it | Where to write; pass one, not both |
-| `--spacing x` | the cut-out bit's diameter plus 1/8 in (3 mm in a metric job) | The gap between parts, in the project's display units |
+| `--spacing x` | twice the cut-out bit's diameter plus 1/8 in (3 mm in a metric job), so a neighbour's cut never reaches a part's tabs | The gap between parts, in the project's display units. It isn't saved in the project |
 | `--margin x` | the spacing | The gap to the sheet's edges |
 | `--turns` | `90` | `none`, `90`, or a number of evenly spaced turns (1–72) |
 | `--grain` | off | Keep parts along the grain |
@@ -552,18 +552,18 @@ Rotary jobs, and jobs with nothing to nest, are refused with exit 1.
 
 ```text
 $ nativecam-cli nest demosheets.nativecam --evaluations 200 --seed 1 -o nested.nativecam
-Nested 19 of 19 parts in 0.2 s (200 layouts tried), spacing 0.3750 in, edge margin 0.3750 in
-On 2 sheets: sheet 1 11 parts, sheet 2 8 parts
-In other parts' holes: Bracket 1 in Frame 1, Bracket 2 in Frame 1, Bracket 3 in Frame 2, Bracket 4 in Frame 2, Coaster 2 in Frame 2, Coaster 5 in Frame 2, Coaster 6 in Frame 1
-Parts fill 59% of the 42.5102 in of the last sheet they use (61% of all the sheets' area)
+Nested 19 of 19 parts in 0.3 s (200 layouts tried), spacing 0.6250 in, edge margin 0.6250 in
+On 2 sheets: sheet 1 8 parts, sheet 2 11 parts
+In other parts' holes: Bracket 3 in Frame 2, Coaster 1 in Frame 1, Coaster 2 in Frame 2, Coaster 3 in Frame 1, Coaster 4 in Frame 1
+Parts fill 57% of the 44.5181 in of the last sheet they use (61% of all the sheets' area)
 Wrote nested.nativecam
 $ nativecam-cli nest demosheets.nativecam --evaluations 100 --sheets 1 --no-holes -o one.nativecam
-Nested 13 of 19 parts in 0.1 s (100 layouts tried), spacing 0.3750 in, edge margin 0.3750 in
-Parts fill 74% of the 47.3772 in of the sheet they use (73% of the sheet)
+Nested 6 of 19 parts in 0.1 s (100 layouts tried), spacing 0.6250 in, edge margin 0.6250 in
+Parts fill 75% of the 47.3746 in of the sheet they use (74% of the sheet)
   Didn't fit, stays where it is: Tray
   …
-  Didn't fit, moved beside the sheet: Side 2
-  6 parts didn't fit on 1 sheet; pass --sheets 2 to use another sheet
+  Didn't fit, moved beside the sheet: Shelf 1
+  13 parts didn't fit on 1 sheet; pass --sheets 2 to use another sheet
 Wrote one.nativecam
 ```
 

@@ -392,7 +392,7 @@ struct NestPartsTests {
         #expect(leadReach > d + r - 0.05 && leadReach < d + 2 * r, "\(leadReach) vs \(d + r)")
         // Nesting measures without them (they're shortened or left off near another part), and notes their full reach.
         let job = try NestJob.prepare(project, selection: [])
-        #expect(abs(job.defaultSpacing - (d + 3)) < 1e-9)
+        #expect(abs(job.defaultSpacing - (2 * d + 3)) < 1e-9)
         let first = try #require(job.parts.first { $0.shapeIDs == [a.id] })
         let second = try #require(job.parts.first { $0.shapeIDs == [b.id] })
         #expect(abs(first.reach - d) < 0.05 && abs(second.reach - d) < 0.05, "\(first.reach), \(second.reach)")
