@@ -11,7 +11,7 @@ cli-cube-mm.stl: inches, from --units (the file carries no unit)
   Added 3D model “cli-cube-mm” on layer “Default”: 10.0000 × 10.0000 in centred at (12.0000, 9.0000), 0.7300 in deep, scale 1
 cli-cube.3mf: millimetres, as the file says
 [warning] cli-cube.3mf: the file says it's in millimetres, so --units in doesn't apply to it
-  Added 3D model “cli-cube” on layer “Default”: 0.7894 × 0.7894 in centred at (12.0000, 9.0000), 0.7300 in deep, scale 1
+  Added 3D model “cli-cube” on layer “Default”: 0.7874 × 0.7874 in centred at (12.0000, 9.0000), 0.7300 in deep, scale 1
 Toolpaths whose vectors changed:
   Cut out part (Layer “Profile”): 0 → 3 vectors (3 added)
 Kept as chosen by hand: Hand-picked V-carve (1 vector)
