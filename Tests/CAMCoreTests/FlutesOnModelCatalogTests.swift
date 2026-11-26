@@ -663,26 +663,28 @@ struct FlutesOnModelCatalogTests {
 
     // MARK: #139
 
-    /// On a blank much bigger than the leg, flutes following it are measured from the leg's surface for the bit's
-    /// cutting length, not from the blank's (the 3D finish before them has cleared the wood between); a flute deeper
-    /// than the cutting length below the surface still warns.
+    /// On a blank much bigger than the leg, flutes following it after its 3D finish are measured from the leg's surface
+    /// for the bit's cutting length, not from the blank's (the finish has cleared the wood between); a flute deeper than
+    /// the cutting length below the surface still warns. (Without the finish, the stock over the leg counts: #203,
+    /// `FluteReachCatalogTests`.)
     @Test func theCuttingLengthCheckCountsFromTheModel() throws {
         var p = Self.rotaryProject()
         var blank = try #require(p.stock.rotary)
         blank.diameter = 3.inch
         p.stock.setRotary(blank)
+        p.operations.insert(FluteReachCatalogTests.finish(), at: 0)
         let job = CAMEngine.generate(p)
-        let tp = try #require(job.toolpaths.first)
+        let tp = try #require(job.toolpaths.first { $0.name == "Leg flutes" })
         let deepest = -(try #require(tp.cuttingExtents)).min.z
         #expect(deepest > Self.ball.fluteLength, "the flutes are \(deepest) mm in from the blank's surface")
         let warns = job.issues.contains { $0.message.contains("exceeds the cutting length") }
         #expect(!warns, "\(job.issues.map(\.message))")
 
         var deep = p
-        guard case var .fluting(f) = deep.operations[0].kind else { Issue.record("not fluting"); return }
+        guard case var .fluting(f) = deep.operations[1].kind else { Issue.record("not fluting"); return }
         f.depth = Self.ball.fluteLength + 1
         f.passDepth = f.depth
-        deep.operations[0].kind = .fluting(f)
+        deep.operations[1].kind = .fluting(f)
         let deepJob = CAMEngine.generate(deep)
         let deepWarns = deepJob.issues.contains { $0.message.contains("exceeds the cutting length") }
         #expect(deepWarns, "\(deepJob.issues.map(\.message))")
