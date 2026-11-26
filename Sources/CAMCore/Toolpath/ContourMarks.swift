@@ -54,9 +54,10 @@ public enum ContourMarks {
 
         /// A mark at the drawn outline nearest `p` (design XY), if one is within `within`: on that outline, in its
         /// shape's own coordinates. With `snap`, on one of the outline's vertices when it's within `snap` of the point.
-        public func mark(near p: Vec2, within: Double, snap: Double = 0) -> ContourMark? {
+        /// `including` limits it to some shapes (by ID).
+        public func mark(near p: Vec2, within: Double, snap: Double = 0, including: (UUID) -> Bool = { _ in true }) -> ContourMark? {
             var best: (ContourMark, Double)?
-            for e in entries where e.bounds.contains(p, tolerance: within) {
+            for e in entries where including(e.shape.id) && e.bounds.contains(p, tolerance: within) {
                 guard let inverse = e.inverse else { continue }
                 for outline in e.outlines {
                     let c = outline.closestPoint(to: p)
@@ -71,6 +72,11 @@ public enum ContourMarks {
                 }
             }
             return best?.0
+        }
+
+        /// A point on each shape's drawn outline, by shape ID: the first point of its first outline.
+        public var outlinePoints: [(id: UUID, point: Vec2)] {
+            entries.compactMap { e in e.outlines.first?.points.first.map { (e.shape.id, $0) } }
         }
 
         /// The drawn outline nearest `p`, design XY, if one is within `within`.

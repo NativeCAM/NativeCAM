@@ -781,7 +781,7 @@ case "template":
         // Never over the project unless asked: by default a new file beside it, numbered if the name is taken.
         let out = option("-o", in: args) ?? (args.contains("--in-place") ? args[3] : templatedPath(project: args[3], template: args[2]))
         do { try result.project.encoded().write(to: URL(fileURLWithPath: out)) } catch { fail("Can't write \(out): \(error.localizedDescription)") }
-        print("Wrote \(out)")
+        print("Wrote \(out) (format \(result.project.formatVersion))")
     default:
         fail(usage)
     }
@@ -1011,7 +1011,7 @@ case "import":
         let limit = project.stock.thickness - 0.02.inch
         guard let d = Double(text), d > 0 else { fail("--depth takes a depth above zero in \(u.symbol)") }
         guard u.toMM(d) <= limit + 1e-9 else {
-            fail("--depth \(text) \(u.symbol) is too deep: a 3D model is carved no deeper than the material less 0.02 in"
+            fail("Not written: --depth \(text) \(u.symbol) is too deep: a 3D model is carved no deeper than the material less 0.02 in"
                  + " (\(u.format(limit)) \(u.symbol) here, the material being \(u.format(project.stock.thickness)) \(u.symbol)).")
         }
         options.modelDepth = u.toMM(d)
@@ -1061,7 +1061,8 @@ case "import":
         let added = project.shapes.filter { file.shapeIDs.contains($0.id) }
         for shape in added {
             if let spec = shape.modelSpec {
-                print("  Added 3D model “\(shape.name)” on layer “\(shape.layer)”: \(size(shape.bounds)) centred at \(point(shape.position)),"
+                // The mesh's own size, which its toolpaths cut to (the traced outline is up to a grid cell larger).
+                print("  Added 3D model “\(shape.name)” on layer “\(shape.layer)”: \(size(shape.modelBounds ?? shape.bounds)) centred at \(point(shape.position)),"
                       + " \(u.format(spec.depth)) \(u.symbol) deep, scale \(String(format: "%.4g", shape.scale))")
             } else {
                 let polys = shape.polylines(tolerance: 0.1)

@@ -332,6 +332,19 @@ public extension DesignShape {
         }
     }
 
+    /// A model's footprint from its mesh, design XY: what its toolpaths cut to. `bounds` is its outline's, traced from a
+    /// grid of cells about 1/400 of the model across, so up to a cell larger. On a rotary blank, the outline's bounds
+    /// (along the axis); nil for other shapes.
+    var modelBounds: Rect2? {
+        guard let spec = modelSpec else { return nil }
+        guard spec.rotary == nil else { return bounds }
+        var box = Rect2.empty
+        forEachModelTriangle { a, b, c in
+            for v in [a, b, c] { box = box.union(Vec2(v.x, v.y)) }
+        }
+        return box
+    }
+
     /// Visits every triangle of a model shape in design coordinates (Z relative to the material top).
     func forEachModelTriangle(_ body: (SIMD3<Double>, SIMD3<Double>, SIMD3<Double>) -> Void) {
         guard let spec = modelSpec else { return }

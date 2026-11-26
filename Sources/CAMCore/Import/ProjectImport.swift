@@ -169,7 +169,7 @@ extension Project {
         let ids = Set(shapes.map(\.id))
         let placed = self.shapes.filter { ids.contains($0.id) }
         file.shapeIDs = placed.map(\.id)
-        file.placedBounds = placed.map(\.bounds).reduce(Rect2.empty) { $0.union($1) }
+        file.placedBounds = placed.map { $0.modelBounds ?? $0.bounds }.reduce(Rect2.empty) { $0.union($1) }
         if file.kind == .vectors, !placed.isEmpty {
             file.moved = (file.placedBounds.min - file.fileBounds.min).length > 1e-6
         }

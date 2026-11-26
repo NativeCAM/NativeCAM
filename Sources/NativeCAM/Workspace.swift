@@ -42,7 +42,12 @@ final class Workspace {
     var restartPreset: RestartPreset?
     /// Export Group… or Export Selected Toolpaths…, waiting for the window to run it.
     var subsetExport: SubsetExportRequest?
-    var viewPreset: ViewPreset? = .iso
+    /// A request to move the camera to a view: the viewport takes it and sets it back to nil.
+    var viewPreset: ViewPreset? = .iso {
+        didSet { if let viewPreset { shownView = viewPreset } }
+    }
+    /// The view last asked for, which the toolbar's picker shows (`viewPreset` is nil again once the camera has moved).
+    var shownView: ViewPreset = .iso
     var fitRequest = 0
     var showVectors = true
     var showToolpaths = true
