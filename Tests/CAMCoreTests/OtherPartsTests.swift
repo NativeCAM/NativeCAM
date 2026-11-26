@@ -270,12 +270,14 @@ struct OtherPartsTests {
         #expect(parts.excluding(opB.id, angle: 180).parts.isEmpty)
     }
 
-    /// Parts are built for leads and reliefs, and (#186) for an outside cut with another toolpath, which is checked
+    /// Parts are built for leads and reliefs, and (#186, #190) for a profile with another toolpath, which is checked
     /// against them; not otherwise.
-    @Test func noPartsAreBuiltWithoutLeadsReliefsOrAnOutsideCut() {
+    @Test func noPartsAreBuiltWithoutLeadsReliefsOrAProfile() {
         let (a, b, _) = Self.squares()
-        let plain = Fixture.project(shapes: [a, b], ops: [CutFixture.profile([a], side: .inside), CutFixture.pocket([b])])
+        let plain = Fixture.project(shapes: [a, b], ops: [CutFixture.pocket([a]), CutFixture.pocket([b])])
         #expect(!ProtectedRegions.needed(plain))
+        let inside = Fixture.project(shapes: [a, b], ops: [CutFixture.profile([a], side: .inside), CutFixture.pocket([b])])
+        #expect(ProtectedRegions.needed(inside))
         let alone = Fixture.project(shapes: [a], ops: [CutFixture.profile([a])])
         #expect(!ProtectedRegions.needed(alone))
         let cutOut = Fixture.project(shapes: [a, b], ops: [CutFixture.profile([a]), CutFixture.pocket([b])])
