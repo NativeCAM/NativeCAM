@@ -317,10 +317,16 @@ enum ProfileGenerator {
                     }
                     guard hit else { continue }
                     guard reported.insert("\(name)|\(zone.name)").inserted else { continue }
-                    // From the wall (or line) to the other part: the zone is that part grown by the bit's radius.
-                    let edge = walls.flatMap { Self.samples($0, every: 1) }.map { q in zone.contains(q) ? 0
-                        : zone.regions.flatMap(\.loops).map { $0.closestPoint(to: q).distance }.min() ?? .infinity }.min() ?? 0
-                    let gap = min(reachFromWall, edge + max(0, r - ProtectedRegions.tolerance))
+                    // From the wall (or line) to the other part: the zone is that part grown by `grow`, so a point
+                    // `d` from the zone's edge is `grow + d` from the part outside it and `grow - d` inside it (#194: an
+                    // on-line cut's line lies inside the zone it's refused for).
+                    let grow = max(0, r - ProtectedRegions.tolerance)
+                    let loops = zone.regions.flatMap(\.loops)
+                    let toPart = walls.flatMap { Self.samples($0, every: 1) }.map { q in
+                        let d = loops.map { $0.closestPoint(to: q).distance }.min() ?? .infinity
+                        return zone.contains(q) ? max(0, grow - d) : grow + d
+                    }.min() ?? grow
+                    let gap = min(reachFromWall, toPart)
                     let cut = params.side == .on ? "along" : "round"
                     let reach = params.side == .on ? "reach either side of the line" : "reach from the wall"
                     errors.append("Refused: the cut \(cut) “\(name)” comes within \(context.length(gap)) of the part “\(zone.name)” "
