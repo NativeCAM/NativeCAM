@@ -308,7 +308,14 @@ enum ProfileGenerator {
             var reported = Set<String>()
             for zone in zones {
                 for (name, path, walls) in paths {
-                    guard Self.samples(path, every: 0.5).contains(where: zone.contains) else { continue }
+                    // Only the zone's parts whose boxes reach the path can hold a point of it.
+                    let box = path.bounds.insetBy(-0.01)
+                    let near = zone.regions.indices.filter { zone.bounds[$0].intersects(box) }
+                    guard !near.isEmpty else { continue }
+                    let hit = Self.samples(path, every: 0.5).contains { q in
+                        near.contains { zone.bounds[$0].contains(q) && zone.regions[$0].contains(q) }
+                    }
+                    guard hit else { continue }
                     guard reported.insert("\(name)|\(zone.name)").inserted else { continue }
                     // From the wall (or line) to the other part: the zone is that part grown by the bit's radius.
                     let edge = walls.flatMap { Self.samples($0, every: 1) }.map { q in zone.contains(q) ? 0
