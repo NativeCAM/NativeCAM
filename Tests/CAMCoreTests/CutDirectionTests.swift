@@ -248,12 +248,15 @@ struct CutDirectionTests {
         let p = Self.finish(direction, strategy: .spiral)
         let tp = try Self.toolpath(p)
         let t = Self.turning(tp, about: Vec2(40, 30))
+        // The other way round are only the links in the rectangle's corners: from where one arc leaves the boundary
+        // along the surface to where the next comes back in. On the model's exact outline (#202) its corners are
+        // square, so most of those stay down (about 9% of the arcs' length here); the arcs themselves all go one way.
         switch direction {
         case .climb:
-            #expect(t.ccw > 500 && t.cw < 0.03 * t.ccw, "\(t)")
+            #expect(t.ccw > 500 && t.cw < 0.12 * t.ccw, "\(t)")
             #expect((tp.directionTime?.extraSeconds ?? 0) > 0)
         case .conventional:
-            #expect(t.cw > 500 && t.ccw < 0.03 * t.cw, "\(t)")
+            #expect(t.cw > 500 && t.ccw < 0.12 * t.cw, "\(t)")
         case .both:
             #expect(t.cw > 0.05 * t.ccw, "\(t)")
         }

@@ -112,6 +112,8 @@ enum TileSplitter {
                 var tp = raw
                 tp.tile = k
                 let uncut = op.map { $0.adjustsFeedsForLoad && FeedScheduler.suits(tp.tool) } == true ? model.grid : nil
+                // Flutes that follow a model: the material over it before they cut (#203).
+                let uncutForReach = op.map(FluteReach.follows) == true ? model.grid : nil
                 if stock.retract == .minimum {
                     var s = settings
                     s.stayDownLimit = max(3 * tp.tool.diameter, 10)
@@ -126,7 +128,12 @@ enum TileSplitter {
                     tp = scheduled
                     issues.append(contentsOf: notes)
                 }
-                if let op { issues.append(contentsOf: CAMEngine.validate(tp, operation: op, project: project, checkTravel: false)) }
+                if let op {
+                    let over = uncutForReach.flatMap { grid in
+                        FluteReach.surface(op, project: project).flatMap { FluteReach.stockOver(tp, surface: $0, grid: grid) }
+                    }
+                    issues.append(contentsOf: CAMEngine.validate(tp, operation: op, project: project, checkTravel: false, stockOverModel: over))
+                }
                 tiles[k].append(tp)
             }
         }

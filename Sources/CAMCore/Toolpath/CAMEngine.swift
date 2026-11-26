@@ -266,6 +266,12 @@ public enum CAMEngine {
         }
         // The stock as the last 3D rotary roughing left it, for the toolpaths after it (see `GenerationContext.rotaryMaterial`).
         var roughed: RadialGrid?
+        // A wrapped job with flutes that follow a model: the blank as the wrapped toolpaths before them leave it, 3D rotary
+        // roughing, finishing and rounding included, for how far the flutes reach down through it (`FluteReach`, #203).
+        // Coarse (`FluteReach.radialCell`): a 3D rotary finish carved on the simulation's fine grid takes longer than
+        // generating it.
+        var radial = wrap != nil && project.operations.contains { $0.enabled && FluteReach.follows($0) }
+            ? RadialSimulator(stock: stock, cellSize: FluteReach.radialCell, maxCells: FluteReach.radialCells) : nil
         func generateAll(_ given: CAMOperation, stockRadius: (@Sendable (Double) -> Double)?) -> Generated? {
             // A cut-out with strips under its evenly spaced tabs is cut with them at their fixed places.
             let op = holding.anchoring(given)
@@ -403,6 +409,8 @@ public enum CAMEngine {
                     let face = faceKey(angle)
                     var model = models.removeValue(forKey: face) ?? newModel()
                     defer { models[face] = model }
+                    // Flutes that follow a model on a flat job: the material over it before they cut (#203).
+                    let uncutForReach = wrap == nil && FluteReach.follows(op) ? model.grid : nil
                     // Feeds that follow the load measure the material as it is before this toolpath cuts.
                     let uncut = layout == nil && wrap == nil && op.adjustsFeedsForLoad && FeedScheduler.suits(tp.tool) ? model.grid : nil
                     // Wrapped toolpaths link through safe Z: the blank turns as the tool moves across the sheet, and
@@ -465,7 +473,13 @@ public enum CAMEngine {
                     issues.append(contentsOf: (tp.errors ?? []).map { JobIssue(.error, $0, operation: tp.name) })
                     issues.append(contentsOf: tp.warnings.map { JobIssue(.warning, $0, operation: tp.name) })
                     issues.append(contentsOf: (tp.notes ?? []).map { JobIssue(.info, $0, operation: tp.name) })
-                    issues.append(contentsOf: validate(tp, operation: op, project: project))
+                    var stockOverModel: Double?
+                    if let surface = FluteReach.surface(op, project: project) {
+                        stockOverModel = uncutForReach.flatMap { FluteReach.stockOver(tp, surface: surface, grid: $0) }
+                            ?? radial.flatMap { FluteReach.stockOver(tp, surface: surface, radial: $0.grid) }
+                    }
+                    issues.append(contentsOf: validate(tp, operation: op, project: project, stockOverModel: stockOverModel))
+                    if wrap != nil, radial != nil { tp.forEachMotion { s, m in radial!.apply(m, from: s, tool: tp.tool) } }
                     toolpaths.append(tp)
                 }
             }
@@ -944,7 +958,10 @@ public enum CAMEngine {
     }
 
     /// Safety and sanity checks: material thickness, tool reach, machine travel, spindle range, rapids into stock.
-    public static func validate(_ tp: Toolpath, operation op: CAMOperation, project: Project, checkTravel: Bool = true) -> [JobIssue] {
+    /// `stockOverModel`: for flutes that follow a 3D model, the thickest stock still over the model under them before they
+    /// cut (`FluteReach`); nil when it isn't known, and the flute depth alone is taken as the reach.
+    public static func validate(_ tp: Toolpath, operation op: CAMOperation, project: Project, checkTravel: Bool = true,
+                                stockOverModel: Double? = nil) -> [JobIssue] {
         var issues: [JobIssue] = []
         let stock = project.stock
         let machine = project.machine
@@ -989,22 +1006,45 @@ public enum CAMEngine {
                 + "afterwards with a tabbed profile, which holds this toolpath's floor above its tabs.", operation: tp.name))
         }
         // Tool reach. 3D rotary roughing and finishing measure their own, from the stock they cut rather than the sheet's top.
-        // Flutes that follow a model go no deeper than their depth below its surface (the 3D finish before them has
-        // cleared the wood above it), so that's what the bit's cutting length has to reach, not the depth below the
-        // sheet's top or the blank's surface (#139).
+        // Flutes that follow a model go their depth below its surface, not below the sheet's top or the blank's surface
+        // (#139), so once a 3D finish has cleared the wood over the model that's what the bit has to reach. Where stock is
+        // still over the model (the flutes cut first, or the model sunk below the top), the bit goes down through it as
+        // well: the reach is measured from the material left above the flutes before they cut (`FluteReach`, #203).
         var reach = deepest
-        if case let .fluting(f) = op.kind, f.surfaceModelID != nil { reach = f.depth }
+        var throughStock: Double?
+        if case let .fluting(f) = op.kind, f.surfaceModelID != nil {
+            reach = f.depth
+            if let over = stockOverModel, over > FluteReach.slack {
+                reach = f.depth + over
+                throughStock = f.depth
+            }
+        }
         // Past the flutes the shank rubs, which is worth a clear warning; past the stickout a 2.5D cut drives the collet
         // nut into the stock, which is an error (#151). A 3D surface can fall away from the collet, so there it stays the
         // warning.
         if op.kind.is3D && op.kind.turnsWholeBlank {
         } else if !op.kind.is3D, reach > tp.tool.stickout + 1e-6 {
-            issues.append(JobIssue(.error, "Depth \(fmt(reach)) is more than \(tp.tool.name) sticks out of the collet "
-                + "(\(fmt(tp.tool.stickout))), so the collet nut would hit the stock. Cut shallower, or let the bit out "
-                + "further and set its stickout.", operation: tp.name))
+            if let depth = throughStock {
+                issues.append(JobIssue(.error, "Goes \(fmt(reach)) down through the stock over the 3D model it follows (the "
+                    + "flutes are \(fmt(depth)) below the model's surface, but the wood above it isn't cut away first), more than "
+                    + "\(tp.tool.name) sticks out of the collet (\(fmt(tp.tool.stickout))), so the collet nut would hit the stock. "
+                    + "Cut the model's 3D finish or roughing before these flutes, or let the bit out further and set its stickout.",
+                    operation: tp.name))
+            } else {
+                issues.append(JobIssue(.error, "Depth \(fmt(reach)) is more than \(tp.tool.name) sticks out of the collet "
+                    + "(\(fmt(tp.tool.stickout))), so the collet nut would hit the stock. Cut shallower, or let the bit out "
+                    + "further and set its stickout.", operation: tp.name))
+            }
         } else if reach > tp.tool.fluteLength + 1e-6 {
-            issues.append(JobIssue(.warning, "Depth \(fmt(reach)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))), "
-                + "so the shank rubs below the flutes.", operation: tp.name))
+            if let depth = throughStock {
+                issues.append(JobIssue(.warning, "Goes \(fmt(reach)) down through the stock over the 3D model it follows (the "
+                    + "flutes are \(fmt(depth)) below the model's surface, but the wood above it isn't all cut away first): that "
+                    + "exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))), so the shank rubs below the "
+                    + "flutes. Clear the stock over the model before these flutes.", operation: tp.name))
+            } else {
+                issues.append(JobIssue(.warning, "Depth \(fmt(reach)) exceeds the cutting length of \(tp.tool.name) (\(fmt(tp.tool.fluteLength))), "
+                    + "so the shank rubs below the flutes.", operation: tp.name))
+            }
         }
         // On rotary stock the chuck and tailstock are past the ends of the blank: the whole cutter stays inside it.
         if stock.rotary != nil, ext.min.x < tp.tool.radius - 1e-6 || ext.max.x > stock.width - tp.tool.radius + 1e-6 {

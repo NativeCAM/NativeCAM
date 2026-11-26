@@ -113,7 +113,8 @@ struct TravelCheckTests {
                                              ("table leg", .demoTableLeg()), ("nesting", .demoNesting())]
         let root = Self.fixtures.deletingLastPathComponent()
         let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
-        for url in files where url.pathExtension == "nativecam" && url.deletingLastPathComponent().lastPathComponent != "travel" {
+        // `travel` and `flute-reach` (#203) hold fixtures made to trip these errors.
+        for url in files where url.pathExtension == "nativecam" && !["travel", "flute-reach"].contains(url.deletingLastPathComponent().lastPathComponent) {
             guard let p = try? Project.decode(Data(contentsOf: url)) else { continue }
             projects.append((url.lastPathComponent, p))
         }
