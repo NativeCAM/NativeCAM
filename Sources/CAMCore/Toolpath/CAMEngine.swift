@@ -546,6 +546,7 @@ public enum CAMEngine {
                         + "Use Toolpaths ▸ Optimize Run Order to fix the order.", operation: early.name))
                 }
             }
+            issues += crossGroupIssues(r.crossGroup, project: project)
             if r.changed { reorder = r }
             if r.toolChangesAfter < r.toolChangesBefore {
                 let saved = r.toolChangesBefore - r.toolChangesAfter
@@ -557,6 +558,34 @@ public enum CAMEngine {
             }
         }
         return (issues, reorder)
+    }
+
+    /// A dependency that runs the wrong way across toolpath groups: Optimize Run Order keeps groups in the user's order,
+    /// so it's for the user to move the group.
+    static func crossGroupIssues(_ crossGroup: [OperationScheduler.Result.Late], project: Project) -> [JobIssue] {
+        let byID = Dictionary(project.operations.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        func run(_ op: CAMOperation) -> String {
+            op.groupID.flatMap { project.toolpathGroup(id: $0) }.map { "group “\($0.name)”" } ?? "the ungrouped toolpaths"
+        }
+        var seen = Set<String>()
+        var out: [JobIssue] = []
+        for late in crossGroup {
+            guard let early = byID[late.operation], let later = byID[late.mustPrecede] else { continue }
+            let why: String
+            if RestMachining.dependencies(of: later, in: project).contains(early.id) {
+                why = "“\(later.name)” rests on it, so it has to cut first"
+            } else if early.kind.is3D && later.kind.is3D {
+                why = "it's the roughing “\(later.name)” finishes"
+            } else if !early.kind.needsShapes {
+                why = "it rounds the blank “\(later.name)” cuts"
+            } else {
+                why = "it's inside the part “\(later.name)” cuts free"
+            }
+            let message = "Has to run before “\(later.name)” (\(why)), but \(run(early)) runs after \(run(later)). Optimize Run Order "
+                + "keeps groups in your order: move \(run(early)) before \(run(later))."
+            if seen.insert(early.id.uuidString + message).inserted { out.append(JobIssue(.warning, message, operation: early.name)) }
+        }
+        return out
     }
 
     /// Tiling that's on but can't apply: a rotary job, or material that fits in one tile.

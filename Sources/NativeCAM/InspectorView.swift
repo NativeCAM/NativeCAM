@@ -12,6 +12,8 @@ struct InspectorView: View {
                 OperationInspector(op: $project.operations[index], project: project, workspace: workspace) { other in
                     if let i = project.operations.firstIndex(where: { $0.id == other.id }) { project.operations[i] = other }
                 }
+            } else if let g = workspace.selectedGroupID, project.toolpathGroup(id: g) != nil {
+                GroupInspector(project: $project, workspace: workspace, group: g)
             } else if workspace.selectedShapeIDs.count == 1, let index = project.shapes.firstIndex(where: { $0.id == workspace.selectedShapeIDs[0] }) {
                 let id = project.shapes[index].id
                 ShapeInspector(shape: $project.shapes[index], units: project.displayUnits, stock: project.stock,
@@ -25,6 +27,49 @@ struct InspectorView: View {
                 SetupInspector(project: $project)
             }
         }
+    }
+}
+
+// MARK: Toolpath group
+
+/// A toolpath group: its name, the switches that set its members, and what it cuts.
+struct GroupInspector: View {
+    @Binding var project: Project
+    @Bindable var workspace: Workspace
+    let group: UUID
+
+    var body: some View {
+        let members = project.members(ofGroup: group)
+        let included = members.filter(\.enabled)
+        Form {
+            Section("Group") {
+                TextField("Name", text: Binding(get: { project.toolpathGroup(id: group)?.name ?? "" },
+                                                set: { if !$0.isEmpty { project.renameGroup(group, to: $0) } }))
+                Toggle("Include in output", isOn: Binding(get: { project.inclusion(ofGroup: group) != .none },
+                                                          set: { project.setGroupIncluded(group, $0) }))
+                    .help("Sets “Include in output” on each of the group's toolpaths")
+                Toggle("Show in the 3D view", isOn: Binding(get: { !members.allSatisfy(\.isHidden) },
+                                                            set: { project.setGroupHidden(group, !$0) }))
+                    .help("Display only: hidden toolpaths still cut, simulate and export")
+                if project.inclusion(ofGroup: group) == .mixed {
+                    SectionNote(text: "\(included.count) of its \(members.count) toolpaths are included in the output.")
+                }
+            }
+            Section("Toolpaths, in run order") {
+                ForEach(members) { op in
+                    LabeledContent(op.name, value: "T\(op.tool.number)\(op.enabled ? "" : ", not included")")
+                }
+            }
+            Section {
+                Button("Export Group…") {
+                    workspace.subsetExport = SubsetExportRequest(operationIDs: Set(members.map(\.id)), group: group)
+                }
+                .disabled(included.isEmpty)
+                SectionNote(text: "Saves only this group's toolpaths, cut down from the whole job, so their links are the job's. "
+                    + "Toolpaths that run before it are assumed cut; the export says which, and offers to retract fully between cuts.")
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

@@ -484,11 +484,15 @@ public struct ToolpathTemplate: Hashable, Sendable {
     public var operations: [CAMOperation]
     /// The job's material, zero and heights, if saved with it.
     public var jobSetup: JobSetup?
+    /// The toolpath groups the toolpaths are in (`CAMOperation.groupID`). Applying the template makes them again with new
+    /// ids, so applying it twice makes two sets. They change no cut, so they don't raise the template's format.
+    public var toolpathGroups: [ToolpathGroup] = []
 
-    public init(name: String, operations: [CAMOperation], jobSetup: JobSetup? = nil) {
+    public init(name: String, operations: [CAMOperation], jobSetup: JobSetup? = nil, toolpathGroups: [ToolpathGroup] = []) {
         self.name = name
         self.operations = operations
         self.jobSetup = jobSetup
+        self.toolpathGroups = toolpathGroups
     }
 
     /// The toolpaths `operationIDs` picks from `project` (all of them when nil), in run order.
@@ -496,6 +500,8 @@ public struct ToolpathTemplate: Hashable, Sendable {
         self.name = name
         operations = project.operations.filter { operationIDs?.contains($0.id) ?? true }.map { Self.templateCopy(of: $0, in: project) }
         jobSetup = includeJobSetup ? JobSetup(project) : nil
+        let used = Set(operations.compactMap(\.groupID))
+        toolpathGroups = project.toolpathGroups.filter { used.contains($0.id) }
     }
 
     /// The project file format this template needs: the newest its toolpaths need. A build that reads an older
@@ -558,7 +564,7 @@ public struct ToolpathTemplate: Hashable, Sendable {
 }
 
 extension ToolpathTemplate: Codable {
-    private enum CodingKeys: String, CodingKey { case type, formatVersion, name, toolpaths, jobSetup }
+    private enum CodingKeys: String, CodingKey { case type, formatVersion, name, toolpaths, jobSetup, toolpathGroups }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -573,6 +579,7 @@ extension ToolpathTemplate: Codable {
         name = try c.decode(String.self, forKey: .name)
         operations = try c.decode([CAMOperation].self, forKey: .toolpaths)
         jobSetup = try c.decodeIfPresent(JobSetup.self, forKey: .jobSetup)
+        toolpathGroups = try c.decodeIfPresent([ToolpathGroup].self, forKey: .toolpathGroups) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -582,6 +589,7 @@ extension ToolpathTemplate: Codable {
         try c.encode(name, forKey: .name)
         try c.encode(operations, forKey: .toolpaths)
         try c.encodeIfPresent(jobSetup, forKey: .jobSetup)
+        if !toolpathGroups.isEmpty { try c.encode(toolpathGroups, forKey: .toolpathGroups) }
     }
 }
 
@@ -776,9 +784,13 @@ extension ToolpathTemplate {
 
         var added: [UUID] = []
         var rows: [Application.Row] = []
+        // The template's groups, made again with new ids.
+        var groups: [UUID: ToolpathGroup] = [:]
+        for g in toolpathGroups where groups[g.id] == nil { groups[g.id] = ToolpathGroup(name: g.name, isCollapsed: g.isCollapsed) }
         for source in operations {
             var op = source
             op.id = UUID()
+            op.groupID = source.groupID.flatMap { groups[$0]?.id }
             let looksOn = op.kind.needsShapes ? source.vectorSelection?.layerNames ?? [] : []
             if choice == .skip, !looksOn.isEmpty, looksOn.allSatisfy({ !project.hasLayer($0) }) {
                 rows.append(Application.Row(id: op.id, name: op.name, kind: op.kind.label, rule: source.vectorSelection, shapeCount: 0,
@@ -812,7 +824,9 @@ extension ToolpathTemplate {
             rows.append(Application.Row(id: op.id, name: op.name, kind: op.kind.label, rule: rule, shapeCount: op.shapeIDs.count,
                             isEmpty: op.kind.needsShapes && op.shapeIDs.isEmpty))
         }
+        p.toolpathGroups += toolpathGroups.compactMap { groups[$0.id] }.filter { g in p.operations.contains { $0.groupID == g.id } }
         p.fitDepthsToMaterial()
+        p.normalizeGroups()
         return Application(project: p, addedOperationIDs: added, rows: rows, tools: uses, setupChanges: setupChanges,
                            machineNote: jobSetup?.machineNote(for: project), missingLayers: missing,
                            createdLayers: choice == .create ? missing : [])

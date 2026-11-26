@@ -56,32 +56,23 @@ struct SidebarView: View {
             }
 
             Section {
-                ForEach(Array(project.operations.enumerated()), id: \.element.id) { index, op in
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color(simd: workspace.colorForOperation(index)))
-                            .frame(width: 8, height: 8)
-                        Label {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(op.name).foregroundStyle(op.enabled ? .primary : .secondary)
-                                // A clearance tool cuts first: "T10, then T2 1/8" Upcut End Mill".
-                                Text("\(op.clearanceTool.map { "T\($0.number), then " } ?? "")T\(op.tool.number) \(op.tool.name)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        } icon: { Image(systemName: icon(for: op.kind)) }
-                        Spacer()
-                        Toggle("", isOn: Binding(get: { op.enabled }, set: { project.operations[index].enabled = $0 }))
-                            .labelsHidden().toggleStyle(.checkbox)
-                            .help("Include in output")
-                    }
-                    .tag(SidebarItem.operation(op.id))
-                    .cardRow(index, of: project.operations.count)
-                    .contextMenu {
-                        Button("Duplicate") { duplicate(op) }
-                        Button("Delete", role: .destructive) { delete(operation: op.id) }
+                let rows = project.runOrderRows()
+                ForEach(Array(rows.enumerated()), id: \.element) { index, row in
+                    switch row {
+                    case let .group(g):
+                        groupRow(g)
+                            .tag(SidebarItem.toolpathGroup(g))
+                            .cardRow(index, of: rows.count)
+                    case let .operation(id):
+                        if let k = project.operations.firstIndex(where: { $0.id == id }) {
+                            operationRow(k)
+                                .tag(SidebarItem.operation(id))
+                                .cardRow(index, of: rows.count)
+                        }
                     }
                 }
-                .onMove { project.operations.move(fromOffsets: $0, toOffset: $1) }
+                // A toolpath dropped among a group's rows joins it; a group's header moves the whole group.
+                .onMove { project.moveRows(fromOffsets: $0, toOffset: $1) }
                 if project.operations.isEmpty {
                     Placeholder("Select shapes, then add a toolpath.")
                 }
@@ -133,6 +124,194 @@ struct SidebarView: View {
 
     private func fmt(_ mm: Double) -> String { project.displayUnits.format(mm, decimals: project.displayUnits == .inch ? 3 : 1) }
 
+    // MARK: Run order rows
+
+    /// A toolpath's row: colour, name and tool, its eye and its "Include in output" checkbox, indented in a group.
+    @ViewBuilder
+    private func operationRow(_ index: Int) -> some View {
+        let op = project.operations[index]
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(simd: workspace.colorForOperation(index)))
+                .frame(width: 8, height: 8)
+                .opacity(op.isHidden ? 0.35 : 1)
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(op.name).foregroundStyle(op.enabled ? .primary : .secondary)
+                    // A clearance tool cuts first: "T10, then T2 1/8" Upcut End Mill".
+                    Text("\(op.clearanceTool.map { "T\($0.number), then " } ?? "")T\(op.tool.number) \(op.tool.name)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: { Image(systemName: icon(for: op.kind)) }
+            Spacer()
+            EyeButton(hidden: op.isHidden) { project.setHidden([op.id], !op.isHidden) }
+            Toggle("", isOn: Binding(get: { op.enabled }, set: { project.operations[index].enabled = $0 }))
+                .labelsHidden().toggleStyle(.checkbox)
+                .help("Include in output")
+        }
+        .padding(.leading, op.groupID == nil ? 0 : 14)
+        .contextMenu { operationMenu(op) }
+    }
+
+    /// A group's header: fold, name, its tools and run time, its worst open check when folded, its eye and its checkbox,
+    /// which sets each member's "Include in output".
+    @ViewBuilder
+    private func groupRow(_ g: UUID) -> some View {
+        let group = project.toolpathGroup(id: g) ?? ToolpathGroup(id: g, name: "Group")
+        let members = project.members(ofGroup: g)
+        let allHidden = !members.isEmpty && members.allSatisfy(\.isHidden)
+        HStack(spacing: 6) {
+            Button {
+                project.setGroupCollapsed(g, !group.collapsed)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .rotationEffect(.degrees(group.collapsed ? 0 : 90))
+                    .frame(width: 8)
+            }
+            .buttonStyle(.borderless)
+            .help(group.collapsed ? "Show the group's toolpaths" : "Fold the group")
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(group.name).fontWeight(.semibold)
+                        .foregroundStyle(project.inclusion(ofGroup: g) == .none ? .secondary : .primary)
+                    Text(groupSummary(members)).font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: { Image(systemName: "folder") }
+            Spacer()
+            if group.collapsed, let badge = groupBadge(members) {
+                Label("\(badge.count)", systemImage: badge.severity == .error ? "xmark.octagon.fill" : badge.severity == .warning
+                      ? "exclamationmark.triangle.fill" : "info.circle")
+                    .labelStyle(.titleAndIcon).font(.caption)
+                    .foregroundStyle(badge.severity == .error ? .red : badge.severity == .warning ? .orange : .secondary)
+                    .help("\(badge.count) check\(badge.count == 1 ? "" : "s") on the group's toolpaths: see Checks")
+            }
+            EyeButton(hidden: allHidden) { project.setGroupHidden(g, !allHidden) }
+            Toggle(sources: groupInclusionBindings(g, count: members.count), isOn: \.self) { EmptyView() }
+                .labelsHidden().toggleStyle(.checkbox)
+                .help("Include the group's toolpaths in output")
+        }
+        .contextMenu { groupMenu(g) }
+    }
+
+    /// One binding per member for the group's three-state checkbox; setting any sets them all in one change.
+    private func groupInclusionBindings(_ g: UUID, count: Int) -> [Binding<Bool>] {
+        project.members(ofGroup: g).map { op in
+            Binding(get: { project.operations.first { $0.id == op.id }?.enabled ?? false },
+                    set: { v in if project.inclusion(ofGroup: g) != (v ? .all : .none) { project.setGroupIncluded(g, v) } })
+        }
+    }
+
+    /// "T1, T5 · 4:12": the tools the group's included toolpaths use, in order, and their run time.
+    private func groupSummary(_ members: [CAMOperation]) -> String {
+        var tools: [Int] = []
+        for op in members where op.enabled {
+            for t in [op.clearanceTool?.number, op.tool.number].compactMap({ $0 }) where !tools.contains(t) { tools.append(t) }
+        }
+        let ids = Set(members.filter(\.enabled).map(\.id))
+        var seconds = 0.0
+        if let job = workspace.job, let e = job.estimate {
+            for (tp, t) in zip(job.toolpaths, e.toolpathSeconds) where ids.contains(tp.sourceOperationID) { seconds += t }
+        }
+        let n = members.count
+        let what = tools.isEmpty ? "\(n) toolpath\(n == 1 ? "" : "s"), none included" : tools.map { "T\($0)" }.joined(separator: ", ")
+        return seconds > 0 ? "\(what) · \(formatDuration(seconds))" : what
+    }
+
+    /// The worst open check on the group's toolpaths, and how many there are.
+    private func groupBadge(_ members: [CAMOperation]) -> (severity: Severity, count: Int)? {
+        let names = Set(members.map(\.name))
+        let issues = (workspace.job?.issues ?? []).filter { $0.operation.map(names.contains) ?? false }
+        let order: [Severity] = [.error, .warning, .info]
+        guard let worst = order.first(where: { s in issues.contains { $0.severity == s } }) else { return nil }
+        return (worst, issues.count)
+    }
+
+    /// The toolpaths a menu item acts on: the selection when the clicked one is in it, else the clicked one.
+    private func targets(_ op: CAMOperation) -> Set<UUID> {
+        let selected = workspace.selectedOperationIDs(in: project)
+        return selected.contains(op.id) ? selected : [op.id]
+    }
+
+    @ViewBuilder
+    private func operationMenu(_ op: CAMOperation) -> some View {
+        let ids = targets(op)
+        Button("Group Selected") { group(ids) }
+        if !project.toolpathGroups.isEmpty {
+            Menu("Move to Group") {
+                ForEach(project.toolpathGroups) { g in
+                    Button(g.name) { project.moveOperations(ids, toGroup: g.id) }.disabled(ids.allSatisfy { id in
+                        project.operations.first { $0.id == id }?.groupID == g.id })
+                }
+            }
+        }
+        if project.operations.contains(where: { ids.contains($0.id) && $0.groupID != nil }) {
+            Button("Remove from Group") { project.removeFromGroup(ids) }
+        }
+        Divider()
+        Button(op.isHidden ? "Show" : "Hide") { project.setHidden(ids, !op.isHidden) }
+        Button("Hide Others") { project.showOnly(ids) }
+        Button(ids.count == 1 ? "Export Toolpath…" : "Export Selected Toolpaths…") {
+            workspace.subsetExport = SubsetExportRequest(operationIDs: ids, group: nil)
+        }
+        Divider()
+        Button("Duplicate") { duplicate(op) }
+        Button("Delete", role: .destructive) { delete(operations: ids) }
+    }
+
+    @ViewBuilder
+    private func groupMenu(_ g: UUID) -> some View {
+        let members = Set(project.members(ofGroup: g).map(\.id))
+        Button("Rename…") { rename(g) }
+        Button("Ungroup") { project.ungroup(g); workspace.selection = Set(members.map { .operation($0) }) }
+        Button("Duplicate") {
+            if let copy = project.duplicateGroup(g) { workspace.selection = [.toolpathGroup(copy)] }
+        }
+        Divider()
+        Button("Export Group…") { workspace.subsetExport = SubsetExportRequest(operationIDs: members, group: g) }
+        Button("Hide Others") { project.showOnly(members) }
+        Divider()
+        Button("Delete Group…", role: .destructive) { deleteGroup(g) }
+    }
+
+    /// Group Selected: the toolpaths into a new group, named "Group n", then selected.
+    private func group(_ ids: Set<UUID>) {
+        guard let g = project.groupOperations(ids) else { return }
+        workspace.selection = [.toolpathGroup(g)]
+    }
+
+    private func rename(_ g: UUID) {
+        guard let group = project.toolpathGroup(id: g) else { return }
+        let ask = NSAlert()
+        ask.messageText = "Rename Group"
+        let field = NSTextField(string: group.name)
+        field.frame = NSRect(x: 0, y: 0, width: 240, height: 22)
+        ask.accessoryView = field
+        ask.addButton(withTitle: "Rename")
+        ask.addButton(withTitle: "Cancel")
+        ask.window.initialFirstResponder = field
+        let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+        guard ask.runModal() == .alertFirstButtonReturn else { return }
+        let new = field.stringValue.trimmingCharacters(in: .whitespaces)
+        if !new.isEmpty, new != name { project.renameGroup(g, to: new) }
+    }
+
+    /// Delete Group…: asks whether its toolpaths go too, or stay ungrouped.
+    private func deleteGroup(_ g: UUID) {
+        guard let group = project.toolpathGroup(id: g) else { return }
+        let n = project.members(ofGroup: g).count
+        let ask = NSAlert()
+        ask.messageText = "Delete the group “\(group.name)”?"
+        ask.informativeText = "Delete its \(n) toolpath\(n == 1 ? "" : "s") too, or keep them in the run order, ungrouped."
+        ask.addButton(withTitle: "Keep Toolpaths")
+        ask.addButton(withTitle: "Delete Toolpaths")
+        ask.addButton(withTitle: "Cancel")
+        switch ask.runModal() {
+        case .alertFirstButtonReturn: project.deleteGroup(g, keepToolpaths: true)
+        case .alertSecondButtonReturn: project.deleteGroup(g, keepToolpaths: false); workspace.selection = [.setup]
+        default: break
+        }
+    }
+
     private func icon(for kind: ShapeKind) -> String {
         switch kind {
         case .rectangle: "rectangle"
@@ -179,7 +358,12 @@ struct SidebarView: View {
         var copy = op
         copy.id = UUID()
         copy.name = op.name + " copy"
-        project.operations.append(copy)
+        // In a group, the copy goes at the group's end (groups stay in one piece); otherwise at the end of the run order.
+        if let g = op.groupID, let last = project.operations.lastIndex(where: { $0.groupID == g }) {
+            project.operations.insert(copy, at: last + 1)
+        } else {
+            project.operations.append(copy)
+        }
         workspace.selection = [.operation(copy.id)]
     }
 
@@ -193,15 +377,22 @@ struct SidebarView: View {
         workspace.selection = [.setup]
     }
 
-    private func delete(operation id: UUID) {
-        project.operations.removeAll { $0.id == id }
+    /// One change: a group left empty goes too.
+    private func delete(operations ids: Set<UUID>) {
+        var p = project
+        p.operations.removeAll { ids.contains($0.id) }
+        p.normalizeGroups()
+        project = p
         workspace.selection = [.setup]
     }
 
     private func deleteSelection() {
         let shapeIDs = Set(workspace.selectedShapeIDs)
         if !shapeIDs.isEmpty { delete(shapes: shapeIDs) }
-        if let op = workspace.selectedOperationID { delete(operation: op) }
+        // A group selected on its own asks first, as Delete Group… does.
+        if let g = workspace.selectedGroupID, workspace.selectedOperationID == nil { deleteGroup(g); return }
+        let ops = workspace.selectedOperationIDs(in: project)
+        if !ops.isEmpty { delete(operations: ops) }
     }
 }
 
@@ -510,5 +701,21 @@ extension View {
             .frame(maxWidth: .infinity, minHeight: 29, alignment: .leading)
             .listRowBackground(CardRowBackground(isFirst: index == 0, isLast: index == count - 1))
             .listRowSeparator(.hidden)
+    }
+}
+
+/// The eye on a toolpath or group row: hides or shows its lines in the 3D view. Display only: a hidden toolpath still
+/// cuts, simulates and exports.
+struct EyeButton: View {
+    var hidden: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: hidden ? "eye.slash" : "eye")
+                .foregroundStyle(hidden ? .tertiary : .secondary)
+        }
+        .buttonStyle(.borderless)
+        .help(hidden ? "Show in the 3D view (still cut and exported while hidden)" : "Hide in the 3D view (still cut and exported)")
     }
 }

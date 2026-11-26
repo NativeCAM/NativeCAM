@@ -26,6 +26,13 @@ import Foundation
 //                                                      file (from 1); --restart-from names the file that was running
 //                                                      and checks the project still writes it. A refusal exits 1 and
 //                                                      --force doesn't override it
+//   nativecam-cli post <project.nativecam> --group name | --toolpaths 1,3,Name [--full-retract] [--air-cut height]
+//                     [--sheet out.html] [-o out.tap] [--force]
+//                                                      write a file for part of the job: a toolpath group, or toolpaths
+//                                                      by number in the run order, id or name. It's the full job cut
+//                                                      down (never generated on its own), so it says which earlier
+//                                                      toolpaths it assumes were cut; --full-retract regenerates the job
+//                                                      with full retracts first. Writes "<project> - <group>.tap" unless -o
 //   nativecam-cli sim  <project.nativecam|file.tap> [--png out.png] [--cell mm] [--heights out.bin]
 //                                                      (--heights: little-endian header Int32 cols, Int32 rows,
 //                                                       Float64 cell, origin x, origin y, then Float32 heights)
@@ -273,6 +280,74 @@ func postRestart(_ project: Project, job: JobResult, airCut: Double?) {
     print("Estimated run time of the restart: \(formatTime(restart.remainingSeconds))")
 }
 
+/// `post --group name` / `--toolpaths list`: writes the file for part of the job, cut down from the full job, or exits 1.
+func postSubset(_ project: Project, job: JobResult, airCut: Double?) {
+    if args.contains(where: { $0.hasPrefix("--restart") }) { fail("Give --group or --toolpaths, or a restart, not both") }
+    var request: JobSubset.Request
+    var nameSuffix: String
+    if let name = option("--group", in: args) {
+        guard option("--toolpaths", in: args) == nil else { fail("Give --group or --toolpaths, not both") }
+        let matches = project.toolpathGroups.filter { $0.name == name || $0.id.uuidString.caseInsensitiveCompare(name) == .orderedSame }
+        guard matches.count == 1, let group = matches.first, let r = JobSubset.Request.group(group.id, in: project) else {
+            let names = project.toolpathGroups.map { "“\($0.name)”" }.joined(separator: ", ")
+            fail(matches.count > 1 ? "\(matches.count) groups are called “\(name)”: give its id instead"
+                : "No group “\(name)” in the project" + (names.isEmpty ? " (it has no groups)" : "; its groups are \(names)"))
+        }
+        request = r
+        nameSuffix = " - " + group.name
+    } else {
+        // Toolpaths by number in the run order (from 1), id or name, separated by commas.
+        var ids = Set<UUID>()
+        for item in option("--toolpaths", in: args)!.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if let n = Int(item) {
+                guard n >= 1, n <= project.operations.count else { fail("The project has \(project.operations.count) toolpaths; there's no \(n)") }
+                ids.insert(project.operations[n - 1].id)
+            } else if let op = project.operations.first(where: { $0.id.uuidString.caseInsensitiveCompare(item) == .orderedSame }) {
+                ids.insert(op.id)
+            } else {
+                let named = project.operations.filter { $0.name == item }
+                guard named.count == 1 else { fail(named.isEmpty ? "No toolpath “\(item)”" : "\(named.count) toolpaths are called “\(item)”: give its number") }
+                ids.insert(named[0].id)
+            }
+        }
+        request = .toolpaths(ids, in: project)
+        nameSuffix = " - " + (ids.count == 1 ? project.operations.first { ids.contains($0.id) }!.name : "selected")
+    }
+    request.fullRetract = args.contains("--full-retract")
+    request.airCut = airCut
+    let subset: JobSubset.Output
+    do { subset = try JobSubset.make(project, job: job, request: request) } catch { fail("Not written: \(error.localizedDescription)") }
+    for line in subset.header { print("  \(line)") }
+    for issue in subset.issues { print("[\(issue.severity.rawValue)] Part of the job: \(issue.text)") }
+    let jobErrors = job.issues.filter { $0.severity == .error }.count
+    let errors = subset.issues.filter { $0.severity == .error }.count
+    if jobErrors + errors > 0 {
+        var reasons: [String] = []
+        if jobErrors > 0 { reasons.append("the job has \(jobErrors) error\(jobErrors == 1 ? "" : "s")") }
+        if errors > 0 { reasons.append("the G-code failed \(errors) check\(errors == 1 ? "" : "s")") }
+        let reason = reasons.joined(separator: " and ")
+        guard args.contains("--force") else { fail("Not written: \(reason). Fix the errors above, or pass --force to write it anyway.") }
+        print("Writing it anyway (--force): \(reason).")
+    }
+    let stem = option("-o", in: args).map { ($0 as NSString).deletingPathExtension }
+        ?? ((args[1] as NSString).deletingPathExtension + nameSuffix)
+    let ext = subset.post.fileExtension
+    let names = JobExport.fileNames(subset.files, base: stem + "." + ext, fileExtension: ext)
+    for (file, path) in zip(subset.files, names) {
+        do { try file.gcode.write(toFile: path, atomically: true, encoding: .ascii) } catch { fail("Can't write \(path): \(error)") }
+    }
+    if let sheet = option("--sheet", in: args) {
+        let html = SetupSheet.html(project: subset.project, job: subset.job, gcodeFile: (names[0] as NSString).lastPathComponent,
+                                   checks: subset.issues, part: subset.setupSheetLines)
+        do { try html.write(toFile: sheet, atomically: true, encoding: .utf8) } catch { fail("Can't write \(sheet): \(error)") }
+        print("Setup sheet -> \(sheet)")
+    }
+    let lines = subset.files.map(\.gcode).joined().components(separatedBy: "\n").count - 1
+    print("Part of the job: \(subset.included.count) toolpath\(subset.included.count == 1 ? "" : "s"), \(lines) lines -> "
+          + names.joined(separator: ", "))
+    if let e = subset.job.estimate { print("Estimated run time of the part: \(formatTime(e.total))") }
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
     print("usage: nativecam-cli demo <out.nativecam> | post <project> [-o out.tap] [--restart-*] | surface [project] [-o file] | sim <project|tap> [--png out.png] [--cell mm]"
@@ -317,6 +392,10 @@ case "post":
     }
     if args.contains(where: { $0.hasPrefix("--restart") }) {
         postRestart(project, job: job, airCut: airCut)
+        exit(0)
+    }
+    if option("--group", in: args) != nil || option("--toolpaths", in: args) != nil {
+        postSubset(project, job: job, airCut: airCut)
         exit(0)
     }
     // One file, one per tool where the controller can't stop for a change, and on a tiled job that for each tile.

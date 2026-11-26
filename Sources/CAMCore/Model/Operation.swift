@@ -1941,6 +1941,19 @@ public struct CAMOperation: Identifiable, Hashable, Codable, Sendable {
     /// before and still checked the same way, so it doesn't raise the file format (as `adjustFeedsForLoad` doesn't).
     public var spindleSpeed: SpindleSpeedMode?
 
+    // MARK: Groups and visibility
+    /// The toolpath group (`Project.toolpathGroups`) this toolpath is in; nil = ungrouped. A group is a run of
+    /// consecutive toolpaths in the run order (`Project.normalizeGroups()`). It changes no cut, so an older build that
+    /// drops it cuts the same and it doesn't raise the file format.
+    public var groupID: UUID?
+    /// Hidden in the 3D view: display only. A hidden toolpath still generates, simulates, counts in the run time and
+    /// the checks, and exports; only "Include in output" (`enabled`) leaves it out. nil or false = shown. It changes no
+    /// cut, so it doesn't raise the file format.
+    public var hidden: Bool?
+
+    /// Whether the toolpath is hidden in the 3D view (`hidden`).
+    public var isHidden: Bool { hidden == true }
+
     public init(id: UUID = UUID(), name: String? = nil, enabled: Bool = true, kind: OperationKind,
                 shapeIDs: [UUID], tool: Tool, indexAngles: [Double]? = nil, vectorSelection: VectorSelection? = nil,
                 adjustFeedsForLoad: Bool? = nil, spindleSpeed: SpindleSpeedMode? = nil) {

@@ -9,6 +9,15 @@ enum SidebarItem: Hashable {
     case setup
     case shape(UUID)
     case operation(UUID)
+    case toolpathGroup(UUID)
+}
+
+/// Export Group… or Export Selected Toolpaths…, asked for from the sidebar and run by the window.
+struct SubsetExportRequest: Identifiable, Equatable {
+    let id = UUID()
+    var operationIDs: Set<UUID>
+    /// The group exported, for its name; nil for a selection.
+    var group: UUID?
 }
 
 /// Per-window state that isn't saved in the document: generated toolpaths, selection, simulation playback.
@@ -17,6 +26,8 @@ enum SidebarItem: Hashable {
 final class Workspace {
     // Generated output
     private(set) var job: JobResult?
+    /// The project `job` was generated from, as it cuts (`Project.cuttingState`).
+    private var jobSource: Project?
     private(set) var isGenerating = false
     private var generationTask: Task<Void, Never>?
     private var generationCounter = 0
@@ -29,6 +40,8 @@ final class Workspace {
     var inlayRequest: InlayRequest?
     /// File ▸ Export Restart… or Restart Here…: the restart sheet, preset to a point.
     var restartPreset: RestartPreset?
+    /// Export Group… or Export Selected Toolpaths…, waiting for the window to run it.
+    var subsetExport: SubsetExportRequest?
     /// A request to move the camera to a view: the viewport takes it and sets it back to nil.
     var viewPreset: ViewPreset? = .iso {
         didSet { if let viewPreset { shownView = viewPreset } }
@@ -131,10 +144,40 @@ final class Workspace {
         return nil
     }
 
+    /// Every toolpath selected, and the members of every group selected.
+    func selectedOperationIDs(in project: Project) -> Set<UUID> {
+        var ids = Set<UUID>()
+        for item in selection {
+            switch item {
+            case let .operation(id): ids.insert(id)
+            case let .toolpathGroup(g): ids.formUnion(project.members(ofGroup: g).map(\.id))
+            default: break
+            }
+        }
+        return ids
+    }
+
+    var selectedGroupID: UUID? {
+        for item in selection { if case let .toolpathGroup(id) = item { return id } }
+        return nil
+    }
+
+    /// The job for `project` as it cuts now; nil while it's still being generated after an edit, so nothing is exported
+    /// from toolpaths made before the edit.
+    func currentJob(for project: Project) -> JobResult? {
+        guard let job, !isGenerating, jobSource == project.cuttingState else { return nil }
+        return job
+    }
+
     // MARK: Toolpath generation
 
     /// Regenerates toolpaths in the background, debounced so typing in a field doesn't thrash.
     func regenerate(_ project: Project, debounce: Bool = true) {
+        // Hiding a toolpath or folding a group changes no cut: only the lines are drawn again.
+        if debounce, !isGenerating, job != nil, jobSource == project.cuttingState {
+            rebuildLines(project)
+            return
+        }
         generationTask?.cancel()
         generationCounter += 1
         let token = generationCounter
@@ -148,6 +191,7 @@ final class Workspace {
             }.value
             guard !Task.isCancelled, let self, token == self.generationCounter else { return }
             self.job = result
+            self.jobSource = project.cuttingState
             if self.sheet >= project.sheetCount { self.sheet = project.sheetCount - 1 }
             self.publishPreview(preview, project: project)
             self.publishRotaryPreview(radial, project: project)
@@ -798,6 +842,8 @@ final class Workspace {
         if showToolpaths && (!isSimulating || showToolpathsWhileSimulating) {
             let opIndex = Dictionary(uniqueKeysWithValues: project.operations.enumerated().map { ($1.id, $0) })
             for (i, tp) in toolpaths.enumerated() {
+                // A hidden toolpath still cuts (and simulates); only its lines aren't drawn.
+                if let k = opIndex[tp.sourceOperationID], project.operations[k].isHidden { continue }
                 var color = colorForOperation(opIndex[tp.sourceOperationID] ?? i)
                 // A rest-machined pocket's clearing (the larger bit) in a paler shade of the pocket's colour.
                 if let k = opIndex[tp.sourceOperationID], case let .pocket(p) = project.operations[k].kind,

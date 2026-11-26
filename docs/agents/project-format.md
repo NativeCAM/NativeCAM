@@ -41,6 +41,7 @@ Don't write a project from nothing. `nativecam-cli new` writes an empty project 
 | `tiling` | object | no | Cutting a job bigger than the bed in tiles; see [`TilingSettings.swift`](../../Sources/CAMCore/Model/TilingSettings.swift) and the `tiled-*` fixtures |
 | `additionalSheets` | array of `{"width", "height"}` | no | Sheets after the first on a job nested onto several. Written only when there are some. `nest` writes it for you |
 | `layers` | array of strings | no | Layers made by name with no shapes on them yet (`template apply --create-layers` writes them) |
+| `toolpathGroups` | array | no | Toolpath groups, in run order: [Toolpath groups and hiding](#toolpath-groups-and-hiding). Written only when there are some |
 
 Toolpaths and G-code are never stored. They're generated from the project every time.
 
@@ -217,6 +218,33 @@ shape = {"id": str(uuid.uuid4()).upper(), "name": "Pyramid", "layer": "Default",
 
 Reading an STL with your own code is fine for a test. For the human's real files, prefer the app's importer, which also handles units, orientation and repairs.
 
+## Toolpath groups and hiding
+
+A group names a run of consecutive toolpaths in `operations`, one level deep (no groups in groups). The run order is still the array's order.
+
+```json
+"toolpathGroups": [
+  {"id": "6E0C0000-0000-4000-8000-000000000001", "name": "Clear"},
+  {"id": "6E0C0000-0000-4000-8000-000000000002", "name": "Finish", "isCollapsed": true}
+],
+"operations": [
+  {"name": "Pocket plaque", "groupID": "6E0C0000-0000-4000-8000-000000000001", …},
+  {"name": "V-carve title", "groupID": "6E0C0000-0000-4000-8000-000000000002", …},
+  {"name": "Drill mounting holes", "hidden": true, …},
+  {"name": "Cut out sign", …}
+]
+```
+
+- **Members stay together.** Loading a project pulls each group's members together at its first member's place, keeping their order, clears a `groupID` that names no group, drops groups with no members and lists the groups in run order. So a member written in the wrong place moves: put members next to each other yourself, and check the order `post` prints.
+- **No group switch.** A group has no `enabled` of its own: the app's group checkbox sets each member's `enabled`. To leave a group out, set `"enabled": false` on each member.
+- **`isCollapsed`** folds the group in the sidebar. Display only.
+- **No format change.** `toolpathGroups`, `groupID`, `hidden` and `isCollapsed` change no cut, so they don't raise `formatVersion`, and an older build that drops them cuts the same.
+- **Optimize Run Order** reorders only inside each group and inside each stretch of ungrouped toolpaths between groups, and keeps the groups in order. A dependency the wrong way across groups (work inside a part in a group after the part's cut-out, a finish before its roughing, a rest pass before its reference) is a warning that says which group to move.
+- **Templates** keep their toolpaths' groups, under the template's own `toolpathGroups`, and applying one makes them again with new ids.
+- **Exporting a group:** `nativecam-cli post --group name` (see [Command line](cli.md#part-of-the-job-a-group-or-chosen-toolpaths)).
+
+See `Tests/CAMCoreTests/Fixtures/projects/toolpath-groups-v1.nativecam` and [`Fixtures/toolpath-groups/`](../../Tests/CAMCoreTests/Fixtures/toolpath-groups/).
+
 ## Layers
 
 A layer is just the `layer` string on each shape. The app lists the shapes' layers in the order they first appear, then the names in the top-level `layers` list. Imports name layers after the file's own: DXF layers, Inkscape layers or the named groups under an SVG's root, and PDF and Illustrator layers.
@@ -237,6 +265,8 @@ Each operation is one toolpath. They run in array order.
 | `vectorSelection` | no | How the app and `template apply` find its shapes again: [below](#how-a-toolpath-finds-its-shapes) |
 | `adjustFeedsForLoad` | no | Profiles and pockets: slow the feed where the bit cuts more (off; see [Feeds that follow the load](../using-nativecam.md#feeds-that-follow-the-load)) |
 | `spindleSpeed` | no | `tool` (the tool's RPM, the default) or `automatic` |
+| `groupID` | no | The toolpath group it's in (a `toolpathGroups` id); absent = ungrouped. See [below](#toolpath-groups-and-hiding) |
+| `hidden` | no | `true` hides it in the app's 3D view. Display only: it's still generated, simulated, checked and exported |
 
 ## tool
 
@@ -456,4 +486,4 @@ The [workflows](workflows.md) build bigger projects the same way, from `new` and
 
 ## Toolpath templates
 
-A `.nativecamtemplate` is JSON too: `type` (always `"NativeCAM toolpath template"`), `formatVersion` (the same numbering, and refused above the current one), `name`, `toolpaths` (operations with empty `shapeIDs` and a `vectorSelection`), and optionally `jobSetup` (material thickness, name and kind, origin, Z zero, clearance, plunge and park heights, retract settings, and the machine's name). Make them with `nativecam-cli template save`, and see [`Fixtures/templates/`](../../Tests/CAMCoreTests/Fixtures/templates/) for examples.
+A `.nativecamtemplate` is JSON too: `type` (always `"NativeCAM toolpath template"`), `formatVersion` (the same numbering, and refused above the current one), `name`, `toolpaths` (operations with empty `shapeIDs` and a `vectorSelection`), and optionally `jobSetup` (material thickness, name and kind, origin, Z zero, clearance, plunge and park heights, retract settings, and the machine's name) and `toolpathGroups` (the groups its toolpaths are in). Make them with `nativecam-cli template save`, and see [`Fixtures/templates/`](../../Tests/CAMCoreTests/Fixtures/templates/) for examples.
