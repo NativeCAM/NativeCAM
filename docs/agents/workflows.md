@@ -233,10 +233,10 @@ Generated 1 toolpaths in 0.02s, 305 lines -> inlay-plug.tap
 ```text
 $ "$CLI" demosheets parts.nativecam
 $ "$CLI" nest parts.nativecam --evaluations 200 --seed 1 --svg layout.svg -o nested.nativecam
-Nested 19 of 19 parts in 0.2 s (200 layouts tried), spacing 0.3750 in, edge margin 0.3750 in
-On 2 sheets: sheet 1 11 parts, sheet 2 8 parts
-In other parts' holes: Bracket 1 in Frame 1, Bracket 2 in Frame 1, Bracket 3 in Frame 2, Bracket 4 in Frame 2, Coaster 2 in Frame 2, Coaster 5 in Frame 2, Coaster 6 in Frame 1
-Parts fill 59% of the 42.5102 in of the last sheet they use (61% of all the sheets' area)
+Nested 19 of 19 parts in 0.4 s (200 layouts tried), spacing 0.6250 in, edge margin 0.6250 in
+On 2 sheets: sheet 1 8 parts, sheet 2 11 parts
+In other parts' holes: Bracket 3 in Frame 2, Coaster 1 in Frame 1, Coaster 2 in Frame 2, Coaster 3 in Frame 1, Coaster 4 in Frame 1
+Parts fill 57% of the 44.5181 in of the last sheet they use (61% of all the sheets' area)
 Wrote layout.svg
 Wrote nested.nativecam
 $ "$CLI" post nested.nativecam -o nested.tap

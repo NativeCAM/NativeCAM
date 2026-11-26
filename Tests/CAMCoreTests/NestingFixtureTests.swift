@@ -19,10 +19,15 @@ struct NestingFixtureTests {
         return p
     }
 
-    /// Nests every part with a fixed seed and number of layouts.
-    static func nest(_ project: Project, sheets: Int, evaluations: Int = 10) throws -> (job: NestJob, result: Nesting.Result, settings: Nesting.Settings) {
+    /// Nests every part with a fixed seed and number of layouts, at the default spacing unless `spacing` is given (and
+    /// then the same edge margin).
+    static func nest(_ project: Project, sheets: Int, evaluations: Int = 10, spacing: Double? = nil) throws -> (job: NestJob, result: Nesting.Result, settings: Nesting.Settings) {
         let job = try NestJob.prepare(project, selection: [])
         var s = job.defaultSettings
+        if let spacing {
+            s.spacing = spacing
+            s.edgeMargin = spacing
+        }
         s.maxSheets = sheets
         s.maxEvaluations = evaluations
         s.seed = 86
@@ -63,11 +68,16 @@ struct NestingFixtureTests {
         try Self.checkFiles(nested, golden: { "nest-multisheet-sheet-\($0 + 1)" }, count: 2)
     }
 
+    /// The default spacing before #193, one 1/4" bit's width plus 1/8 in (3 mm in a metric job), which these fixtures
+    /// were sized and saved for. They test the nesting, not its default, so they pass it explicitly.
+    static func oneBitSpacing(_ project: Project) -> Double { 0.25.inch + NestJob.spacingMargin(project.displayUnits) }
+
     /// `nest-part-in-part.svg`: the rectangle and the disc fit on the 260 × 200 sheet only in the frame's window. They go
-    /// there, keep their gap from its edge and are cut out before it.
+    /// there, keep their gap from its edge and are cut out before it. (The window is sized for parts `oneBitSpacing`
+    /// apart.)
     @Test func smallPartsNestedInAFramesWindowPostAndAreCutFirst() throws {
         let p = try Self.imported("nest-part-in-part", width: 260, height: 200)
-        let (job, r, s) = try Self.nest(p, sheets: 1)
+        let (job, r, s) = try Self.nest(p, sheets: 1, spacing: Self.oneBitSpacing(p))
         try #require(job.parts.count == 3)
         let frame = try #require(job.parts.firstIndex { !$0.holes.isEmpty })
         #expect(job.parts[frame].holes.count == 1)
@@ -109,9 +119,14 @@ struct NestingFixtureTests {
 
     /// The frames and coasters demo nested as `nativecam-cli nest --sheets 10 --evaluations 300` does: 300 layouts with
     /// the default seed, up to 10 sheets.
+    /// The saved `nesting-part-in-part-v16` was nested at the default before #193 (`oneBitSpacing`), so it's repeated at
+    /// that spacing.
     static func framesNest() throws -> (job: NestJob, result: Nesting.Result, settings: Nesting.Settings) {
-        let job = try NestJob.prepare(Project.demoNestingSheets(), selection: [])
+        let demo = Project.demoNestingSheets()
+        let job = try NestJob.prepare(demo, selection: [])
         var s = job.defaultSettings
+        s.spacing = oneBitSpacing(demo)
+        s.edgeMargin = s.spacing
         s.maxSheets = 10
         s.maxEvaluations = 300
         return (job, job.nest(s), s)
@@ -156,7 +171,9 @@ struct NestingFixtureTests {
         #expect(alone.parts.map(\.shapeIDs) == [[frame.id]])
         // The run order is the same, and it still cuts each part in a window before freeing the window.
         #expect(OperationScheduler.optimize(p).outOfOrder.isEmpty)
+        // At today's default spacing (#193) the parts need a third sheet.
         var s = again.defaultSettings
+        s.maxSheets = 3
         s.maxEvaluations = 10
         s.seed = 86
         let r = again.nest(s)
@@ -244,15 +261,16 @@ struct NestingFixtureTests {
         let html = SetupSheet.html(project: p, job: job, gcodeFile: "Gapped.tap", date: GoldenPostTests.date)
         #expect(html.contains("Nothing to cut: no file"))
         #expect(html.components(separatedBy: "<section class=\"tile\">").count == 3)
-        // Nesting again: the nine squares fit on the first sheet, and the empty sheets go.
-        let (nestJob, r, s) = try Self.nest(p, sheets: 3, evaluations: 5)
+        // Nesting again: the nine squares fit on the first sheet (`oneBitSpacing` apart, as the sheet is sized for), and
+        // the empty sheets go.
+        let (nestJob, r, s) = try Self.nest(p, sheets: 3, evaluations: 5, spacing: Self.oneBitSpacing(p))
         #expect(r.placedCount == 9 && r.sheetCount == 1)
         let again = nestJob.apply(r, to: p, settings: s).project
         #expect(again.sheetCount == 1 && again.additionalSheets.isEmpty)
         #expect(again.formatVersion == 1)
         // Room to spare: allowing more sheets than needed adds none.
         let few = NestSheetsJobTests.squaresJob()
-        let fewer = try Self.nest(few, sheets: 5, evaluations: 5)
+        let fewer = try Self.nest(few, sheets: 5, evaluations: 5, spacing: Self.oneBitSpacing(few))
         #expect(fewer.result.sheetCount == 2)
         #expect(fewer.job.apply(fewer.result, to: few, settings: fewer.settings).project.sheetCount == 2)
     }

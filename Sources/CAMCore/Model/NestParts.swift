@@ -84,15 +84,23 @@ public struct NestJob: Sendable {
     public var notes: [String]
     /// The largest bit cutting the parts out (an outside or on-the-line profile), when there is one.
     public var cutOutTool: Tool?
-    /// Spacing to start with: the cut-out bit's diameter plus a margin.
+    /// Spacing to start with: twice the cut-out bit's diameter plus a margin (`defaultSpacing(bit:units:)`).
     public var defaultSpacing: Double
 
     /// How many sheets Nest Parts (and `nativecam-cli nest`) may use until a limit is set: parts that don't fit on the
     /// sheets a job has go on new ones, up to this many (or as many as the job has, if more).
     public static let defaultSheetLimit = 10
 
-    /// Margin added to the cut-out bit for the default spacing: 1/8 in, or 3 mm in a metric job.
+    /// Margin added to the cut-out bits for the default spacing: 1/8 in, or 3 mm in a metric job.
     public static func spacingMargin(_ units: LengthUnit) -> Double { units == .inch ? 0.125.inch : 3 }
+
+    /// The spacing (and edge margin) a new nest starts with (#193): two widths of the bit cutting the parts out, plus
+    /// `spacingMargin`. An outside cut reaches a bit's width out from each wall, so at two widths a neighbour's kerf
+    /// never reaches a part's facing edge and its tabs stay where they were set; under that, #188 moves them aside.
+    /// The spacing isn't saved: a project nested before keeps its layout, and only a new nest starts here.
+    public static func defaultSpacing(bit diameter: Double, units: LengthUnit) -> Double {
+        2 * diameter + spacingMargin(units)
+    }
 
     /// Finds the parts, generating the toolpaths (`reachToolpaths`) for how far each one cuts outside its shapes.
     /// `selection` is the selected shapes (empty = nest every part).
@@ -168,7 +176,7 @@ public struct NestJob: Sendable {
         let ops = project.operations.filter { !Set($0.shapeIDs).isDisjoint(with: nestedShapes) }
         let profiles = ops.filter { if case let .profile(p) = $0.kind { p.side != .inside } else { false } }
         let cutOut = (profiles.isEmpty ? ops : profiles).map(\.tool).max { $0.diameter < $1.diameter }
-        let spacing = (cutOut?.diameter ?? 0.25.inch) + spacingMargin(project.displayUnits)
+        let spacing = defaultSpacing(bit: cutOut?.diameter ?? 0.25.inch, units: project.displayUnits)
         let next = project.additionalSheets.first.map { Vec2($0.width, $0.height) }
         return NestJob(sheet: sheet, nextSheetSize: next, sheetCount: project.sheetCount, parts: nest, fixed: fixed,
                        keepOuts: keepOuts, notes: notes, cutOutTool: cutOut, defaultSpacing: spacing)
