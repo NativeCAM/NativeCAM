@@ -28,6 +28,8 @@ public struct ProtectedRegions: Sendable {
     struct Part: Sendable {
         var operation: UUID
         var name: String
+        /// The shapes it cuts.
+        var shapeIDs: Set<UUID> = []
         /// The faces of an indexed rotary job it's cut on (normalized angles); nil on a flat sheet or a wrapped blank.
         var faces: Set<Double>?
         var band: [Polyline]
@@ -40,6 +42,8 @@ public struct ProtectedRegions: Sendable {
         public var name: String
         var regions: [Region]
         var bounds: [Rect2]
+        /// The shapes that toolpath cuts.
+        var shapeIDs: Set<UUID> = []
 
         func contains(_ p: Vec2) -> Bool {
             for (i, region) in regions.enumerated() where bounds[i].contains(p) && region.contains(p) { return true }
@@ -66,12 +70,12 @@ public struct ProtectedRegions: Sendable {
     var parts: [Part]
 
     /// Whether any operation in the project has leads or corner reliefs, which are what keep clear of other parts, or is
-    /// an outside profile, which is checked against them. Only with another toolpath to keep clear of.
+    /// a profile, which is checked against them. Only with another toolpath to keep clear of.
     static func needed(_ project: Project) -> Bool {
         project.operations.count > 1 && project.operations.contains { op in
             switch op.kind {
-            // An outside cut is checked against the other toolpaths' parts too, for a bit that reaches into one.
-            case let .profile(p): p.side == .outside || p.side != .on && (p.leads != nil || p.cornerRelief != nil)
+            // A profile is checked against the other toolpaths' parts too, for a bit that reaches into one.
+            case .profile: true
             case let .pocket(p): p.cornerRelief != nil
             case let .edgeProfile(p): p.leads != nil
             default: false
@@ -96,7 +100,7 @@ public struct ProtectedRegions: Sendable {
             let band = Clipper.intersection(raw, [clipLoop])
             guard !band.isEmpty else { return nil }
             let faces = indexed && !op.kind.turnsWholeBlank ? Set(op.rotaryAngles.map(RotaryIndex.normalized)) : nil
-            return Part(operation: op.id, name: op.name, faces: faces, band: band, bounds: band.bounds)
+            return Part(operation: op.id, name: op.name, shapeIDs: Set(shapes.map(\.id)), faces: faces, band: band, bounds: band.bounds)
         }
     }
 
@@ -127,7 +131,7 @@ public struct ProtectedRegions: Sendable {
             guard !band.isEmpty else { continue }
             let regions = Region.nest(Clipper.offset(band, delta: max(0.01, r - Self.tolerance), arcTolerance: arcTolerance))
             guard !regions.isEmpty else { continue }
-            out.append(Zone(name: part.name, regions: regions, bounds: regions.map { $0.bounds.insetBy(-0.01) }))
+            out.append(Zone(name: part.name, regions: regions, bounds: regions.map { $0.bounds.insetBy(-0.01) }, shapeIDs: part.shapeIDs))
         }
         return out
     }
