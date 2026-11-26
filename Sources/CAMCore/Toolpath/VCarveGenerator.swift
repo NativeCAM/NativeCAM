@@ -117,11 +117,10 @@ enum VCarveGenerator {
         let ordered = TourOptimizer.order(count: paths.count, from: context.stock.homePosition.xy,
                                           start: { paths[$0][0].xy }, end: { paths[$0][paths[$0].count - 1].xy }).map { paths[$0] }
         var b = ToolpathBuilder(stock: context.stock, tool: tool, startXY: ordered.first?.first?.xy)
-        // The flat bottom the V-bit clears itself: all of it without a clearance tool (as Vectric does), and on an inlay,
-        // the corners and narrow places the clearance tool can't reach, so nothing stands proud of the floor.
+        // The flat bottom the V-bit clears itself: all of it without a clearance tool (as Vectric does), and with one, the
+        // corners and narrow places the clearance tool can't reach, so nothing stands proud of the floor (#204).
         if let flat = flatDepth, flat > 0, tool.shape.isTapered, !flatRegions.isEmpty {
-            let rest = clearanceTool.map { params.inlay == nil ? [] : unreached(flatRegions, by: $0, arcTolerance: context.arcTolerance) }
-                ?? flatRegions
+            let rest = vBitFlatAreas(flatRegions, clearanceTool: clearanceTool, arcTolerance: context.arcTolerance)
             if !rest.isEmpty {
                 // Raster lines only where the V-bit clears the whole flat; the corners a clearance tool leaves are slivers.
                 if clearanceTool == nil, let raster = params.flatRaster {
@@ -266,6 +265,14 @@ enum VCarveGenerator {
                 linked = true
             }
         }
+    }
+
+    /// The parts of a carve's flats (`flatRegions`, at the flat depth) the V-bit clears itself: all of them without a
+    /// clearance tool, and with one only what it can't reach (`unreached`). Every ring `clearFlat` cuts there stays
+    /// inside these areas at the flat depth, so the V-bit's corner passes go neither below the floor nor past the walls.
+    static func vBitFlatAreas(_ flatRegions: [Region], clearanceTool: Tool?, arcTolerance: Double) -> [Region] {
+        guard let clearanceTool else { return flatRegions }
+        return unreached(flatRegions, by: clearanceTool, arcTolerance: arcTolerance)
     }
 
     /// The parts of `regions` a flat end mill can't reach: the corners it rounds off and places narrower than it.

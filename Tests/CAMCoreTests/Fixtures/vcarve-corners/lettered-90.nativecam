@@ -1,0 +1,128 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 1,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Lettered V-carve, 90° V-bit",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "204C0000-0000-4000-8000-000000000002",
+      "kind" : {
+        "vcarve" : {
+          "_0" : {
+            "clearanceTool" : {
+              "cornerRadius" : 0,
+              "cutting" : {
+                "feedRate" : 5588,
+                "plungeRate" : 1270,
+                "spindleRPM" : 13000,
+                "stepdown" : 4.762499999999999,
+                "stepoverFraction" : 0.4
+              },
+              "diameter" : 6.35,
+              "fluteCount" : 2,
+              "fluteDirection" : "upcut",
+              "fluteLength" : 25.4,
+              "id" : "4E415449-5645-4341-4D00-000000000001",
+              "includedAngle" : 90,
+              "name" : "1\/4\" Upcut End Mill",
+              "notes" : "",
+              "number" : 1,
+              "shankDiameter" : 6.35,
+              "shape" : "flatEndMill",
+              "stickout" : 38.099999999999994,
+              "tipDiameter" : 0
+            },
+            "flatDepth" : 1.5875,
+            "sampleSpacing" : 0.25
+          }
+        }
+      },
+      "name" : "V-carve LET",
+      "shapeIDs" : [
+        "204C0000-0000-4000-8000-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2032,
+          "plungeRate" : 762,
+          "spindleRPM" : 18000,
+          "stepdown" : 3.175,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 12.7,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 6.35,
+        "id" : "4E415449-5645-4341-4D00-000000000006",
+        "includedAngle" : 90,
+        "name" : "90° V-Bit 1\/2\"",
+        "notes" : "",
+        "number" : 6,
+        "shankDiameter" : 6.35,
+        "shape" : "vBit",
+        "stickout" : 19.049999999999997,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "204C0000-0000-4000-8000-000000000001",
+      "kind" : {
+        "text" : {
+          "_0" : {
+            "capHeight" : 76.19999999999999,
+            "fontName" : "Helvetica-Bold",
+            "letterSpacing" : 0,
+            "string" : "LET"
+          }
+        }
+      },
+      "layer" : "Default",
+      "name" : "LET",
+      "position" : {
+        "x" : 101.6,
+        "y" : 57.15
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 114.3,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Maple",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 203.2,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}
