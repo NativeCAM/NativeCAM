@@ -351,7 +351,7 @@ V-carves inside closed vectors. Only `sampleSpacing` (0.25) is required.
 |---|---|---|
 | `flatDepth` | none (a full V wherever the shape allows) | The deepest cut below `startDepth`; flat areas below it are cleared |
 | `passDepth` | none (one pass) | |
-| `clearanceTool` | none (the V-bit clears flats itself) | An end mill that clears the flats first |
+| `clearanceTool` | none (the V-bit clears flats itself) | An end mill that clears the flats first; the V-bit then cleans up the corners and narrow parts it can't reach |
 | `startDepth` | 0 | Carve as if the top were this much lower (format 6 above 0) |
 | `flatRaster` | none (rings) | The V-bit clears flats in raster lines: `{"angle": 0, "stepover": …}` (`angle` required) |
 | `inlay` | none | One side of an inlay pair; see below |
