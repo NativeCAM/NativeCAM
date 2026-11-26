@@ -1,0 +1,6 @@
+(Real cut: full depth)
+G20 G90
+T1 M06
+G00 Z0.2500
+G01 Z-0.2500 F30.0
+M30

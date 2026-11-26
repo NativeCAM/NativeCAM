@@ -49,3 +49,75 @@ public enum AirCut {
         return (r.files.map(\.gcode).joined(), r.project, r.files.flatMap(\.toolpaths), r.post)
     }
 }
+
+// MARK: File names (#192)
+
+public extension AirCut {
+    /// What every air-cut file's name carries, before its other suffixes: "Sign (air cut).tap",
+    /// "Sign - Finish (air cut).tap", "Sign (air cut) - tile 1 of 2.tap".
+    static let marker = " (air cut)"
+
+    /// `stem` without a trailing " (air cut)", so adding the files' suffixes (which start with it on an air cut)
+    /// doesn't write it twice.
+    static func unmarked(_ stem: String) -> String {
+        stem.hasSuffix(marker) ? String(stem.dropLast(marker.count)) : stem
+    }
+
+    /// The path of each file of a job or part of one, from the stem chosen for it (a path or name without its
+    /// extension). An air cut's files always carry " (air cut)", even a single file, as `post --air-cut` names them,
+    /// so an air cut and the real cut never share a name. A real cut's single file is `stem.ext`.
+    static func paths(_ files: [JobExport.File], stem: String, airCut: Bool, fileExtension: String) -> [String] {
+        let base = airCut ? unmarked(stem) : stem
+        if files.count == 1, !airCut { return [base + "." + fileExtension] }
+        return files.map { f in
+            var suffix = f.suffix ?? ""
+            if airCut, !suffix.hasPrefix(marker) { suffix = marker + suffix }
+            return base + suffix + "." + fileExtension
+        }
+    }
+
+    /// Whether a G-code file says it's an air cut: an "AIR CUT" comment in its first lines, as every air cut NativeCAM
+    /// writes starts with (the full job's, part of one, a restart's).
+    static func isAirCut(_ gcode: String) -> Bool {
+        gcode.split(whereSeparator: \.isNewline).prefix(60).contains { $0.contains("AIR CUT") }
+    }
+
+    /// Why files can't be written at `paths`, or nil when they can. `airCut` says whether they're an air cut;
+    /// `existing` reads a file already at a path (nil when there's none).
+    ///
+    /// - A real cut's name mustn't say "air cut": someone would run it believing the bit stays in the air.
+    /// - An air cut's name must say it.
+    /// - An air cut never overwrites a file that isn't one: that file may be the real cut, and after it's replaced
+    ///   the real cut is gone, or worse, an older real cut stays under a name the operator takes for the air cut.
+    /// - No two of the files share a name.
+    static func namingProblem(_ paths: [String], airCut: Bool, existing: (String) -> String?) -> String? {
+        var seen = Set<String>()
+        for path in paths {
+            let name = (path as NSString).lastPathComponent
+            let stem = (name as NSString).deletingPathExtension
+            guard seen.insert(path.lowercased()).inserted else { return "Two files would both be named “\(name)”." }
+            if airCut {
+                guard stem.contains(marker.dropFirst()) else {
+                    return "“\(name)” doesn't say it's an air cut. An air cut's name must include “(air cut)”."
+                }
+                if let text = existing(path), !isAirCut(text) {
+                    return "“\(name)” already exists and isn't an air cut (it has no AIR CUT line at the top): it may be the real "
+                        + "cut. Move or rename it, or choose another name."
+                }
+            } else if stem.lowercased().contains("air cut") || stem.lowercased().contains("aircut") {
+                return "“\(name)” says it's an air cut, but this file cuts at full depth. Choose a name without “air cut”."
+            }
+        }
+        return nil
+    }
+
+    /// `namingProblem` against the files on disk.
+    static func namingProblemOnDisk(_ paths: [String], airCut: Bool) -> String? {
+        namingProblem(paths, airCut: airCut) { path in
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            // A file that can't be read is taken as not an air cut.
+            guard let data = FileManager.default.contents(atPath: path) else { return "" }
+            return String(decoding: data.prefix(16_384), as: UTF8.self)
+        }
+    }
+}

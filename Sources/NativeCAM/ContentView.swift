@@ -573,19 +573,21 @@ struct ContentView: View {
             panel.message += " — saves all \(included.count) included toolpaths (\(hidden) hidden in the view are included)."
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        // "Sign.nc" becomes "Sign 1 of 2 - T5.nc", "Sign 2 of 2 - T1.nc", or "Sign - tile 1 of 2.nc"; an air cut is always
+        // "Sign (air cut).nc" (or "Sign (air cut) - tile 1 of 2.nc"), even when " (air cut)" was taken out of the name (#192).
+        let folder = url.deletingLastPathComponent()
+        let stem = AirCut.unmarked(url.deletingPathExtension().lastPathComponent)
+        let paths = AirCut.paths(output.files, stem: folder.appendingPathComponent(url.deletingPathExtension().lastPathComponent).path,
+                                 airCut: height != nil, fileExtension: post.fileExtension)
+        if let problem = AirCut.namingProblemOnDisk(paths, airCut: height != nil) {
+            alert = AlertInfo(title: "Not saved", message: problem)
+            return
+        }
         do {
-            if output.files.count == 1 {
-                try output.files[0].gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
-            } else {
-                // "Sign.nc" becomes "Sign 1 of 2 - T5.nc", "Sign 2 of 2 - T1.nc", or "Sign - tile 1 of 2.nc" (the air-cut
-                // marker is in the suffix).
-                var stem = url.deletingPathExtension().lastPathComponent
-                if height != nil, stem.hasSuffix(" (air cut)") { stem = String(stem.dropLast(" (air cut)".count)) }
-                let names = JobExport.fileNames(output.files, base: stem + "." + post.fileExtension, fileExtension: post.fileExtension)
-                let folder = url.deletingLastPathComponent()
-                for (file, name) in zip(output.files, names) {
-                    try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: folder.appendingPathComponent(name))
-                }
+            for (file, path) in zip(output.files, paths) {
+                try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: URL(fileURLWithPath: path))
+            }
+            if output.files.count > 1 {
                 // A tiled job's setup sheet says where to move the material and the dowels before each file; a nested
                 // job's, which sheet each file cuts.
                 if job.tiling != nil || job.sheets != nil {
@@ -688,12 +690,19 @@ struct ContentView: View {
         if hidden > 0 { message += " \(hidden) hidden in the view are included." }
         panel.message = message
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        // Named as `post --group` names it, an air cut with " (air cut)" (#192).
+        let folder = url.deletingLastPathComponent()
+        let stem = url.deletingPathExtension().lastPathComponent
+        let paths = AirCut.paths(output.files, stem: folder.appendingPathComponent(stem).path, airCut: subset.airCut != nil,
+                                 fileExtension: post.fileExtension)
+        if let problem = AirCut.namingProblemOnDisk(paths, airCut: subset.airCut != nil) {
+            alert = AlertInfo(title: "Not saved", message: problem)
+            return
+        }
+        let names = paths.map { ($0 as NSString).lastPathComponent }
         do {
-            let stem = url.deletingPathExtension().lastPathComponent
-            let names = JobExport.fileNames(output.files, base: stem + "." + post.fileExtension, fileExtension: post.fileExtension)
-            let folder = url.deletingLastPathComponent()
-            for (file, name) in zip(output.files, names) {
-                try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: folder.appendingPathComponent(name))
+            for (file, path) in zip(output.files, paths) {
+                try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: URL(fileURLWithPath: path))
             }
             let sheet = SetupSheet.html(project: output.project, job: output.job, gcodeFile: names.first, checks: output.issues,
                                         part: output.setupSheetLines)
@@ -730,7 +739,17 @@ struct ContentView: View {
         panel.allowedContentTypes = [UTType(filenameExtension: ext, conformingTo: .plainText) ?? .plainText]
         panel.nameFieldStringValue = (project.name.isEmpty ? "Untitled" : project.name) + (output.file.suffix ?? "") + "." + ext
         panel.message = output.fileCount > 1 ? "Save a restart that replaces only the file that was running" : "Save a restart for \(output.post.name)"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, var url = panel.url else { return }
+        // An air cut of the restart keeps " (air cut)" in its name, put back when it was taken out (#192).
+        let isAir = output.file.suffix?.hasPrefix(AirCut.marker) == true
+        let chosen = url.deletingPathExtension().lastPathComponent
+        if isAir, !chosen.contains("(air cut)") {
+            url = url.deletingLastPathComponent().appendingPathComponent(chosen + AirCut.marker + "." + ext)
+        }
+        if let problem = AirCut.namingProblemOnDisk([url.path], airCut: isAir) {
+            alert = AlertInfo(title: "Not saved", message: problem)
+            return
+        }
         do {
             try output.file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: url)
         } catch {

@@ -1,0 +1,8 @@
+cli group: Grouped sign - Finish (air cut).tap
+cli group real: Grouped sign - Finish.tap
+cli toolpaths -o part.tap: part (air cut).tap
+cli toolpaths -o part (air cut).tap: part (air cut).tap
+app group, name kept: Grouped sign - Finish (air cut).tap
+app group, marker taken out: Grouped sign - Finish (air cut).tap
+app job, marker taken out: Grouped sign (air cut).tap
+cli restart: Grouped sign (air cut) (restart at toolpath 2).tap
