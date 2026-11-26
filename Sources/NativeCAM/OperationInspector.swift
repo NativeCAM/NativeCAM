@@ -594,8 +594,8 @@ struct CutDirectionSection: View {
                 if let note = kind.passDirectionNote {
                     SectionNote(text: note, warning: true)
                 } else if let time, current != .both {
-                    let extra = time.extraSeconds
-                    LabeledContent("Against Both ways", value: extra >= 0 ? "+\(formatDuration(extra))" : "−\(formatDuration(-extra))")
+                    // From the times as shown, so equal times read "0:00" with no sign (#150).
+                    LabeledContent("Against Both ways", value: DurationFormat.signedDelta(time.seconds.rounded() - time.bothWaysSeconds.rounded()))
                     SectionNote(text: "The planner's estimate: \(formatDuration(time.seconds)) one way, \(formatDuration(time.bothWaysSeconds)) "
                         + "both ways. Each pass links back from its end to the next one's start over the material.")
                 }
@@ -610,7 +610,7 @@ struct CutDirectionSection: View {
 }
 
 /// A note under a section in the inspector's caption style.
-private struct SectionNote: View {
+struct SectionNote: View {
     let text: String
     var warning = false
 
@@ -1344,10 +1344,7 @@ func finishingNote(_ strategy: Finish3DStrategy) -> String {
 /// Theoretical scallop (cusp) height left between parallel passes of a ball-ended tool on a flat surface.
 func scallop(tool: Tool, stepover: Double) -> Double { tool.scallopHeight(stepover: stepover) }
 
-func formatDuration(_ seconds: Double) -> String {
-    let s = Int(seconds.rounded())
-    return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
-}
+func formatDuration(_ seconds: Double) -> String { DurationFormat.duration(seconds) }
 
 struct DepthSection: View {
     @Binding var depth: DepthSettings

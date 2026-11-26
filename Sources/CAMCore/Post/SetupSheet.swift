@@ -3,14 +3,17 @@ import Foundation
 /// A printable page for whoever runs the job: material and zero, the tools in the order they go in, each
 /// toolpath with its run time, clamps to keep clear of, and the checks that are still open.
 public enum SetupSheet {
+    /// `part`: for a file that cuts part of the job (`JobSubset`), the lines saying which part and what it assumes was
+    /// already cut, shown under the job's details.
     public static func html(project: Project, job: JobResult, gcodeFile: String? = nil, checks: [GCodeCheck.Issue] = [],
-                            date: Date = Date()) -> String {
-        if let sheets = job.sheets {
-            return head(project.name) + sheetsCover(project: project, job: job, sheets: sheets, gcodeFile: gcodeFile, checks: checks, date: date)
-                + "</body></html>\n"
+                            date: Date = Date(), part: [String] = []) -> String {
+        var body = job.sheets.map { sheetsCover(project: project, job: job, sheets: $0, gcodeFile: gcodeFile, checks: checks, date: date) }
+            ?? content(project: project, job: job, gcodeFile: gcodeFile, checks: checks, date: date)
+        if !part.isEmpty, let end = body.range(of: "</dl>\n") {
+            body.insert(contentsOf: "<h2>Part of the job</h2>\n<ul>\n" + part.map { "<li class=\"warning\">\(esc($0))</li>\n" }.joined() + "</ul>\n",
+                        at: end.upperBound)
         }
-        return head(project.name) + content(project: project, job: job, gcodeFile: gcodeFile, checks: checks, date: date)
-            + "</body></html>\n"
+        return head(project.name) + body + "</body></html>\n"
     }
 
     /// The page's head and styles.

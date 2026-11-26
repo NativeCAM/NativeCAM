@@ -84,6 +84,11 @@ struct ContentView: View {
         .onChange(of: workspace.showRapids) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showModelPreview) { _, _ in workspace.rebuildLines(project) }
         .onChange(of: workspace.showToolpathsWhileSimulating) { _, _ in workspace.rebuildLines(project) }
+        .onChange(of: workspace.subsetExport) { _, request in
+            guard let request else { return }
+            workspace.subsetExport = nil
+            Task { await exportSubset(request) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: DebugCapture.command)) { handleDebug($0.userInfo ?? [:]) }
         .sheet(item: $debugPost) { d in
             VectricPostSheet(pp: d.pp, machine: project.machine, applied: false) { _ in }
@@ -180,8 +185,29 @@ struct ContentView: View {
             simulateGCodeFile: simulateGCodeFile,
             exportGCode: exportGCode,
             exportAirCut: exportAirCut,
-            exportRestart: { if workspace.job?.toolpaths.isEmpty == false { workspace.restartPreset = RestartPreset(request: Restart.Request()) } },
+            exportRestart: { if jobForExport()?.toolpaths.isEmpty == false { workspace.restartPreset = RestartPreset(request: Restart.Request()) } },
             exportSetupSheet: exportSetupSheet,
+            exportSelected: {
+                let ids = workspace.selectedOperationIDs(in: project)
+                let g = workspace.selectedGroupID
+                let whole = g.map { Set(project.members(ofGroup: $0).map(\.id)) == ids } ?? false
+                if !ids.isEmpty { workspace.subsetExport = SubsetExportRequest(operationIDs: ids, group: whole ? g : nil) }
+            },
+            groupSelected: {
+                let ids = workspace.selectedOperationIDs(in: project)
+                if let g = document.project.groupOperations(ids) { workspace.selection = [.toolpathGroup(g)] }
+            },
+            ungroupSelected: {
+                guard let g = workspace.selectedGroupID else { return }
+                let members = project.members(ofGroup: g).map(\.id)
+                document.project.ungroup(g)
+                workspace.selection = Set(members.map { .operation($0) })
+            },
+            showAllToolpaths: { document.project.setHidden(Set(project.operations.map(\.id)), false) },
+            showOnlySelected: { document.project.showOnly(workspace.selectedOperationIDs(in: project)) },
+            hasSelectedToolpaths: !workspace.selectedOperationIDs(in: project).isEmpty,
+            hasSelectedGroup: workspace.selectedGroupID != nil,
+            hasHiddenToolpaths: project.operations.contains(where: \.isHidden),
             calibrate: { calibrating = true },
             surfaceSpoilboard: { surfacing = true },
             regenerate: recalculateAll,
@@ -506,7 +532,7 @@ struct ContentView: View {
     /// saves them: one file, or one per tool when the controller can't stop for a tool change; on a tiled job, that for
     /// each tile, with a setup sheet beside them.
     private func export(airCut height: Double?) {
-        guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
+        guard let job = jobForExport(), !job.toolpaths.isEmpty else { return }
         guard let output = JobExport.files(project, job: job, airCut: height) else { return noPost() }
         let post = output.post
         // Problems in the job, then in each file itself: read back against the controller and the toolpaths.
@@ -522,25 +548,8 @@ struct ContentView: View {
             let label = output.files.count > 1 ? "G-code\(file.suffix ?? "")" : "G-code"
             fileLines += shown.map { "• \(label): \($0.text)" }
         }
-        if !jobErrors.isEmpty || !fileLines.isEmpty {
-            var lines = jobErrors + fileLines
-            if lines.count > 10 { lines = Array(lines.prefix(10)) + ["• …and \(lines.count - 10) more"] }
-            let confirm = NSAlert()
-            let errors = !jobErrors.isEmpty || fileErrors
-            confirm.messageText = errors ? "This job has errors" : "Check before running this file"
-            confirm.informativeText = lines.joined(separator: "\n") + (errors ? "\n\nExport anyway?" : "")
-            if errors {
-                confirm.addButton(withTitle: "Cancel")
-                confirm.addButton(withTitle: "Export Anyway")
-                confirm.alertStyle = .critical
-                guard confirm.runModal() == .alertSecondButtonReturn else { return }
-            } else {
-                confirm.addButton(withTitle: "Export")
-                confirm.addButton(withTitle: "Cancel")
-                confirm.alertStyle = .warning
-                guard confirm.runModal() == .alertFirstButtonReturn else { return }
-            }
-        }
+        let errors = !jobErrors.isEmpty || fileErrors
+        guard confirmChecks(jobErrors + fileLines, errors: errors, what: errors ? "job" : "file") else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: post.fileExtension, conformingTo: .plainText) ?? .plainText]
         let base = project.name.isEmpty ? "Untitled" : project.name
@@ -556,6 +565,12 @@ struct ContentView: View {
                 + "(\(output.files.count) files, named after this one). Re-zero Z before running each."
         } else {
             panel.message = height == nil ? "Save G-code for \(post.name)" : "Save an air cut for \(post.name)"
+        }
+        // Hiding is display only: say that the hidden toolpaths are in the file.
+        let included = project.operations.filter(\.enabled)
+        let hidden = included.filter(\.isHidden).count
+        if hidden > 0 {
+            panel.message += " — saves all \(included.count) included toolpaths (\(hidden) hidden in the view are included)."
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
@@ -578,6 +593,111 @@ struct ContentView: View {
                     try Data(sheet.utf8).write(to: folder.appendingPathComponent(stem + " setup sheet.html"))
                 }
             }
+        } catch {
+            alert = AlertInfo(title: "Couldn't save G-code", message: error.localizedDescription)
+        }
+    }
+
+    /// The job to export: the one generated from the project as it is now. While an edit is still being generated, it
+    /// says so and returns nil, so a file is never saved from toolpaths made before the edit.
+    private func jobForExport() -> JobResult? {
+        guard workspace.job != nil else { return nil }
+        guard let job = workspace.currentJob(for: project) else {
+            alert = AlertInfo(title: "Toolpaths are still being generated",
+                              message: "The toolpaths for your last change aren't ready yet. Export again when they've finished.")
+            return nil
+        }
+        return job
+    }
+
+    /// Shows what the checks found before saving: errors ask "Export Anyway?", warnings "Export". Returns false to stop.
+    private func confirmChecks(_ lines: [String], errors: Bool, what: String = "file") -> Bool {
+        guard !lines.isEmpty else { return true }
+        var lines = lines
+        if lines.count > 10 { lines = Array(lines.prefix(10)) + ["• …and \(lines.count - 10) more"] }
+        let confirm = NSAlert()
+        confirm.messageText = errors ? "This \(what) has errors" : "Check before running this \(what)"
+        confirm.informativeText = lines.joined(separator: "\n") + (errors ? "\n\nExport anyway?" : "")
+        if errors {
+            confirm.addButton(withTitle: "Cancel")
+            confirm.addButton(withTitle: "Export Anyway")
+            confirm.alertStyle = .critical
+            return confirm.runModal() == .alertSecondButtonReturn
+        }
+        confirm.addButton(withTitle: "Export")
+        confirm.addButton(withTitle: "Cancel")
+        confirm.alertStyle = .warning
+        return confirm.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Export Group… / Export Selected Toolpaths…: the full job cut down to those toolpaths (`JobSubset`), never
+    /// generated on its own. When the file assumes earlier toolpaths were cut, it offers to retract fully between cuts,
+    /// which generates the job again with full retracts for this export. Saves the file(s) and a setup sheet beside them.
+    private func exportSubset(_ request: SubsetExportRequest) async {
+        guard let job = jobForExport(), !job.toolpaths.isEmpty else { return }
+        let project = self.project
+        let groupName = request.group.flatMap { project.toolpathGroup(id: $0)?.name }
+        var subset = request.group.flatMap { JobSubset.Request.group($0, in: project) }
+            ?? JobSubset.Request.toolpaths(request.operationIDs, in: project)
+        var output: JobSubset.Output
+        do {
+            output = try JobSubset.make(project, job: job, request: subset)
+        } catch {
+            alert = AlertInfo(title: "Can't export the \(subset.label)", message: error.localizedDescription)
+            return
+        }
+        if output.offersFullRetract {
+            let ask = NSAlert()
+            ask.messageText = "Retract fully between cuts?"
+            ask.informativeText = "The \(subset.label) runs after toolpaths it isn't in: "
+                + output.assumedCut.map { "\($0.name) (T\($0.tool.number))" }.joined(separator: ", ")
+                + ". Its links stay low over the material those clear, so cut them first. If they weren't cut, retracting "
+                + "fully between cuts keeps every link above the material (the job is generated again for this file)."
+            ask.addButton(withTitle: "Keep Links Low")
+            ask.addButton(withTitle: "Retract Fully")
+            ask.addButton(withTitle: "Cancel")
+            switch ask.runModal() {
+            case .alertFirstButtonReturn: break
+            case .alertSecondButtonReturn:
+                subset.fullRetract = true
+                let request = subset
+                do {
+                    output = try await Task.detached(priority: .userInitiated) { try JobSubset.make(project, request: request) }.value
+                } catch {
+                    alert = AlertInfo(title: "Can't export the \(subset.label)", message: error.localizedDescription)
+                    return
+                }
+            default: return
+            }
+        }
+        let jobErrors = job.issues.filter { $0.severity == .error }.map { "• \($0.operation.map { "\($0): " } ?? "")\($0.message)" }
+        let shown = output.issues.filter { $0.severity != .info }
+        guard confirmChecks(jobErrors + shown.map { "• \($0.text)" }, errors: !jobErrors.isEmpty || shown.contains { $0.severity == .error })
+        else { return }
+        let post = output.post
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: post.fileExtension, conformingTo: .plainText) ?? .plainText]
+        let base = project.name.isEmpty ? "Untitled" : project.name
+        let part = groupName ?? (output.included.count == 1 ? output.included[0].name : "selected")
+        panel.nameFieldStringValue = base + " - " + part + "." + post.fileExtension
+        var message = "Saves the \(subset.label): \(output.included.count) toolpath\(output.included.count == 1 ? "" : "s")"
+        if output.files.count > 1 { message += " in \(output.files.count) files, named after this one" }
+        message += ", and a setup sheet beside it."
+        if !output.skipped.isEmpty { message += " \(output.skipped.count) not included in output are left out." }
+        let hidden = output.included.filter(\.isHidden).count
+        if hidden > 0 { message += " \(hidden) hidden in the view are included." }
+        panel.message = message
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let stem = url.deletingPathExtension().lastPathComponent
+            let names = JobExport.fileNames(output.files, base: stem + "." + post.fileExtension, fileExtension: post.fileExtension)
+            let folder = url.deletingLastPathComponent()
+            for (file, name) in zip(output.files, names) {
+                try file.gcode.data(using: .ascii, allowLossyConversion: true)?.write(to: folder.appendingPathComponent(name))
+            }
+            let sheet = SetupSheet.html(project: output.project, job: output.job, gcodeFile: names.first, checks: output.issues,
+                                        part: output.setupSheetLines)
+            try Data(sheet.utf8).write(to: folder.appendingPathComponent(stem + " setup sheet.html"))
         } catch {
             alert = AlertInfo(title: "Couldn't save G-code", message: error.localizedDescription)
         }
@@ -625,7 +745,7 @@ struct ContentView: View {
 
     /// Saves a printable setup sheet: material and zero, tools in order, run order with times, clamps, open checks.
     private func exportSetupSheet() {
-        guard let job = workspace.job, !job.toolpaths.isEmpty else { return }
+        guard let job = jobForExport(), !job.toolpaths.isEmpty else { return }
         var checks: [GCodeCheck.Issue] = []
         if let output = JobExport.files(project, job: job) {
             for file in output.files {

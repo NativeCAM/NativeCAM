@@ -22,6 +22,7 @@
 - [Nesting parts](#nesting-parts)
 - [Rotary jobs](#rotary-jobs)
 - [Templates](#templates)
+- [Toolpath groups](#toolpath-groups)
 - [Calibrating your machine](#calibrating-your-machine)
 - [Restarting a job partway through](#restarting-a-job-partway-through)
 
@@ -32,10 +33,10 @@
 | **1. Set up the job** | Select **Material & Machine** in the sidebar. Set the material size and thickness, XY and Z zero, heights, and your machine (pick a saved one or [set up a new one](machines.md#setting-up-a-machine)). |
 | **2. Add artwork** | Use the shape button in the toolbar for rectangles, circles, ellipses, polygons, stars and text (any installed macOS font), or import a file with **⌘I** or by dropping it on the canvas. |
 | **3. Pick bits** | Open the **Tool Library** (**⇧⌘T**) to add or edit bits: flat, ball, bull nose, V-bit, engraving, surfacing and drill, with full geometry and feeds and speeds. |
-| **4. Create toolpaths** | Select vectors, then use the toolpath button in the toolbar or right-click them. Toolpaths run in sidebar order; drag to reorder, or choose **Toolpaths ▸ Optimize Run Order** for the fewest tool changes (**⌘Z** puts the old order back). For a job you cut again and again, add a set you saved earlier with **Toolpaths ▸ Apply Template**, and save this one with **Toolpaths ▸ Save Toolpaths as Template…** (see [Templates](#templates)). |
+| **4. Create toolpaths** | Select vectors, then use the toolpath button in the toolbar or right-click them. Toolpaths run in sidebar order; drag to reorder, or choose **Toolpaths ▸ Optimize Run Order** for the fewest tool changes (**⌘Z** puts the old order back). Fold toolpaths into [groups](#toolpath-groups) (**⌥⌘G**), turn a group on or off, and hide toolpaths you don't need to see with their eye. For a job you cut again and again, add a set you saved earlier with **Toolpaths ▸ Apply Template**, and save this one with **Toolpaths ▸ Save Toolpaths as Template…** (see [Templates](#templates)). |
 | **5. Review checks** | Warnings appear under **Checks** in the sidebar as you edit. |
 | **6. Simulate** | **⌘R** plays the material-removal simulation; **⌘.** stops it. |
-| **7. Export** | **⌘E** checks and saves the file for your controller (`.tap` for Mach4, `.nc` for Grbl, `.sbp` for ShopBot, and so on; one file per tool where the controller can't stop for a tool change). **File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z raised, to run above the material first. **File ▸ Export Setup Sheet…** saves a printable page for the person at the machine. See [Export checks, air cuts and setup sheets](controllers.md#export-checks-air-cuts-and-setup-sheets). |
+| **7. Export** | **⌘E** checks and saves the file for your controller (`.tap` for Mach4, `.nc` for Grbl, `.sbp` for ShopBot, and so on; one file per tool where the controller can't stop for a tool change). **File ▸ Export Air Cut…** (**⌥⌘E**) saves the same program with every Z raised, to run above the material first. **File ▸ Export Setup Sheet…** saves a printable page for the person at the machine. **Export Group…** (right-click a group) and **File ▸ Export Selected Toolpaths…** save part of the job (see [Toolpath groups](#toolpath-groups)). See [Export checks, air cuts and setup sheets](controllers.md#export-checks-air-cuts-and-setup-sheets). |
 
 Load the file on your controller, zero X/Y, touch off Z and air-cut it before cutting material.
 
@@ -564,6 +565,29 @@ A template is a set of toolpaths saved with their tools and every setting, to ad
 6. **Job setup.** The template's job setup is used only if you turn on **Use the template's job setup** in the sheet, which lists what it changes. A change to the XY or Z zero is marked in orange: set up and touch off the machine to match. Off, the toolpaths cut this job's material: **Through** and **Thickness −** depths follow its thickness, and plain depths stay as saved. Applying a template never changes the machine; the sheet says when the template was made for another one.
 
 Templates carry the project file format they need, and a template from a newer NativeCAM than yours is refused, as projects are. `nativecam-cli template save` and `template apply` do the same from the [command line](command-line.md#commands).
+
+## Toolpath groups
+
+A job with an inlay pair, rest passes, edge profiles, roughing and several finishes soon has a long toolpath list. Groups fold it into parts you can turn on and off, hide and export on their own.
+
+- **Make a group.** Select toolpaths in the sidebar, then **Toolpaths ▸ Group Selected** (**⌥⌘G**, as in Keynote and Pages; **⌘G** is Find Next in text fields) or right-click ▸ **Group Selected**. The group goes where its first toolpath was. **Rename…**, **Ungroup** (**⌥⇧⌘G**, its toolpaths stay where they are), **Duplicate** and **Delete Group…** (which asks whether to keep its toolpaths) are on the group's right-click menu; **Move to Group** and **Remove from Group** on a toolpath's.
+- **One run order.** A group is a run of toolpaths next to each other in the run order, one level deep. Drag a toolpath among a group's rows to put it in the group, or below the group to take it out; drag a group's header to move the whole group. **⌘Z** undoes each.
+- **The group's row** shows its tools and run time, and, folded, a badge with its toolpaths' worst open check and how many there are. **Checks** still lists every one.
+- **The group's checkbox** sets **Include in output** on each of its toolpaths, and shows a dash when only some are included. There's no switch of the group's own, so a file saved by an older NativeCAM cuts exactly the same.
+- **The eye** hides a toolpath's lines in the 3D view, or a whole group's. **Hiding is display only:** a hidden toolpath still cuts in the simulation, counts in the run time and the checks, and is exported. When some are hidden, the Export panel says how many it still includes. **View ▸ Show All Toolpaths** and **Show Only Selected Toolpaths** bring them back or hide the rest. Hidden toolpaths and folded groups are saved with the project.
+- **Optimize Run Order** reorders inside each group and inside the toolpaths between groups, and keeps your groups in your order. When something has to run before a toolpath in an earlier group (the work inside a part before its cut-out, roughing before its finish, a rest pass's reference), it doesn't move it across: **Checks** says which group to move before which.
+- **Templates** keep their toolpaths' groups.
+
+### Exporting a group
+
+Right-click a group ▸ **Export Group…**, or select toolpaths and choose **File ▸ Export Selected Toolpaths…**. The file is the whole job cut down to those toolpaths, never generated on its own: each toolpath is generated against the material the ones before it cut, so its moves are exactly those in the full file. That also means **the file assumes the toolpaths before it were cut**. A link can rapid down to just above a floor an earlier pocket cleared, and a rest pass cuts only what its reference left. So:
+
+- The export's checks and the file's header list each earlier toolpath it assumes was cut, with its tool. A rest pass whose reference isn't in the file gets a warning of its own.
+- When there are any, it asks whether to **Retract Fully** between cuts. That generates the job again with every link going up to safe Z, for this file only (the project's own setting doesn't change), so the file is safe to run even if the earlier toolpaths weren't cut. **Keep Links Low** keeps the full file's links: cut the earlier toolpaths first.
+- The file starts with its own tool change, as every file does, and toolpaths that aren't included in output are left out. On a tiled or nested job, each tile or sheet gets a file only if it has some of the group to cut.
+- A setup sheet for the part is saved beside it, naming the group, the tool to load first and what it assumes was cut.
+
+The default name is `<project> - <group>.tap`. On the command line it's `nativecam-cli post --group <name>` (see [Command line for agents](agents/cli.md#part-of-the-job-a-group-or-chosen-toolpaths)).
 
 ## Calibrating your machine
 

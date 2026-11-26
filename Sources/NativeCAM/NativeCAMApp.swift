@@ -105,6 +105,9 @@ struct AppCommands: Commands {
                 .keyboardShortcut("e", modifiers: [.command, .option, .shift])
                 .disabled(actions == nil)
                 .help("Save the rest of the job from part way through, after a broken bit, a power cut or an E-stop")
+            Button("Export Selected Toolpaths…") { actions?.exportSelected() }
+                .disabled(!(actions?.hasSelectedToolpaths ?? false))
+                .help("Save a file for the selected toolpaths or group only, cut down from the whole job")
             Button("Export Setup Sheet…") { actions?.exportSetupSheet() }
                 .disabled(actions == nil)
             Divider()
@@ -125,7 +128,14 @@ struct AppCommands: Commands {
             Divider()
             Button("Optimize Run Order") { actions?.optimizeOrder() }
                 .disabled(actions == nil)
-                .help("Reorder toolpaths for the fewest tool changes, keeping inside work before cut-outs")
+                .help("Reorder toolpaths for the fewest tool changes, keeping inside work before cut-outs, inside each group")
+            // ⌥⌘G and ⌥⇧⌘G, as Keynote and Pages group: ⌘G is Find Next in the inspector's text fields.
+            Button("Group Selected") { actions?.groupSelected() }
+                .keyboardShortcut("g", modifiers: [.command, .option])
+                .disabled(!(actions?.hasSelectedToolpaths ?? false))
+            Button("Ungroup") { actions?.ungroupSelected() }
+                .keyboardShortcut("g", modifiers: [.command, .option, .shift])
+                .disabled(!(actions?.hasSelectedGroup ?? false))
             Button("Nest Parts…") { actions?.nestParts() }
                 .disabled(!(actions?.canNest ?? false))
                 .help("Arrange the selected parts (or every part) on the sheet to use as little of it as possible")
@@ -151,6 +161,11 @@ struct AppCommands: Commands {
             Button("Iso View") { actions?.setView(.iso) }.keyboardShortcut("3", modifiers: .command)
             Button("Zoom to Fit") { actions?.fit() }.keyboardShortcut("0", modifiers: .command)
             Divider()
+            Button("Show All Toolpaths") { actions?.showAllToolpaths() }
+                .disabled(!(actions?.hasHiddenToolpaths ?? false))
+            Button("Show Only Selected Toolpaths") { actions?.showOnlySelected() }
+                .disabled(!(actions?.hasSelectedToolpaths ?? false))
+            Divider()
             Button(actions?.inspectorShown == false ? "Show Inspector" : "Hide Inspector") { actions?.toggleInspector() }
                 .keyboardShortcut("i", modifiers: [.command, .option])
             Divider()
@@ -166,6 +181,14 @@ struct WorkspaceActions {
     var exportAirCut: () -> Void
     var exportRestart: () -> Void
     var exportSetupSheet: () -> Void
+    var exportSelected: () -> Void
+    var groupSelected: () -> Void
+    var ungroupSelected: () -> Void
+    var showAllToolpaths: () -> Void
+    var showOnlySelected: () -> Void
+    var hasSelectedToolpaths: Bool
+    var hasSelectedGroup: Bool
+    var hasHiddenToolpaths: Bool
     var calibrate: () -> Void
     var surfaceSpoilboard: () -> Void
     var regenerate: () -> Void

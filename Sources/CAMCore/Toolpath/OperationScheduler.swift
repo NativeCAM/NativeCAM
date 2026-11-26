@@ -18,6 +18,10 @@ import Foundation
 /// all their clearing, then each its own tool in order (`blocks`). Several pockets cleared with the same 1/2" bit and
 /// finished with the same 1/8" one change tools once each way, and a block never needs more changes than cutting
 /// its operations one by one. The search counts changes the same way, so it can bring such operations together.
+///
+/// Toolpath groups (`Project.toolpathGroups`) stay whole and in the user's order: the search reorders inside each group
+/// and inside each stretch of ungrouped toolpaths between them (`Project.runSegments`), never across. A dependency that
+/// runs the wrong way across two of them isn't moved but reported (`Result.crossGroup`), for the user to move the group.
 public enum OperationScheduler {
     public struct Result: Sendable, Equatable {
         public var order: [UUID]
@@ -26,6 +30,9 @@ public enum OperationScheduler {
         /// Operations the current order runs too late: after the cut that frees their part (`freedBy`) or, for a
         /// 3D finish, before its roughing.
         public var outOfOrder: [Late]
+        /// Dependencies that run the wrong way across groups (or a group and the ungrouped toolpaths round it): the
+        /// search keeps groups in the user's order, so it doesn't fix them. Empty without groups.
+        public var crossGroup: [Late] = []
         public var changed: Bool { toolChangesAfter < toolChangesBefore || !outOfOrder.isEmpty }
 
         public struct Late: Sendable, Equatable {
@@ -99,6 +106,10 @@ public enum OperationScheduler {
         }
         // What each rest toolpath rests on (`RestMachining.dependencies`).
         let restsOn: [Set<UUID>] = enabled.map { Set(RestMachining.dependencies(of: ops[$0], in: project)) }
+        // The run each operation is in (a group, or ungrouped toolpaths between groups): runs keep their order.
+        let segmentOf = project.runSegments
+        let segment = enabled.map { segmentOf[$0] }
+        var crossGroup: [Result.Late] = []
         // before[j]: bit mask of the operations that must come before j (indices into `enabled`).
         // Hard rules first (machining dependencies), then the user's order wherever areas overlap.
         var before = [UInt64](repeating: 0, count: m)
@@ -124,6 +135,12 @@ public enum OperationScheduler {
                 } else if i < j, !aFreesB || both, !roughs(b, before: a), !restsOn[i].contains(b.id), overlaps(boxes[i], boxes[j]) {
                     before[j] |= 1 << UInt64(i)
                 }
+                if segment[i] != segment[j] {
+                    // Across runs only the runs' order counts; a dependency against it is reported, not fixed.
+                    if segment[i] < segment[j] { before[j] |= 1 << UInt64(i) }
+                    if hard, segment[i] > segment[j] { crossGroup.append(.init(operation: a.id, mustPrecede: b.id)) }
+                    continue
+                }
                 if hard {
                     before[j] |= 1 << UInt64(i)
                     if i > j { late.append(.init(operation: a.id, mustPrecede: b.id)) }
@@ -141,16 +158,23 @@ public enum OperationScheduler {
         let pick = better ? scheduled! : original
         if !better { late = [] }
 
-        // Re-insert disabled operations right after the operation they followed.
-        var order: [UUID] = ops.prefix { !$0.enabled }.map(\.id)
-        for k in pick {
-            let idx = enabled[k]
-            order.append(ops[idx].id)
-            var t = idx + 1
-            while t < ops.count, !ops[t].enabled { order.append(ops[t].id); t += 1 }
+        // Re-insert disabled operations right after the operation they followed in their run (those at a run's start
+        // at its start), so a group keeps its turned-off members.
+        var order: [UUID] = []
+        var k = 0
+        for run in Set(segmentOf).sorted() {
+            var t = segmentOf.firstIndex(of: run)!
+            while t < ops.count, segmentOf[t] == run, !ops[t].enabled { order.append(ops[t].id); t += 1 }
+            while k < pick.count, segment[pick[k]] == run {
+                let idx = enabled[pick[k]]
+                order.append(ops[idx].id)
+                t = idx + 1
+                while t < ops.count, segmentOf[t] == run, !ops[t].enabled { order.append(ops[t].id); t += 1 }
+                k += 1
+            }
         }
         return Result(order: order, toolChangesBefore: changesBefore,
-                      toolChangesAfter: better ? changesAfter : changesBefore, outOfOrder: late)
+                      toolChangesAfter: better ? changesAfter : changesBefore, outOfOrder: late, crossGroup: crossGroup)
     }
 
     /// Whether an edge profile `depth` deep (its tip below the material top) stays above the tabs `cutOut` leaves: a

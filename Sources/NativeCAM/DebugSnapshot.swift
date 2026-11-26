@@ -182,6 +182,7 @@ enum DebugSnapshot {
         // 4. Each inspector at full height, sections below the fold included, and the checks Export runs.
         renderInspectors(project, workspace: ws, out: out, spin: spin)
         exportCheck(project, job: ws.job, log: log)
+        groupsCheck(project, workspace: ws, out: out, log: log, spin: spin)
         starterLibraryCheck(log: log)
         interactionSelfCheck(project, log: log)
         print("snapshot: wrote PNGs to \(out.path)")
@@ -275,7 +276,7 @@ enum DebugSnapshot {
 
     /// Draws `view` offscreen at `size` to `out/name`.
     @MainActor
-    private static func render(_ view: some View, size: NSSize, out: URL, name: String, spin: (Double) -> Void) {
+    static func render(_ view: some View, size: NSSize, out: URL, name: String, spin: (Double) -> Void) {
         let host = NSHostingView(rootView: view.environment(ToolLibraryStore.shared).background(Color(nsColor: .windowBackgroundColor)))
         // Borderless, so AppKit doesn't shrink the window to fit the screen.
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless], backing: .buffered, defer: false)

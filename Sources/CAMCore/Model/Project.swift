@@ -34,7 +34,8 @@ public struct Project: Hashable, Sendable {
     /// (`TabSettings.formatVersion`), which an older build would ignore and cut its own evenly spaced rectangular tabs,
     /// starting each loop elsewhere. Format 30 adds strips under a cut-out's tabs in flat 3D roughing and finishing
     /// (`CAMOperation.holdsTabsFormatVersion`), which an older build would ignore, holding the whole floor or cutting it
-    /// through, with the cut-out's tabs elsewhere on the wall.
+    /// through, with the cut-out's tabs elsewhere on the wall. Toolpath groups and hiding a toolpath in the view
+    /// (`toolpathGroups`, `CAMOperation.groupID`, `CAMOperation.hidden`) change no cut and don't raise it.
     public static let currentFormatVersion = 30
 
     /// The format this project is written as: the oldest one that can hold it.
@@ -89,7 +90,8 @@ public struct Project: Hashable, Sendable {
     public var machine: MachineProfile
     public var shapes: [DesignShape]
     /// Changing them keeps depths tied to the material thickness fitted to it (`fitDepthsToMaterial()`).
-    public var operations: [CAMOperation] { didSet { fitDepthsToMaterial() } }
+    /// Groups keep their members consecutive (`keepGroupsTogether()`).
+    public var operations: [CAMOperation] { didSet { fitDepthsToMaterial(); keepGroupsTogether() } }
     public var notes: String
     /// Cutting the job in tiles bigger than the machine's travel; nil (off) in every older file.
     public var tiling: TilingSettings?
@@ -99,6 +101,10 @@ public struct Project: Hashable, Sendable {
     /// vectors can be put on them. `layerNames` lists them after the shapes' own. An older build drops them, which
     /// changes no cut, so they don't raise the format.
     public var namedLayers: [String] = []
+    /// The toolpath groups, in the order their members run (`CAMOperation.groupID`). One level, no nesting. They change
+    /// no cut (the group checkbox sets each member's own "Include in output"), so an older build that drops them cuts
+    /// the same and they don't raise the format, like `namedLayers`.
+    public var toolpathGroups: [ToolpathGroup] = []
 
     public init(name: String = "Untitled", displayUnits: LengthUnit = .inch, stock: Stock = Stock(),
                 machine: MachineProfile = .avidPRO6060, shapes: [DesignShape] = [], operations: [CAMOperation] = [],
@@ -178,6 +184,7 @@ extension Project: Codable {
     private enum CodingKeys: String, CodingKey {
         case formatVersion, name, displayUnits, stock, machine, shapes, operations, notes, tiling, additionalSheets
         case namedLayers = "layers"
+        case toolpathGroups
     }
 
     public init(from decoder: Decoder) throws {
@@ -197,7 +204,9 @@ extension Project: Codable {
         tiling = try c.decodeIfPresent(TilingSettings.self, forKey: .tiling)
         additionalSheets = try c.decodeIfPresent([MaterialSheet].self, forKey: .additionalSheets) ?? []
         namedLayers = try c.decodeIfPresent([String].self, forKey: .namedLayers) ?? []
+        toolpathGroups = try c.decodeIfPresent([ToolpathGroup].self, forKey: .toolpathGroups) ?? []
         fitDepthsToMaterial()
+        normalizeGroups()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -215,6 +224,7 @@ extension Project: Codable {
         try c.encodeIfPresent(tiling, forKey: .tiling)
         if !additionalSheets.isEmpty { try c.encode(additionalSheets, forKey: .additionalSheets) }
         if !namedLayers.isEmpty { try c.encode(namedLayers, forKey: .namedLayers) }
+        if !toolpathGroups.isEmpty { try c.encode(toolpathGroups, forKey: .toolpathGroups) }
     }
 }
 

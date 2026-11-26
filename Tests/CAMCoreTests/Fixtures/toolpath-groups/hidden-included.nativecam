@@ -1,0 +1,353 @@
+{
+  "displayUnits" : "inch",
+  "formatVersion" : 1,
+  "machine" : {
+    "arcFitTolerance" : 0.01,
+    "dustCollection" : true,
+    "lineNumbers" : false,
+    "maxFeedRate" : 10160,
+    "maxRPM" : 24000,
+    "minRPM" : 6000,
+    "model" : "pro6060",
+    "outputArcs" : true,
+    "outputUnits" : "inch",
+    "rapidRateForEstimates" : 20320,
+    "spindle" : "vfdSpindle",
+    "spindleSpinUpDwell" : 0,
+    "toolChange" : "manualM6",
+    "travel" : {
+      "x" : 1558.925,
+      "y" : 1558.925,
+      "z" : 203.2
+    }
+  },
+  "name" : "Hidden but included",
+  "notes" : "",
+  "operations" : [
+    {
+      "enabled" : true,
+      "id" : "4E415449-5645-4341-4D01-000000000011",
+      "kind" : {
+        "vcarve" : {
+          "_0" : {
+            "sampleSpacing" : 0.25
+          }
+        }
+      },
+      "name" : "V-carve title",
+      "shapeIDs" : [
+        "4E415449-5645-4341-4D01-000000000002"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 2032,
+          "plungeRate" : 762,
+          "spindleRPM" : 18000,
+          "stepdown" : 3.175,
+          "stepoverFraction" : 0.1
+        },
+        "diameter" : 12.7,
+        "fluteCount" : 2,
+        "fluteDirection" : "straight",
+        "fluteLength" : 10.998199999999999,
+        "id" : "4E415449-5645-4341-4D00-000000000005",
+        "includedAngle" : 60,
+        "name" : "60° V-Bit 1\/2\"",
+        "notes" : "",
+        "number" : 5,
+        "shankDiameter" : 6.35,
+        "shape" : "vBit",
+        "stickout" : 23.6982,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "hidden" : true,
+      "id" : "4E415449-5645-4341-4D01-000000000012",
+      "kind" : {
+        "pocket" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 6.35,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "plunge",
+              "rampLength" : 25.4
+            },
+            "rasterAngle" : 0,
+            "strategy" : "offset"
+          }
+        }
+      },
+      "name" : "Pocket plaque",
+      "shapeIDs" : [
+        "4E415449-5645-4341-4D01-000000000003"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "id" : "4E415449-5645-4341-4D01-000000000013",
+      "kind" : {
+        "drill" : {
+          "_0" : {
+            "depth" : 19.558,
+            "dwell" : 0,
+            "fullRetract" : true,
+            "peckDepth" : 6.35
+          }
+        }
+      },
+      "name" : "Drill mounting holes",
+      "shapeIDs" : [
+        "4E415449-5645-4341-4D01-000000000004",
+        "4E415449-5645-4341-4D01-000000000005",
+        "4E415449-5645-4341-4D01-000000000006",
+        "4E415449-5645-4341-4D01-000000000007"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    },
+    {
+      "enabled" : true,
+      "hidden" : true,
+      "id" : "4E415449-5645-4341-4D01-000000000014",
+      "kind" : {
+        "profile" : {
+          "_0" : {
+            "allowance" : 0,
+            "depth" : {
+              "cutDepth" : 19.558,
+              "startDepth" : 0
+            },
+            "direction" : "climb",
+            "entry" : {
+              "kind" : "ramp",
+              "rampLength" : 38.099999999999994
+            },
+            "side" : "outside",
+            "tabs" : {
+              "count" : 6,
+              "enabled" : true,
+              "thickness" : 3.175,
+              "width" : 9.524999999999999
+            }
+          }
+        }
+      },
+      "name" : "Cut out sign",
+      "shapeIDs" : [
+        "4E415449-5645-4341-4D01-000000000001"
+      ],
+      "tool" : {
+        "cornerRadius" : 0,
+        "cutting" : {
+          "feedRate" : 5588,
+          "plungeRate" : 1270,
+          "spindleRPM" : 13000,
+          "stepdown" : 4.762499999999999,
+          "stepoverFraction" : 0.4
+        },
+        "diameter" : 6.35,
+        "fluteCount" : 2,
+        "fluteDirection" : "upcut",
+        "fluteLength" : 25.4,
+        "id" : "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle" : 90,
+        "name" : "1\/4\" Upcut End Mill",
+        "notes" : "",
+        "number" : 1,
+        "shankDiameter" : 6.35,
+        "shape" : "flatEndMill",
+        "stickout" : 38.099999999999994,
+        "tipDiameter" : 0
+      }
+    }
+  ],
+  "shapes" : [
+    {
+      "id" : "4E415449-5645-4341-4D01-000000000001",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 25.4,
+          "height" : 406.4,
+          "width" : 558.8
+        }
+      },
+      "layer" : "Default",
+      "name" : "Sign outline",
+      "position" : {
+        "x" : 304.79999999999995,
+        "y" : 228.6
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "4E415449-5645-4341-4D01-000000000002",
+      "kind" : {
+        "text" : {
+          "_0" : {
+            "capHeight" : 88.89999999999999,
+            "fontName" : "Helvetica-Bold",
+            "letterSpacing" : 0,
+            "string" : "AVID"
+          }
+        }
+      },
+      "layer" : "Default",
+      "name" : "Title",
+      "position" : {
+        "x" : 304.79999999999995,
+        "y" : 292.09999999999997
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "4E415449-5645-4341-4D01-000000000003",
+      "kind" : {
+        "rectangle" : {
+          "cornerRadius" : 6.35,
+          "height" : 63.5,
+          "width" : 254
+        }
+      },
+      "layer" : "Default",
+      "name" : "Plaque pocket",
+      "position" : {
+        "x" : 304.79999999999995,
+        "y" : 127
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "4E415449-5645-4341-4D01-000000000004",
+      "kind" : {
+        "circle" : {
+          "radius" : 3.175
+        }
+      },
+      "layer" : "Default",
+      "name" : "Mounting hole 1",
+      "position" : {
+        "x" : 63.5,
+        "y" : 63.5
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "4E415449-5645-4341-4D01-000000000005",
+      "kind" : {
+        "circle" : {
+          "radius" : 3.175
+        }
+      },
+      "layer" : "Default",
+      "name" : "Mounting hole 2",
+      "position" : {
+        "x" : 546.1,
+        "y" : 63.5
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "4E415449-5645-4341-4D01-000000000006",
+      "kind" : {
+        "circle" : {
+          "radius" : 3.175
+        }
+      },
+      "layer" : "Default",
+      "name" : "Mounting hole 3",
+      "position" : {
+        "x" : 63.5,
+        "y" : 393.7
+      },
+      "rotation" : 0,
+      "scale" : 1
+    },
+    {
+      "id" : "4E415449-5645-4341-4D01-000000000007",
+      "kind" : {
+        "circle" : {
+          "radius" : 3.175
+        }
+      },
+      "layer" : "Default",
+      "name" : "Mounting hole 4",
+      "position" : {
+        "x" : 546.1,
+        "y" : 393.7
+      },
+      "rotation" : 0,
+      "scale" : 1
+    }
+  ],
+  "stock" : {
+    "clearanceHeight" : 12.7,
+    "height" : 457.2,
+    "homePosition" : {
+      "x" : 0,
+      "y" : 0,
+      "z" : 25.4
+    },
+    "materialName" : "Baltic birch plywood",
+    "plungeHeight" : 2.54,
+    "thickness" : 19.049999999999997,
+    "width" : 609.5999999999999,
+    "xyOrigin" : "lowerLeft",
+    "zZero" : "materialTop"
+  }
+}

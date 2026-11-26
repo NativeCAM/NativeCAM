@@ -71,7 +71,7 @@ The rotary demos (the pawn and the table leg) aren't CLI commands. They're in [`
 nativecam-cli post <project.nativecam> [-o out.tap] [--air-cut height] [--sheet out.html] [--rebind] [--force]
 ```
 
-With a `--restart-*` flag it writes a restart file instead: see [Restart files](#restart-files).
+With a `--restart-*` flag it writes a restart file instead: see [Restart files](#restart-files). With `--group` or `--toolpaths` it writes a file for part of the job: see [Part of the job](#part-of-the-job-a-group-or-chosen-toolpaths).
 
 Generates the toolpaths, runs the job's checks, posts the file for the project's machine, reads the file back with the export checks (`GCodeCheck`: against the controller, the toolpaths and the machine), prints every issue and, unless there's an error, writes the file.
 
@@ -190,6 +190,54 @@ Estimated run time of the restart: H:MM:SS
 `--force` doesn't override a refusal. 1 with `Not written: …` when the restart's own checks or the export checks find an error, as for a normal `post`. A spin-up dwell of 0 s is a warning. The file's first spin-up keeps the machine's setting; the stop above the restart point dwells at least 3 s whatever it is.
 
 **An agent may write a restart file. Running it is the human's,** as for every file (see [AGENTS.md](../../AGENTS.md#hard-safety-rules)). Hand it over with its header, every warning, and the line the human said the controller showed. Never guess the line or the pass: ask the human where the job stopped.
+
+### Part of the job: a group or chosen toolpaths
+
+```text
+nativecam-cli post <project.nativecam> --group name [--full-retract] [--air-cut height] [--sheet out.html] [-o out.tap] [--force]
+nativecam-cli post <project.nativecam> --toolpaths 1,3,Name [same options]
+```
+
+Writes a file for part of the job, as **Export Group…** and **Export Selected Toolpaths…** do in the app: a toolpath group (`toolpathGroups` in the project, see [Project format](project-format.md#toolpath-groups-and-hiding)), or toolpaths named by their number in the run order (from 1, `project.operations`), their id or their exact name, separated by commas.
+
+The file is the full job cut down, never the toolpaths generated on their own. Later toolpaths are generated against what the earlier ones cut, so the file's moves, links included, are exactly the full file's for those toolpaths. That means it **assumes the included toolpaths that run before its last one were already cut**: a link can rapid down to just above a floor an earlier pocket cleared, and a rest pass cuts only what the earlier one left. Its header and its checks name each such toolpath.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `--group name` | none | The group, by name or id. Exits 1 when no group or more than one has the name, listing the groups |
+| `--toolpaths list` | none | Toolpaths by number, id or name. Not with `--group` |
+| `--full-retract` | off | Generates the whole job again with every link going up to safe Z (`retractMode` `full`) for this file only, then cuts that down, so no link relies on the earlier toolpaths' cuts. The project isn't changed |
+| `--air-cut h` | off | An air cut of the part, as for `post` |
+| `--sheet out.html` | none | The part's own setup sheet: its toolpaths, the tool to load first, and what it assumes was cut |
+| `-o out` | `<project> - <group>` | The stem to write. With `--toolpaths`, the default is `<project> - <toolpath name>` for one toolpath and `<project> - selected` for more |
+
+Toolpaths that aren't included in the output (`"enabled": false`) are left out with an info line. Hidden ones (`"hidden": true`) are included: hiding is display only. A tile or sheet with none of the part's toolpaths gets no file. On a tiled job the registration holes stay only when the part starts at the job's first toolpath.
+
+**Stdout.** The header lines, indented, then the job's issues and the part's checks (`[warning] Part of the job: …`), then:
+
+```text
+Part of the job: <n> toolpaths, <lines> lines -> <file>[, <file>…]
+Estimated run time of the part: H:MM:SS
+```
+
+**Exit status.** 1 for no such group or toolpath, a part with nothing to cut (every toolpath of it turned off), a calibration program, or an error in the job's checks or the file's, as for `post`. Warnings, including the "assumes these were already cut" one, don't stop it.
+
+**Example.** `Tests/CAMCoreTests/Fixtures/projects/toolpath-groups-v1.nativecam`, the demo sign in groups "Clear" and "Finish":
+
+```text
+$ nativecam-cli post "Grouped sign.nativecam" --group Finish
+[info] Drill mounting holes: Cuts through the material (0.0200 in into the spoilboard).
+[info] Cut out sign: Cuts through the material (0.0200 in into the spoilboard).
+  PART OF Grouped sign: group “Finish”
+  Cuts 2 V-carve title (T5)
+  Assumes already cut: 1 Pocket plaque (T1)
+  Links stay low over cleared material: cut those first
+[warning] Part of the job: This file assumes these were already cut: 1 Pocket plaque (T1). Its links stay low over the material they clear, so cut them first, or export it retracting fully between cuts.
+Part of the job: 1 toolpath, 463 lines -> Grouped sign - Finish.tap
+Estimated run time of the part: 0:01:28
+```
+
+The file opens with its own tool change (`T5M6`), as every NativeCAM file does. **Hand over the warning with the file:** the human must cut the earlier toolpaths first, or ask for `--full-retract`. Never pass `--full-retract` to hide the warning without saying so; it changes every link in the file.
 
 ## sim
 
