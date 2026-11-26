@@ -210,6 +210,17 @@ enum FlutingGenerator {
             return over(p, hint: &hint)
         }
 
+        /// A flat job: the model's own surface straight under `p` (design Z), or -infinity off its footprint.
+        func modelZ(at p: Vec2, hint: inout Int32) -> Double {
+            flatProbe?.z(at: p, hint: &hint) ?? -.infinity
+        }
+
+        /// A wrapped job: how far the model's surface is from the axis at station `x`, the blank turned to `angle`
+        /// (radians), or -infinity where a ray from the axis there misses it.
+        func modelRadius(x: Double, angle: Double, hint: inout Int32) -> Double {
+            rotaryProbe?.tipRadius(x: x, angle: angle, hint: &hint) ?? -.infinity
+        }
+
         /// The surface of the model `modelID` in `project`, or why there's none to follow.
         static func make(modelID: UUID, tool: Tool, project: Project?, stock: Stock) -> Result<Surface, Refusal> {
             guard let model = project?.shapes.first(where: { $0.id == modelID && $0.modelSpec != nil && !$0.isKeepOut }) else {
