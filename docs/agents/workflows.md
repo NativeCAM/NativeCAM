@@ -482,7 +482,7 @@ The human asks for a spoilboard surfacing program. It's a standalone file, not a
    ```
 
 3. Read every line. `Not written: …` (exit 1) is a refusal: change the settings (a shallower pass, a smaller area, `--clamp-overshoot` if they accept a bit that doesn't clear the ends) or tell the human why. Never get around one with a different bit's made-up dimensions.
-4. Hand over the program and its `-air` copy with the header's instructions: Z zero on the top of the spoilboard with the touch plate on the board, XY zero at the area's front-left corner, every clamp off and every screw head at least 1/8 in below the cut, the air cut first. **The human runs it.** Say that it hasn't been run on a real machine yet.
+4. Hand over the program and its air cut (`surface (air cut).tap`, beside it) with the header's instructions: Z zero on the top of the spoilboard with the touch plate on the board, XY zero at the area's front-left corner, every clamp off and every screw head at least 1/8 in below the cut, the air cut first. **The human runs it.** Say that it hasn't been run on a real machine yet.
 
 ## Every recipe: the hand-over
 

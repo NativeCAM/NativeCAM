@@ -381,14 +381,14 @@ struct SurfacingCommandLineTests {
         #expect(bed.output.contains("Avid Mach4 spoilboard surfacing"), "\(bed.output)")
         #expect(bed.output.contains("99 lines along X"), "\(bed.output)")
         #expect(FileManager.default.fileExists(atPath: out))
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("bed-air.tap").path))
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("bed (air cut).tap").path))
         let text = try String(contentsOfFile: out, encoding: .ascii)
         #expect(text.hasPrefix("(Z ZERO: TOP OF THE SPOILBOARD"))
 
         let custom = try CommandLineTests.run(["surface", "--area", "24x36", "--along", "y", "--one-way", "--passes", "2",
                                                "--no-air-cut", "-o", dir.appendingPathComponent("board.tap").path])
         #expect(custom.status == 0, "\(custom.output)")
-        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("board-air.tap").path))
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("board (air cut).tap").path))
 
         let grbl = try CommandLineTests.run(["surface", "--controller", "grbl", "--units", "mm", "--area", "300x300",
                                              "-o", dir.appendingPathComponent("grbl").path])

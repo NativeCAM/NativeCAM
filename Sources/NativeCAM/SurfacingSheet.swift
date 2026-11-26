@@ -248,13 +248,14 @@ struct SurfacingSheet: View {
         saveError = written.problems.isEmpty ? nil : written.problems.joined(separator: "\n")
     }
 
-    /// Writes the program to `url` and its air cut beside it (`name-air.ext`).
+    /// Writes the program to `url` and its air cut beside it (`name (air cut).ext`, as every air cut is named, #200).
+    /// Writes nothing when a name is refused (`Surfacing.namingProblem`): a program named as an air cut, or an air cut
+    /// that would replace a file that isn't one.
     static func write(_ program: Surfacing.Program, to url: URL, airCut: Bool) -> (written: [String], problems: [String]) {
         var written: [String] = [], problems: [String] = []
-        let ext = url.pathExtension.isEmpty ? program.fileExtension : url.pathExtension
-        let main = url.deletingPathExtension().appendingPathExtension(ext)
-        let air = url.deletingPathExtension().deletingLastPathComponent()
-            .appendingPathComponent(url.deletingPathExtension().lastPathComponent + "-air").appendingPathExtension(ext)
+        let paths = Surfacing.paths(url.path, fileExtension: program.fileExtension)
+        if let problem = Surfacing.namingProblemOnDisk(paths, airCut: airCut) { return ([], ["Not saved: " + problem]) }
+        let main = URL(fileURLWithPath: paths.program), air = URL(fileURLWithPath: paths.airCut)
         for (file, text) in [(main, program.gcode)] + (airCut ? [(air, program.airGCode)] : []) {
             do {
                 try text.write(to: file, atomically: true, encoding: .ascii)
