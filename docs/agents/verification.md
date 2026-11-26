@@ -4,6 +4,8 @@
 
 How an agent checks its output before handing it to a human. None of these checks replaces the human's own: the acceptance test, an air cut and watching the first real cut are theirs (see [AGENTS.md](../../AGENTS.md#hard-safety-rules)).
 
+**Real-machine validation is the human's,** following the [Validation Handbook](../validation/NativeCAM-Validation-Handbook.pdf). An agent may rebuild its kit and PDFs with `docs/validation/build-kit.sh` (it writes files only, and refuses any kit project that fails `post`), add tests to `docs/validation/handbook/tests/`, and fit times the human measured, but never runs a test or fills in a result.
+
 - [What "safety" means here](#what-safety-means-here)
 - [Reading post's checks](#reading-posts-checks)
 - [The simulator](#the-simulator)

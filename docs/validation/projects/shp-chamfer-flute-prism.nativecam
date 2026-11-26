@@ -1,0 +1,300 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 8,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Chamfer, flutes and prism coupon",
+  "notes": "Saved by format 8: a chamfer, fluting and a prism.",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "C4A3F000-0000-0000-0000-000000000050",
+      "kind": {
+        "chamfer": {
+          "_0": {
+            "direction": "conventional",
+            "edge": "top",
+            "passDepth": 1.5239999999999998,
+            "sharpCorners": true,
+            "side": "outside",
+            "startDepth": 0,
+            "width": 2.54
+          }
+        }
+      },
+      "name": "Panel bevel",
+      "shapeIDs": [
+        "C4A3F000-0000-0000-0000-000000000040"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 2032,
+          "plungeRate": 762,
+          "spindleRPM": 18000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 12.7,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 6.35,
+        "id": "4E415449-5645-4341-4D00-000000000006",
+        "includedAngle": 90,
+        "name": "90\u00b0 V-Bit 1/2\"",
+        "notes": "",
+        "number": 6,
+        "shankDiameter": 6.35,
+        "shape": "vBit",
+        "stickout": 19.049999999999997,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "C4A3F000-0000-0000-0000-000000000051",
+      "kind": {
+        "fluting": {
+          "_0": {
+            "depth": 2.032,
+            "ramp": "start",
+            "rampLength": 12.7,
+            "rampPercent": 0.4,
+            "rampShape": "linear",
+            "startDepth": 0.508
+          }
+        }
+      },
+      "name": "Flutes",
+      "shapeIDs": [
+        "C4A3F000-0000-0000-0000-000000000041",
+        "C4A3F000-0000-0000-0000-000000000042",
+        "C4A3F000-0000-0000-0000-000000000043"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6350,
+          "plungeRate": 1016,
+          "spindleRPM": 15000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 19.049999999999997,
+        "id": "4E415449-5645-4341-4D00-000000000007",
+        "includedAngle": 90,
+        "name": "1/4\" Ball Nose",
+        "notes": "",
+        "number": 7,
+        "shankDiameter": 6.35,
+        "shape": "ballNose",
+        "stickout": 31.749999999999996,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "C4A3F000-0000-0000-0000-000000000052",
+      "kind": {
+        "prism": {
+          "_0": {
+            "depth": 5.08,
+            "direction": "climb",
+            "passDepth": 2.54,
+            "startDepth": 0
+          }
+        }
+      },
+      "name": "Diamond",
+      "shapeIDs": [
+        "C4A3F000-0000-0000-0000-000000000045"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 2032,
+          "plungeRate": 762,
+          "spindleRPM": 18000,
+          "stepdown": 3.175,
+          "stepoverFraction": 0.1
+        },
+        "diameter": 12.7,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 10.998199999999999,
+        "id": "4E415449-5645-4341-4D00-000000000005",
+        "includedAngle": 60,
+        "name": "60\u00b0 V-Bit 1/2\"",
+        "notes": "",
+        "number": 5,
+        "shankDiameter": 6.35,
+        "shape": "vBit",
+        "stickout": 23.6982,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "C4A3F000-0000-0000-0000-000000000040",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 76.19999999999999,
+          "width": 152.39999999999998
+        }
+      },
+      "layer": "Default",
+      "name": "Panel",
+      "position": {
+        "x": 127,
+        "y": 127
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "C4A3F000-0000-0000-0000-000000000041",
+      "kind": {
+        "paths": {
+          "_0": [
+            {
+              "isClosed": false,
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 101.6,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer": "Default",
+      "name": "Flute 1",
+      "position": {
+        "x": 76.19999999999999,
+        "y": 31.75
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "C4A3F000-0000-0000-0000-000000000042",
+      "kind": {
+        "paths": {
+          "_0": [
+            {
+              "isClosed": false,
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 101.6,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer": "Default",
+      "name": "Flute 2",
+      "position": {
+        "x": 76.19999999999999,
+        "y": 44.449999999999996
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "C4A3F000-0000-0000-0000-000000000043",
+      "kind": {
+        "paths": {
+          "_0": [
+            {
+              "isClosed": false,
+              "points": [
+                {
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "x": 101.6,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "layer": "Default",
+      "name": "Flute 3",
+      "position": {
+        "x": 76.19999999999999,
+        "y": 57.15
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "C4A3F000-0000-0000-0000-000000000045",
+      "kind": {
+        "polygon": {
+          "radius": 12.7,
+          "sides": 4
+        }
+      },
+      "layer": "Default",
+      "name": "Diamond",
+      "position": {
+        "x": 228.6,
+        "y": 50.8
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 203.2,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialName": "Walnut",
+    "plungeHeight": 2.54,
+    "thickness": 19.049999999999997,
+    "width": 304.79999999999995,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}

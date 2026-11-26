@@ -1,0 +1,263 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 1,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Corner relief coupon",
+  "notes": "",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "3C92DB0B-FD35-572C-9AF0-D69F20A10C88",
+      "kind": {
+        "pocket": {
+          "_0": {
+            "allowance": 0,
+            "cornerRelief": {
+              "maxCornerAngle": 120,
+              "style": "dogbone",
+              "tBoneSide": "longer"
+            },
+            "depth": {
+              "cutDepth": 9.524999999999999,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "rasterAngle": 0,
+            "strategy": "offset"
+          }
+        }
+      },
+      "name": "Mortise, dogbones",
+      "shapeIDs": [
+        "233E96D3-8E5F-5DF1-BDA5-D2717B8DC32C"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "DB64EA41-6A7A-507D-A30B-DA470371CEEE",
+      "kind": {
+        "pocket": {
+          "_0": {
+            "allowance": 0,
+            "cornerRelief": {
+              "maxCornerAngle": 120,
+              "style": "tBone",
+              "tBoneSide": "alongX"
+            },
+            "depth": {
+              "cutDepth": 9.524999999999999,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "rasterAngle": 0,
+            "strategy": "offset"
+          }
+        }
+      },
+      "name": "Mortise, T-bones",
+      "shapeIDs": [
+        "A99DD0A7-2F4A-55A7-9A4B-D8E44A1DCAB2"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "DA9BD6CD-E563-57C5-9AAD-B34AF478E7A7",
+      "kind": {
+        "profile": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 19.549999999999997,
+              "fromBottom": -0.5,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "side": "outside",
+            "tabs": {
+              "count": 4,
+              "enabled": true,
+              "thickness": 3.175,
+              "width": 9.525
+            }
+          }
+        }
+      },
+      "name": "Cut out tenon",
+      "shapeIDs": [
+        "9FC8E1B9-9403-5577-BF79-93071E71A312"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "233E96D3-8E5F-5DF1-BDA5-D2717B8DC32C",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 25.4,
+          "width": 50.8
+        }
+      },
+      "layer": "Default",
+      "name": "Mortise dogbone",
+      "position": {
+        "x": 57.15,
+        "y": 107.94999999999999
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "A99DD0A7-2F4A-55A7-9A4B-D8E44A1DCAB2",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 25.4,
+          "width": 50.8
+        }
+      },
+      "layer": "Default",
+      "name": "Mortise T-bone",
+      "position": {
+        "x": 146.04999999999998,
+        "y": 107.94999999999999
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "9FC8E1B9-9403-5577-BF79-93071E71A312",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 0,
+          "height": 25.4,
+          "width": 50.8
+        }
+      },
+      "layer": "Default",
+      "name": "Tenon",
+      "position": {
+        "x": 101.6,
+        "y": 40.64
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 152.39999999999998,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialKind": "mdf",
+    "materialName": "MDF",
+    "plungeHeight": 2.54,
+    "thickness": 19.049999999999997,
+    "width": 203.2,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}

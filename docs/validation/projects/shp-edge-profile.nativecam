@@ -1,0 +1,276 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 18,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Edge profile coupon",
+  "notes": "Saved by format 18 to pin edge profiles.",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "ED6E0000-0000-4000-8084-000000000112",
+      "kind": {
+        "edgeProfile": {
+          "_0": {
+            "depth": 15.239999999999998,
+            "direction": "conventional",
+            "edges": "outside",
+            "entry": {
+              "kind": "plunge",
+              "rampLength": 25.4
+            },
+            "finish": 0.254,
+            "leads": {
+              "angle": 60,
+              "kind": "line",
+              "leadOut": true,
+              "length": 9.524999999999999,
+              "overlap": 0,
+              "radius": 6.35,
+              "sweep": 90
+            },
+            "offset": 0.396875,
+            "passCount": 2,
+            "passDepth": 5.08,
+            "passes": "vertical"
+          }
+        }
+      },
+      "name": "Round over, stepped",
+      "shapeIDs": [
+        "ED6E0000-0000-4000-8084-000000000110"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 3048,
+          "plungeRate": 762,
+          "spindleRPM": 16000,
+          "stepdown": 6.35,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 38.099999999999994,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 22.224999999999998,
+        "form": {
+          "kind": "roundover",
+          "pilotDiameter": 12.7,
+          "points": [],
+          "radius": 12.7,
+          "upperRadius": 0
+        },
+        "id": "ED6E0000-0000-4000-8084-000000000990",
+        "includedAngle": 90,
+        "name": "1-1/2\" roundover",
+        "notes": "",
+        "number": 5,
+        "shankDiameter": 12.7,
+        "shape": "form",
+        "stickout": 31.749999999999996,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "ED6E0000-0000-4000-8084-000000000113",
+      "kind": {
+        "edgeProfile": {
+          "_0": {
+            "bandWidth": 3.8099999999999996,
+            "direction": "climb",
+            "edges": "holes",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 50.8
+            },
+            "finish": 0.508,
+            "leads": {
+              "angle": 45,
+              "kind": "arc",
+              "leadOut": true,
+              "length": 6.35,
+              "overlap": 0,
+              "radius": 6.35,
+              "sweep": 90
+            },
+            "offset": 0,
+            "passCount": 3,
+            "passes": "horizontal"
+          }
+        }
+      },
+      "name": "Cove the opening",
+      "shapeIDs": [
+        "ED6E0000-0000-4000-8084-000000000110",
+        "ED6E0000-0000-4000-8084-000000000111"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 3048,
+          "plungeRate": 762,
+          "spindleRPM": 16000,
+          "stepdown": 6.35,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 31.749999999999996,
+        "fluteCount": 2,
+        "fluteDirection": "straight",
+        "fluteLength": 15.874999999999998,
+        "form": {
+          "kind": "cove",
+          "pilotDiameter": 12.7,
+          "points": [],
+          "radius": 9.524999999999999,
+          "upperRadius": 0
+        },
+        "id": "ED6E0000-0000-4000-8084-000000000902",
+        "includedAngle": 90,
+        "name": "1-1/4\" cove",
+        "notes": "",
+        "number": 6,
+        "shankDiameter": 12.7,
+        "shape": "form",
+        "stickout": 28.574999999999996,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "ED6E0000-0000-4000-8084-000000000114",
+      "kind": {
+        "profile": {
+          "_0": {
+            "allowance": 0,
+            "depth": {
+              "cutDepth": 19.557999999999996,
+              "fromBottom": -0.508,
+              "startDepth": 0
+            },
+            "direction": "climb",
+            "entry": {
+              "kind": "ramp",
+              "rampLength": 25.4
+            },
+            "leads": {
+              "angle": 45,
+              "kind": "arc",
+              "leadOut": true,
+              "length": 6.35,
+              "overlap": 0,
+              "radius": 6.35,
+              "sweep": 90
+            },
+            "side": "outside",
+            "tabs": {
+              "count": 4,
+              "enabled": true,
+              "thickness": 3.175,
+              "width": 9.524999999999999
+            }
+          }
+        }
+      },
+      "name": "Cut out",
+      "shapeIDs": [
+        "ED6E0000-0000-4000-8084-000000000110",
+        "ED6E0000-0000-4000-8084-000000000111"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 5588,
+          "plungeRate": 1270,
+          "spindleRPM": 13000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "ED6E0000-0000-4000-8084-000000000115",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "ED6E0000-0000-4000-8084-000000000110",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 12.7,
+          "height": 101.6,
+          "width": 152.39999999999998
+        }
+      },
+      "layer": "Default",
+      "name": "Board",
+      "position": {
+        "x": 101.6,
+        "y": 76.19999999999999
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "ED6E0000-0000-4000-8084-000000000111",
+      "kind": {
+        "rectangle": {
+          "cornerRadius": 12.7,
+          "height": 50.8,
+          "width": 76.19999999999999
+        }
+      },
+      "layer": "Default",
+      "name": "Opening",
+      "position": {
+        "x": 101.6,
+        "y": 76.19999999999999
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 152.39999999999998,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialName": "Plywood",
+    "plungeHeight": 2.54,
+    "thickness": 19.049999999999997,
+    "width": 203.2,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}

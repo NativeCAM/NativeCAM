@@ -1,0 +1,263 @@
+{
+  "displayUnits": "inch",
+  "formatVersion": 1,
+  "machine": {
+    "arcFitTolerance": 0.01,
+    "dustCollection": true,
+    "lineNumbers": false,
+    "maxFeedRate": 10160,
+    "maxRPM": 24000,
+    "minRPM": 6000,
+    "model": "pro6060",
+    "outputArcs": true,
+    "outputUnits": "inch",
+    "rapidRateForEstimates": 20320,
+    "spindle": "vfdSpindle",
+    "spindleSpinUpDwell": 0,
+    "toolChange": "manualM6",
+    "travel": {
+      "x": 1558.925,
+      "y": 1558.925,
+      "z": 203.2
+    }
+  },
+  "name": "Drilling coupon",
+  "notes": "",
+  "operations": [
+    {
+      "enabled": true,
+      "id": "95ED65DF-1161-54AA-B2B7-F5A485881533",
+      "kind": {
+        "drill": {
+          "_0": {
+            "depth": 12.7,
+            "dwell": 0,
+            "fullRetract": true,
+            "peckDepth": 0
+          }
+        }
+      },
+      "name": "Plunge holes",
+      "shapeIDs": [
+        "74E67905-A81A-5AA2-814F-8FF9390478C5",
+        "1DC3490F-1E52-5036-9C52-2F4A6F9AE4AE",
+        "5D6E14CF-3D07-58F1-8826-C52B8D04ED6F",
+        "E43D63F6-CB9B-57B3-A03F-27637B4CF767"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    },
+    {
+      "enabled": true,
+      "id": "BDA76F9D-5CAE-5286-AB3B-99D4440125BC",
+      "kind": {
+        "drill": {
+          "_0": {
+            "depth": 19.549999999999997,
+            "dwell": 0.5,
+            "fromBottom": -0.5,
+            "fullRetract": true,
+            "peckDepth": 3.175
+          }
+        }
+      },
+      "name": "Peck holes",
+      "shapeIDs": [
+        "EAA19983-7367-5450-B8C5-D6E427B1B972",
+        "C693A6DE-C752-50BC-90E6-EA10F1D5146A",
+        "D322512B-52C4-5437-9FF9-F13073DE06C7",
+        "DD4660AF-B271-5702-9F40-10B669A605E5"
+      ],
+      "tool": {
+        "cornerRadius": 0,
+        "cutting": {
+          "feedRate": 6858.0,
+          "plungeRate": 1270,
+          "spindleRPM": 10000,
+          "stepdown": 4.762499999999999,
+          "stepoverFraction": 0.4
+        },
+        "diameter": 6.35,
+        "fluteCount": 2,
+        "fluteDirection": "upcut",
+        "fluteLength": 25.4,
+        "id": "4E415449-5645-4341-4D00-000000000001",
+        "includedAngle": 90,
+        "name": "1/4\" Upcut End Mill",
+        "notes": "",
+        "number": 1,
+        "shankDiameter": 6.35,
+        "shape": "flatEndMill",
+        "stickout": 38.099999999999994,
+        "tipDiameter": 0
+      }
+    }
+  ],
+  "shapes": [
+    {
+      "id": "74E67905-A81A-5AA2-814F-8FF9390478C5",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Plunge 1",
+      "position": {
+        "x": 38.099999999999994,
+        "y": 73.66
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "1DC3490F-1E52-5036-9C52-2F4A6F9AE4AE",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Plunge 2",
+      "position": {
+        "x": 63.5,
+        "y": 73.66
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "5D6E14CF-3D07-58F1-8826-C52B8D04ED6F",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Plunge 3",
+      "position": {
+        "x": 88.89999999999999,
+        "y": 73.66
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "E43D63F6-CB9B-57B3-A03F-27637B4CF767",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Plunge 4",
+      "position": {
+        "x": 114.3,
+        "y": 73.66
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "EAA19983-7367-5450-B8C5-D6E427B1B972",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Peck 1",
+      "position": {
+        "x": 38.099999999999994,
+        "y": 27.94
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "C693A6DE-C752-50BC-90E6-EA10F1D5146A",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Peck 2",
+      "position": {
+        "x": 63.5,
+        "y": 27.94
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "D322512B-52C4-5437-9FF9-F13073DE06C7",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Peck 3",
+      "position": {
+        "x": 88.89999999999999,
+        "y": 27.94
+      },
+      "rotation": 0,
+      "scale": 1
+    },
+    {
+      "id": "DD4660AF-B271-5702-9F40-10B669A605E5",
+      "kind": {
+        "circle": {
+          "radius": 3.175
+        }
+      },
+      "layer": "Default",
+      "name": "Peck 4",
+      "position": {
+        "x": 114.3,
+        "y": 27.94
+      },
+      "rotation": 0,
+      "scale": 1
+    }
+  ],
+  "stock": {
+    "clearanceHeight": 12.7,
+    "height": 101.6,
+    "homePosition": {
+      "x": 0,
+      "y": 0,
+      "z": 25.4
+    },
+    "materialKind": "mdf",
+    "materialName": "MDF",
+    "plungeHeight": 2.54,
+    "thickness": 19.049999999999997,
+    "width": 203.2,
+    "xyOrigin": "lowerLeft",
+    "zZero": "materialTop"
+  }
+}
