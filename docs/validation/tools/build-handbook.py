@@ -219,7 +219,7 @@ def test_page(meta, body):
         facts_row("Project files", ", ".join(f"`projects/{f}`" for f in files) if files else ""),
         facts_row("Status", status),
     ])
-    cmds = meta.get("commands", []) + meta.get("manual", [])
+    cmds = meta.get("commands", []) + meta.get("refused", []) + meta.get("manual", [])
     cmd_html = ""
     if cmds:
         cmd_html = ('<div class="cmds"><div class="label">Make the program (from the repository folder)</div><pre>'

@@ -20,7 +20,7 @@ This is where NativeCAM stands at this handbook's build. Every result you report
 
 ## Features
 
-Even on Avid Mach4, these have **not** yet been cut on a real machine: finishing passes on profiles, triangular and hand-placed tabs, chosen start points, rest machining, adaptive clearing, helical boring, inlays, chamfers, flutes, prisms, edge profiles, form and dovetail bits, mouldings, 3D finishing other than raster (waterline, steep and shallow, pencil, constant scallop, spiral, radial), 3D rest finishing, holding tabs on 3D cut-outs, nesting, tiling, every rotary job (indexed, turned by hand, wrapped, rounding, 3D rotary roughing and finishing), restarts, toolpath groups, feeds that follow the load, automatic spindle speed, every calibration program and spoilboard surfacing. Run-time estimates haven't been timed against a real machine either.
+Even on Avid Mach4, these have **not** yet been cut on a real machine: finishing passes on profiles, triangular and hand-placed tabs, chosen start points, rest machining, adaptive clearing, helical boring, inlays, chamfers, flutes, prisms, edge profiles, form and dovetail bits, mouldings, profiles round a 3D model's exact outline, 3D finishing other than raster (waterline, steep and shallow, pencil, constant scallop, spiral, radial), 3D rest finishing, holding tabs on 3D cut-outs, nesting, tiling, every rotary job (indexed, turned by hand, wrapped, rounding, 3D rotary roughing and finishing), restarts, toolpath groups, feeds that follow the load, automatic spindle speed, every calibration program and spoilboard surfacing. Run-time estimates haven't been timed against a real machine either.
 
 ## Open questions only a machine can answer
 
@@ -37,9 +37,9 @@ These come up in several tests. Each is answered by a test; write the answer on 
 | Where does the machine home, and where are its soft limits? | VH-SRF-03 |
 | Does your M6 macro cope with a file whose first tool is already in the spindle? | VH-GRP-01 |
 
-## Pending changes
+## Recent safety changes
 
-Two changes were still open when this book was built. Their tests are marked *After PR #N merges*: run them only on a build that includes the change.
+Two recent changes have tests of their own. Use a build from after them (the cover gives this book's).
 
-- **PR #205**, profiles cut to a 3D model's exact outline: test **VH-3D-06**.
-- **PR #206**, model-following flutes measured from the stock left over the model. It refuses files that would bury the collet nut, so there's nothing to cut. With a build that includes it, Level 0 of **VH-SHP-01** still applies, and `post` should refuse the PR's `flute-reach/leg-flutes-before-finish.nativecam` fixture with an error that the flutes go down "through the stock over the 3D model".
+- **Profiles round a 3D model follow its exact outline** (PR #205): **VH-3D-06** cuts a faceted disc and measures it.
+- **Flutes that follow a 3D model measure their reach from the stock still over the model** (PR #206): **VH-SHP-03** checks that `post` refuses flutes that would bury the collet nut. It's read-only: there's nothing to cut.

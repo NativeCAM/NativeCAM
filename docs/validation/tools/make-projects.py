@@ -269,6 +269,21 @@ copy_fixture(os.path.join(FIX, "projects", "finishing-v21.nativecam"), "3d-finis
 copy_fixture(os.path.join(FIX, "projects", "finishing-v10.nativecam"), "3d-waterline",
              "Steep and shallow, waterline and pencil finishing")
 
+# ---------------------------------------------------------------- VH-3D-06
+# The 256-sided R 60 mm disc from the model-outline fixtures, imported by the CLI onto
+# a 6 x 6 in board (import centres a model on the material), and cut out round its outline.
+j = Job("3d-model-outline", "Profile round a 3D model's exact outline", 6 * IN, 6 * IN, 0.75 * IN)
+blank = os.path.join(SCRATCH, "3d-model-outline-blank.nativecam")
+imported = os.path.join(SCRATCH, "3d-model-outline-imported.nativecam")
+json.dump(j.p, open(blank, "w"))
+cli("import", blank, os.path.join(FIX, "model-outline", "disc-r60-256.stl"), "--units", "mm", "-o", imported)
+j.p = load(imported)
+disc = j.p["shapes"][0]
+disc["id"] = uid("3d-model-outline", "shape", "disc")
+j.op("Cut out disc", "profile", {"allowance": 0, "depth": depth(0.75 * IN + 0.5, fromBottom=-0.5), "direction": "climb",
+                                 "entry": RAMP, "leads": LEADS, "side": "outside", "tabs": tabs(4)}, [disc], MDF_END_MILL)
+j.save()
+
 # ---------------------------------------------------------------- VH-NST-01
 # The frames, brackets and coasters from `demosheets`, on 12 x 12 in sheets.
 n = base("demosheets")

@@ -24,7 +24,7 @@ os.makedirs(IMAGES, exist_ok=True)
 def run(command):
     args = shlex.split(command)
     assert args[0] == "nativecam-cli", command
-    args = [CLI] + [os.path.join(ROOT, a) if a.startswith("docs/validation/") else a for a in args[1:]]
+    args = [CLI] + [os.path.join(ROOT, a) if a.startswith(("docs/validation/", "Tests/")) else a for a in args[1:]]
     p = subprocess.run(args, cwd=OUT, capture_output=True, text=True)
     text = (p.stdout + p.stderr).replace(OUT + "/", "").replace(ROOT + "/", "")
     return p.returncode, text
@@ -34,12 +34,16 @@ results, failed = {}, []
 for meta, _ in tests():
     tid = meta["id"]
     entry = {"commands": []}
-    for command in meta.get("commands", []):
+    # `refused` commands are printed on the page like `commands`, but the test is that
+    # post refuses them: exit 1 with an [error] and no file.
+    refused = meta.get("refused", [])
+    for command in meta.get("commands", []) + refused:
         code, text = run(command)
         entry["commands"].append({"command": command, "exit": code, "output": text})
-        bad = (" post " in f" {command} " and (code != 0 or "[error]" in text))
-        expect_refusal = "--expect-refusal" in meta.get("notes", "")
-        if bad and not expect_refusal:
+        if command in refused:
+            if code != 1 or "[error]" not in text:
+                failed.append(f"{tid}: expected post to refuse: {command} (exit {code})")
+        elif " post " in f" {command} " and (code != 0 or "[error]" in text):
             failed.append(f"{tid}: {command} (exit {code})")
         print(f"{tid}: exit {code}: {command}")
     for i, project in enumerate(meta.get("images", [])):

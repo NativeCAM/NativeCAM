@@ -26,7 +26,7 @@ HANDBOOK = os.path.join(VALIDATION, "handbook")
 BUILD = os.path.join(VALIDATION, "build")
 IMAGES = os.path.join(VALIDATION, "images")
 
-LIST_KEYS = {"commands", "images", "projects", "manual"}
+LIST_KEYS = {"commands", "images", "projects", "manual", "refused"}
 
 
 def read_page(path):
