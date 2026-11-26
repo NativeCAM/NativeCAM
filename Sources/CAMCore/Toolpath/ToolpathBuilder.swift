@@ -44,6 +44,14 @@ struct ToolpathBuilder {
         position = p
     }
 
+    /// An arc in XY about `center` to `p` (Z changing linearly, so a helix when it changes), turning counter-clockwise
+    /// or clockwise seen from above. The caller keeps it under 180°.
+    mutating func arc(to p: Vec3, center: Vec2, counterClockwise: Bool, rate: Double) {
+        guard p.distance(to: position) > 1e-9 else { return }
+        motions.append(Motion(kind: counterClockwise ? .arcCCW : .arcCW, end: p, center: center, feed: rate))
+        position = p
+    }
+
     mutating func dwell(_ seconds: Double) {
         guard seconds > 0 else { return }
         motions.append(Motion(kind: .dwell, end: position, feed: seconds))

@@ -210,7 +210,9 @@ extension CAMEngine {
                                               x1: m.end.x, r1: radius + m.end.z,
                                               degrees1: RotaryWrap.angle(y: m.end.y, centerY: 0, diameter: diameter))
             }
-            chain.append(Piece(length: length, feed: m.feed / (arcs[i] ?? 1), start: p))
+            // A helical bore's circles are slowed so the wall sees the set feed: the chip there is the set feed's.
+            let bore = tp.bores.map { BoreHelix.feedFactor(m, from: p, holes: $0, toolRadius: tp.tool.radius) } ?? 1
+            chain.append(Piece(length: length, feed: m.feed / (arcs[i] ?? bore), start: p))
         }
         if !chain.isEmpty { chains.append(chain) }
         // For each start, the shortest stretch from it that's long enough (its end only moves on as the start does),

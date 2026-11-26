@@ -253,6 +253,10 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
     /// A toolpath whose passes would zig-zag, cut one way (Climb or Conventional): the planner's time for it against
     /// the same cut both ways, for the inspector. nil otherwise.
     public var directionTime: DirectionTime?
+    /// A Drill toolpath with Drill ▸ Method ▸ Helical bore: every hole it cuts, bored or plunged, for the read-back
+    /// check (no move below the material top strays past a hole's `reach`) and the setup sheet. nil for every other
+    /// toolpath.
+    public var bores: [BoredHole]?
 
     public init(id: UUID, name: String, tool: Tool, spindleRPM: Double, start: Vec3, motions: [Motion], warnings: [String] = [],
                 indexAngle: Double? = nil, operationID: UUID? = nil) {
@@ -319,5 +323,38 @@ public struct Toolpath: Identifiable, Hashable, Codable, Sendable {
         var t = 0.0
         forEachMotion { s, m in t += m.duration(from: s, rapidRate: rapidRate) }
         return t
+    }
+}
+
+/// One hole of a Drill toolpath with Drill ▸ Method ▸ Helical bore (`Toolpath.bores`).
+public struct BoredHole: Hashable, Codable, Sendable {
+    /// The hole's centre, design XY (mm).
+    public var center: Vec2
+    /// The drawn hole's diameter, mm; nil for a shape that isn't round (it's plunged at its centre).
+    public var diameter: Double?
+    /// Bored on a helix (true) or plunged at the bit's size (false).
+    public var bored: Bool
+    /// The helix turns counter-clockwise (G3) seen from above; false for clockwise (G2) and for a plunged hole.
+    public var counterClockwise: Bool
+    /// The helix's pitch per turn on its outermost ring, mm; nil for a plunged hole.
+    public var pitch: Double?
+    /// The rings the helix is bored in (1 for a hole up to twice the bit); 0 for a plunged hole.
+    public var rings: Int
+    /// Whether a finishing lap runs round the wall at full depth.
+    public var finishLap: Bool
+    /// The farthest the bit's centre may go from `center` while below the material top, mm: (D_hole − D_bit)/2 for a
+    /// bored hole, 0 for a plunged one.
+    public var reach: Double
+
+    public init(center: Vec2, diameter: Double?, bored: Bool, counterClockwise: Bool = false, pitch: Double? = nil, rings: Int = 0,
+                finishLap: Bool = false, reach: Double) {
+        self.center = center
+        self.diameter = diameter
+        self.bored = bored
+        self.counterClockwise = counterClockwise
+        self.pitch = pitch
+        self.rings = rings
+        self.finishLap = finishLap
+        self.reach = reach
     }
 }

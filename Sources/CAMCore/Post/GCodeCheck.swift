@@ -595,6 +595,15 @@ public enum GCodeCheck {
         if written.count != expected.count {
             issues.append(Issue(.error, "The file has \(written.count) cutting moves and dwells, but the toolpaths have \(expected.count)."))
         }
+        // Helical bores: in work coordinates, where each hole is and how far from its centre the bit may go.
+        let top = frame.toWork(Vec3(0, 0, 0)).z
+        let bores: [[BoredHole]?] = toolpaths.map { tp in
+            tp.bores?.map { h in
+                var m = h
+                m.center = frame.toWork(Vec3(h.center, 0)).xy
+                return m
+            }
+        }
         // A file that pauses for tool changes (M0) has no T words to read back.
         var toolReported = !written.contains { $0.tool != 0 }, rpmReported = false
         for (w, e) in zip(written, expected) {
@@ -661,6 +670,10 @@ public enum GCodeCheck {
             case (false, false):
                 break
             }
+            if let holes = bores[e.toolpathIndex], let problem = boreProblem(w.motion, start: w.start, holes: holes, top: top,
+                                                                            tolerance: 2 * step + 1e-3) {
+                fail(line, "\(problem) (“\(e.toolpath)”).")
+            }
             if w.tool != e.tool && !toolReported {
                 toolReported = true
                 fail(line, "Cuts with T\(w.tool) where “\(e.toolpath)” uses T\(e.tool).")
@@ -671,6 +684,29 @@ public enum GCodeCheck {
             }
         }
         return issues
+    }
+
+    /// What's wrong with a move read back from a Drill toolpath with Helical bore (its `holes`, in work coordinates):
+    /// below the material top it must stay inside the hole it's in, its bit centre no farther from the hole's centre
+    /// than the hole's `reach` (an arc judged by its centre and radius as written, all the way round), and no arc may
+    /// sweep 180° or more (one that starts and ends at the same point reads as a full circle). nil when it's fine.
+    static func boreProblem(_ m: Motion, start: Vec3, holes: [BoredHole], top: Double, tolerance: Double) -> String? {
+        guard m.kind != .rapid, m.kind != .dwell, min(start.z, m.end.z) < top - tolerance else { return nil }
+        if m.kind.isArc, abs(m.arcSweep(from: start)) >= Double.pi - 1e-9 {
+            return "An arc in a helical bore sweeps \(Int((abs(m.arcSweep(from: start)) * 180 / .pi).rounded()))°, 180° or more"
+        }
+        guard let hole = holes.min(by: { $0.center.distance(to: m.end.xy) < $1.center.distance(to: m.end.xy) }) else { return nil }
+        let farthest: Double
+        if m.kind.isArc {
+            farthest = hole.center.distance(to: m.center) + start.xy.distance(to: m.center)
+        } else {
+            farthest = max(hole.center.distance(to: start.xy), hole.center.distance(to: m.end.xy))
+        }
+        guard farthest > hole.reach + tolerance else { return nil }
+        let size = hole.diameter.map { String(format: "%.3f mm", $0) } ?? "the bit's size"
+        return "A move below the material top reaches \(String(format: "%.3f", farthest)) mm from the centre of the \(size) hole "
+            + "at X\(String(format: "%.3f", hole.center.x)) Y\(String(format: "%.3f", hole.center.y)), past the "
+            + "\(String(format: "%.3f", hole.reach)) mm its bit centre may go"
     }
 
     /// What's wrong with the feed of a wrapped move that turns the blank, read back from the file; nil when it gives

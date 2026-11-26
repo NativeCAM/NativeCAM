@@ -424,6 +424,11 @@ enum TileSplitter {
         }
         t.reliefCorners = nil
         t.restAreas = nil
+        t.bores = tp.bores?.map { h in
+            var m = h
+            m.center = h.center + d
+            return m
+        }
         return t
     }
 
@@ -529,56 +534,9 @@ enum TileSplitter {
         }
     }
 
-    /// Holes of `radius` to `depth` below the material top at `points`, in order.
+    /// Holes of `radius` to `depth` below the material top at `points`, in order (`BoreHelix.registrationHoles`).
     static func bore(_ points: [Vec2], radius: Double, depth: Double, tool: Tool, stock: Stock) -> [Motion] {
-        var b = ToolpathBuilder(stock: stock, tool: tool, startXY: points.first)
-        let r = tool.radius
-        let ring = radius - r
-        let step = max(0.1, tool.cutting.stepdown)
-        for c in points {
-            if ring < 0.05 {
-                // The bit is the hole's size: plunge in pecks, clearing chips between them.
-                var reached = 0.0
-                b.enter(at: Vec3(c, b.plungeZ))
-                while reached < depth - 1e-9 {
-                    if reached > 0 { b.rapid(Vec3(c, -reached + 0.5)) }
-                    reached = min(depth, reached + step)
-                    b.feed(Vec3(c, -reached), rate: tool.cutting.plungeRate)
-                    if reached < depth - 1e-9 { b.rapid(Vec3(c, b.plungeZ)) }
-                }
-                b.retract()
-                continue
-            }
-            // Rings out from the middle (so no core is left standing in the spoilboard), each a helix down to depth
-            // and a lap round the bottom.
-            let inner = 0.9 * r
-            var rings: [Double] = [ring]
-            if ring > inner {
-                let n = Int(((ring - inner) / (0.8 * tool.diameter)).rounded(.up))
-                rings = (0...n).map { k -> Double in inner + (ring - inner) * Double(k) / Double(n) }
-            }
-            let feed = tool.cutting.feedRate
-            for rho in rings {
-                let circumference = 2 * Double.pi * rho
-                let pitch = min(step, max(0.2, circumference * tan(10 * Double.pi / 180)))
-                let segments = max(24, Int((circumference / 1.0).rounded(.up)))
-                b.enter(at: Vec3(c + Vec2(rho, 0), 0))
-                let total = max(1, Int((depth / pitch * Double(segments)).rounded(.up)))
-                for k in 1...total {
-                    let turn = Double(k) / Double(segments)
-                    let p = c + Vec2.fromAngle(2 * Double.pi * turn, length: rho)
-                    b.feed(Vec3(p, -min(depth, turn * pitch)), rate: feed)
-                }
-                let a0 = 2 * Double.pi * Double(total) / Double(segments)
-                for k in 1...segments {
-                    let p = c + Vec2.fromAngle(a0 + 2 * Double.pi * Double(k) / Double(segments), length: rho)
-                    b.feed(Vec3(p, -depth), rate: feed)
-                }
-                b.feed(Vec3(c, -depth), rate: feed)
-                b.retract()
-            }
-        }
-        return b.build(id: registrationOperation, name: "", tool: tool, rpm: tool.cutting.spindleRPM, warnings: []).motions
+        BoreHelix.registrationHoles(points, radius: radius, depth: depth, tool: tool, stock: stock, id: registrationOperation)
     }
 
     // MARK: Checks
