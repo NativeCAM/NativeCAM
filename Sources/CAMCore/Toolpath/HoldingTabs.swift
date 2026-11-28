@@ -152,6 +152,8 @@ public enum HoldingTabs {
         if cutOut.tool.hasUndercut {
             return .fallback("\(name)'s bit is wider at its tip than above it, so it leaves its tabs off.")
         }
+        // The models' own surface, exactly: finite only over their footprint.
+        let modelSurface = TriangleDropCutter(probe: Model3DGenerator.triangles(of: models))
         for (k, mark) in marks.enumerated() {
             // A tab placed by hand that's no longer on its shape is left off the cut: it holds nothing, and gets no strip.
             guard let drawn = index.resolve(mark, tolerance: tol), let outline = index.outline(near: drawn, within: tol + 0.01) else { continue }
@@ -208,16 +210,21 @@ public enum HoldingTabs {
                 .union(drawn - tangent * (w / 2 + 1))
             let grid = ModelRaster.surface(of: models, over: area.insetBy(-1), cellSize: step)
             var edge = Double.infinity
+            var joint = Double.infinity
             for (j, u) in stride(from: -w / 2, through: w / 2 + 1e-9, by: max(step, w / 8)).enumerated() where j < depths.count {
                 let q = drawn + tangent * u - normal * (depths[j] + 0.5)
                 if let h = grid.height(at: q) { edge = min(edge, Double(h)) }
+                if let modelSurface { joint = min(joint, lowestJoin(drawn + tangent * u, out: normal, inside: depths[j], step: step,
+                                                             inSilhouette, modelSurface)) }
             }
             guard edge.isFinite else { return .fallback("the model's edge couldn't be found where \(label) of \(name) joins it.") }
             if edge + thickness < tabWood / 2 {
                 return .fallback("the model is only \(fmt(max(0, edge + thickness))) thick where \(label) of \(name) joins it, "
                     + "less than half the tab's \(fmt(tabWood)), so it would break off there. Lift the model, or move the tab.")
             }
-            if edge < top - 0.25 { proud.append((k + 1, top - edge)) }
+            // How far the tab stands above the model where they meet: the lowest of the model across the join (#209).
+            let lowest = min(edge, joint)
+            if lowest < top - 0.25 { proud.append((k + 1, top - lowest)) }
             // Out past where the 3D toolpath reaches: its boundary, plus its bit's width, plus a millimetre.
             var d = 0.0
             while d < span + 1000, inReach(drawn + normal * d) { d += step }
@@ -234,6 +241,34 @@ public enum HoldingTabs {
         }
         return .strips(Strips(cutOut: cutOut.name, cutOutID: cutOut.id, strips: strips, tabs: p.tabs, top: top, warnings: warnings))
     }
+
+    /// The lowest the model is where a strip joins it, along one line across the wall: across the band from its outline
+    /// to `joinBand` in, read off the model's own surface (`probe`). `p` is on the cut-out's wall, `normal` points out
+    /// of the part, and the outline is between `inside - step` and `inside` in from `p` (where the march in found it).
+    /// A single sample half a millimetre in, as this was before (#209), depended on where it landed on a steep edge.
+    /// Infinity when the probe finds no model there.
+    static func lowestJoin(_ p: Vec2, out normal: Vec2, inside: Double, step: Double, _ inSilhouette: (Vec2) -> Bool,
+                           _ probe: TriangleDropCutter) -> Double {
+        var outside = max(0, inside - step), edge = inside
+        if inside > 0, !inSilhouette(p - normal * outside) {
+            for _ in 0..<16 {
+                let m = (outside + edge) / 2
+                if inSilhouette(p - normal * m) { edge = m } else { outside = m }
+            }
+        }
+        // From a micron in (the outline is rounded to Clipper's 0.1 µm grid, so right on it the probe can miss).
+        let samples = 10
+        var lowest = Double.infinity
+        var hint: Int32 = -1
+        for i in 0...samples {
+            let z = probe.z(at: p - normal * (edge + max(0.001, joinBand * Double(i) / Double(samples))), hint: &hint)
+            if z.isFinite { lowest = min(lowest, z) }
+        }
+        return lowest
+    }
+
+    /// How far in from the model's outline a strip's join reaches, for `lowestJoin`, mm.
+    static let joinBand = 0.5
 
     /// Evenly spaced tabs on each of a cut-out's drawn outlines, at fixed points: `count` of them centred at
     /// `L·(k+½)/count` from the outline's first point, whatever order the job runs in. nil when tabs that long take up
