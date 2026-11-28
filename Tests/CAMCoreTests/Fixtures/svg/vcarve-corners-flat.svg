@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written for NativeCAM's V-carve corner tests (#204, GPL-3.0-or-later). FLAT in block capitals 2.4 in tall, with
+     strokes 0.6 in wide, on a 9 x 3.5 in board (100 user units per inch). Carved with a 0.125 in flat depth and a
+     1/4 in end mill clearing the flats, every letter has square corners the end mill rounds off: F, L and T at 90
+     degrees, the A's feet and top at about 70 and 110 degrees. The A's crossbar is 0.45 in wide, so with a 90 degree
+     V-bit its flat is too narrow for the end mill and the V-bit clears all of it; with a 60 degree V-bit the end mill
+     fits. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="9in" height="3.5in" viewBox="0 0 900 350">
+  <g id="FLAT">
+    <path d="M 40 55 L 200 55 L 200 115 L 100 115 L 100 145 L 170 145 L 170 205 L 100 205 L 100 295 L 40 295 Z"/>
+    <path d="M 240 55 L 300 55 L 300 235 L 380 235 L 380 295 L 240 295 Z"/>
+    <path fill-rule="evenodd" d="M 400 295 L 490 55 L 550 55 L 640 295 L 575 295 L 548.75 225 L 491.25 225 L 465 295 Z M 508.125 180 L 531.875 180 L 520 148.333 Z"/>
+    <path d="M 670 55 L 860 55 L 860 115 L 795 115 L 795 295 L 735 295 L 735 115 L 670 115 Z"/>
+  </g>
+</svg>

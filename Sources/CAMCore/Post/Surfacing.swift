@@ -185,11 +185,42 @@ public enum Surfacing {
         public var passedChecks: Bool { !(issues + airIssues).contains { $0.severity == .error } }
         /// "surface-spoilboard-61x61in.tap".
         public var fileName: String { Surfacing.fileStem(plan.area, project.machine.outputUnits) + "." + fileExtension }
-        public var airFileName: String { Surfacing.fileStem(plan.area, project.machine.outputUnits) + "-air." + fileExtension }
+        /// "surface-spoilboard-61x61in (air cut).tap", named as every air cut is (`Surfacing.paths`).
+        public var airFileName: String { Surfacing.paths(fileName, fileExtension: fileExtension).airCut }
     }
 
     public static func fileStem(_ area: Vec2, _ u: LengthUnit) -> String {
         "surface-spoilboard-\(Int(u.fromMM(area.x).rounded()))x\(Int(u.fromMM(area.y).rounded()))\(u.symbol)"
+    }
+
+    // MARK: File names (#200)
+
+    /// Where the program and its air cut go, from the path chosen for the program: `board.tap` and `board (air cut).tap`,
+    /// named by `AirCut.paths` as every other air cut is. A path without an extension takes `fileExtension`; a path with
+    /// one keeps it.
+    public static func paths(_ path: String, fileExtension: String) -> (program: String, airCut: String) {
+        let ns = path as NSString
+        let ext = ns.pathExtension.isEmpty ? fileExtension : ns.pathExtension
+        let stem = ns.deletingPathExtension
+        let program = AirCut.paths(suffixes: [nil], stem: stem, airCut: false, fileExtension: ext)[0]
+        let air = AirCut.paths(suffixes: [nil], stem: stem, airCut: true, fileExtension: ext)[0]
+        return (program, air)
+    }
+
+    /// Why the program, and when `airCut` its air cut, can't be written at `paths`, or nil when they can: the rules of
+    /// `AirCut.namingProblem`. The program's name mustn't say "air cut" (with or without the air cut, since someone would
+    /// run it believing the bit stays in the air), and the air cut never overwrites a file that isn't one. `existing`
+    /// reads a file already at a path (nil when there's none).
+    public static func namingProblem(_ paths: (program: String, airCut: String), airCut: Bool,
+                                     existing: (String) -> String?) -> String? {
+        if let problem = AirCut.namingProblem([paths.program], airCut: false, existing: existing) { return problem }
+        guard airCut else { return nil }
+        return AirCut.namingProblem([paths.airCut], airCut: true, existing: existing)
+    }
+
+    /// `namingProblem` against the files on disk.
+    public static func namingProblemOnDisk(_ paths: (program: String, airCut: String), airCut: Bool) -> String? {
+        namingProblem(paths, airCut: airCut, existing: AirCut.onDisk)
     }
 
     // MARK: Plan and refusals

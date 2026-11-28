@@ -174,6 +174,23 @@ public extension MachineProfile {
     /// posts; rotary stock, which does, is format 3 (see `Stock.requiredFormatVersion`).
     var requiredFormatVersion: Int { isLegacyAvidMach4 && customPost == nil && rotary == nil ? 1 : 2 }
 
+    /// The machine on the controller `family` (a `ControllerFamily` raw value), as the command line's `--controller` sets
+    /// it (#207). `mach4` is Avid's Mach4 profile, which a machine stores as no controller at all, as the inspector's
+    /// "Avid Mach4 profile" and `MachineCatalogue.ControllerOption.profile(avid:)` store it: the model stays, so it
+    /// posts what the machine posts on Avid's Mach4 profile without the option, and `sender` is ignored. Any other
+    /// family is that controller on a Custom machine, with the travel and limits as they were.
+    func onController(_ family: String, sender: String? = nil) -> MachineProfile {
+        var m = self
+        let f = ControllerFamily(rawValue: family)
+        if f == .mach4 {
+            m.controller = nil
+        } else {
+            m.controller = ControllerProfile(family: f, sender: sender)
+            m.model = .custom
+        }
+        return m
+    }
+
     func source(of field: Field) -> ValueSource? { provenance?[field.rawValue] }
 
     mutating func setSource(_ source: ValueSource?, for field: Field) {
