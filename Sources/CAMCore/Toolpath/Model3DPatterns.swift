@@ -238,7 +238,92 @@ extension Model3DGenerator {
                 pts.append(Vec3(p, f.z(p, hint: &hint)))
             }
         }
-        return simplify3D(f.refined(pts, hint: &hint), tolerance: f.tolerance)
+        return simplify3D(steadied(f.refined(pts, hint: &hint), f, hint: &hint), tolerance: f.tolerance)
+    }
+
+    /// How far `steadied` may move a pass to the side, smallest first, mm.
+    static let steadyingNudges = [0.002, 0.005, 0.01, 0.02, 0.05]
+
+    /// A dropped and refined pass with its flicker taken out. Where a pass runs along a step in the CL surface, a bit's
+    /// radius from the top edge of a vertical wall, which side of the step the tool is put on turns on a micron: the
+    /// material round a model is a grid of points, so a ball a hair inside that radius of a wall of it catches each
+    /// point and drops between them, and the pass saws up and down the wall every grid cell (#208: the flipped picture
+    /// frame, whose edges fall on the grid since its outline is exact). Jumps up and down the step closer together than
+    /// the bit's radius, with the tool up between two of them, are that: over a real ridge or wall the tool stays up
+    /// for at least a bit's width. Each such stretch is moved off the knife edge, to the side by the least of `steadyingNudges` that puts every point of it,
+    /// and the middle of every move between them, at the foot of the step (below halfway down it), then refined again.
+    /// Every point is still the exact cutter's answer where it now is, so nothing cuts in; a stretch no nudge settles
+    /// is left as it was.
+    static func steadied(_ pts: [Vec3], _ f: Finishing, hint: inout Int32) -> [Vec3] {
+        let n = pts.count
+        guard n >= 3 else { return pts }
+        let least = max(0.1, 10 * f.tolerance)
+        var jumps: [Int] = []
+        for i in 1..<n where abs(pts[i].z - pts[i - 1].z) > max(least, 3 * pts[i].xy.distance(to: pts[i - 1].xy)) {
+            jumps.append(i)
+        }
+        guard jumps.count >= 2 else { return pts }
+        var along = [Double](repeating: 0, count: n)
+        for i in 1..<n { along[i] = along[i - 1] + pts[i].xy.distance(to: pts[i - 1].xy) }
+        func up(_ i: Int) -> Bool { pts[i].z > pts[i - 1].z }
+        var out = pts
+        var changed = false
+        var m = 0
+        while m < jumps.count {
+            var e = m
+            // The points between two jumps (from jumps[e] to jumps[e + 1] - 1) are one level, up or down the step.
+            while e + 1 < jumps.count, up(jumps[e + 1]) != up(jumps[e]), along[jumps[e + 1] - 1] - along[jumps[e]] < f.tool.radius {
+                e += 1
+            }
+            // Only a stretch with a short spike in it, up and back down: a dip down and back up can be a real gap the
+            // bit just fits into, but over a real ridge or wall the bit stays up for twice its radius.
+            let spike = e > m && (up(jumps[m]) || e - m >= 2)
+            if spike, steady(&out, pts, jumps: Array(jumps[m...e]), f, hint: &hint) { changed = true }
+            m = e + 1
+        }
+        return changed ? f.refined(out, hint: &hint) : out
+    }
+
+    /// `steadied` for the points from just before `jumps[0]` to `jumps.last` of `pts`, written to `out`; false when no
+    /// nudge settles them.
+    private static func steady(_ out: inout [Vec3], _ pts: [Vec3], jumps: [Int], _ f: Finishing, hint: inout Int32) -> Bool {
+        let a = jumps[0] - 1, b = jumps[jumps.count - 1]
+        // Halfway down the step at each point: between its own height and the nearest point's across a jump from it.
+        var half: [Double] = []
+        var side: [Vec2] = []
+        var j = 0
+        var last = Vec2(1, 0)
+        for k in a...b {
+            while j < jumps.count, jumps[j] <= k { j += 1 }
+            let before = j > 0 ? jumps[j - 1] - 1 : nil, after = j < jumps.count ? jumps[j] : nil
+            let across = [before, after].compactMap { $0 }.min { abs($0 - k) < abs($1 - k) } ?? k
+            half.append((pts[k].z + pts[across].z) / 2)
+            let t = pts[min(k + 1, pts.count - 1)].xy - pts[max(k - 1, 0)].xy
+            if t.lengthSquared > 1e-18 { last = t.normalized.perpLeft }
+            side.append(last)
+        }
+        for d in steadyingNudges {
+            for s in [1.0, -1.0] {
+                var moved: [Vec3] = []
+                moved.reserveCapacity(b - a + 1)
+                var ok = true
+                for k in a...b {
+                    let p = pts[k].xy, q = p + side[k - a] * (s * d)
+                    let z = f.z(q, hint: &hint)
+                    guard z <= half[k - a], f.insideBoundary(q), f.clearOfKeepOuts(p, q) else { ok = false; break }
+                    if let prev = moved.last, f.z(prev.xy.lerp(to: q, 0.5), hint: &hint) > max(half[k - a - 1], half[k - a]) {
+                        ok = false
+                        break
+                    }
+                    moved.append(Vec3(q, z))
+                }
+                if ok {
+                    out.replaceSubrange(a...b, with: moved)
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     /// An Archimedean spiral from the centre out past the boundary's farthest point, counter-clockwise (climb milling:

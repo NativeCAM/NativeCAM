@@ -221,7 +221,7 @@ extension Model3DGenerator {
                 let p = sgm.a.lerp(to: sgm.b, Double(k) / Double(n))
                 pts.append(Vec3(p, f.z(p, hint: &hint)))
             }
-            out[i] = simplify3D(f.refined(pts, hint: &hint), tolerance: f.tolerance)
+            out[i] = simplify3D(steadied(f.refined(pts, hint: &hint), f, hint: &hint), tolerance: f.tolerance)
         }
         return out.array
     }
